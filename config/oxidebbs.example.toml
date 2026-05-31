@@ -1,0 +1,47 @@
+[board]
+name = "OxideBBS"
+tagline = "Built for sysops. Driven by code."
+sysop_name = "Sysop"
+timezone = "America/Chicago"
+
+[telnet]
+enabled = true
+bind = "0.0.0.0:2323"
+max_connections = 4
+idle_timeout_seconds = 900
+
+[database]
+path = "./data/oxidebbs.ddb"
+
+[paths]
+ansi = "./assets/ansi"
+doors = "./doors"
+runtime = "./runtime"
+logs = "./logs"
+
+[nodes]
+count = 4
+
+[terminal]
+default_encoding = "cp437"
+clear_screen_on_connect = true
+welcome_screen = "welcome.ans"
+logoff_screen = "logoff.ans"
+
+[doors]
+enabled = true
+default_runner = "dosbox"
+
+[[door]]
+key = "example"
+name = "Example Door"
+runner = "dosbox"
+working_dir = "./doors/example"
+command = "EXAMPLE.EXE"
+drop_file = "DORINFO1.DEF"
+exclusive = false
+time_limit_minutes = 30
+
+[ftn]
+enabled = false
+reserved_network_name = "OxideNet"
