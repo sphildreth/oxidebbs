@@ -1,89 +1,102 @@
-# AGENTS.md — Coding Agent Instructions for OxideBBS
+# AGENTS.md — OxideBBS
 
-This repository is intended to be friendly to local coding agents.
+Rust BBS engine for telnet callers, ANSI/CP437 screens, DecentDB persistence, and DOS door games.
 
-## Project identity
+## Validate changes
 
-Project name: **OxideBBS**
+The CI gate is `./scripts/dev-check.sh`. It runs in this order:
 
-Canonical repository: `https://github.com/sphildreth/oxidebbs`
+```bash
+cargo fmt --all --check        # must be clean
+cargo check --workspace --locked
+cargo test --workspace --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
+```
 
-License: Apache-2.0
+Always pass all four before considering a change done. Use `--locked` because `Cargo.lock` is committed.
 
-Purpose: A Rust-built BBS engine for telnet callers, ANSI/CP437 screens, DecentDB persistence, DOS door games, and future FTN-style networking.
+## Native build prerequisite
+
+DecentDB requires `clang` and `libclang-dev`. Install before building:
+
+```bash
+sudo apt-get install -y clang libclang-dev
+```
+
+## Workspace layout
+
+```
+crates/
+  oxidebbs-server/   # binary entrypoint (main.rs)
+  oxidebbs-core/     # domain: sessions, menus, users, permissions
+  oxidebbs-term/     # ANSI/CP437 rendering, AnsiBuffer, CP437 encode/decode
+  oxidebbs-telnet/   # telnet transport and negotiation (stub)
+  oxidebbs-db/       # DecentDB repository layer, OxideDb, schema init
+  oxidebbs-door/     # door definitions, drop files, runners (stub)
+  oxidebbs-sysop/    # local sysop admin TUI/CLI (stub)
+design/              # ARCHITECTURE.md, SPEC.md, PRD.md, TASKS.md, ADRs
+docs/                # VitePress documentation site (Node/npm)
+config/              # oxidebbs.example.toml
+scripts/             # dev-check.sh
+```
+
+Only `oxidebbs-db` and `oxidebbs-term` have real implementation. Everything else is scaffolded stubs.
+
+## Dependency direction
+
+```
+server -> core -> term, db, door, telnet
+sysop  -> core, db
+```
+
+Lower-level crates must not depend on `oxidebbs-server`.
 
 ## Hard constraints
 
-1. Use Rust.
-2. Use DecentDB as the only system database.
-3. Do not add SQLite, PostgreSQL, MySQL, Redis, MongoDB, or an ORM.
-4. v1 is telnet-only.
-5. Physical modem/serial support is a future transport, not v1.
-6. Treat ANSI/CP437 as a first-class byte-oriented terminal format.
-7. Do not use Ratatui for the remote caller UI.
-8. Ratatui may be used for local sysop/admin TUI.
-9. Keep door execution isolated from core session logic.
-10. Do not bundle copyrighted/abandonware DOS doors.
+1. Rust only, edition 2024.
+2. DecentDB is the only database. No SQLite, Postgres, MySQL, Redis, MongoDB, or ORM.
+3. Telnet-only for v1. No physical modem/serial yet.
+4. ANSI/CP437 is byte-oriented, not Unicode-first for the caller UI.
+5. Do not use Ratatui for remote caller UI. Ratatui is permitted for local sysop TUI only.
+6. Keep door execution isolated from core session logic.
+7. Do not bundle copyrighted/abandonware DOS doors.
 
-## Preferred Rust workspace shape
+## Workspace dependencies
 
-Keep crates small and focused:
+All shared deps are declared in the root `[workspace.dependencies]`. Member crates reference them with `dep.workspace = true`. Use `cargo add` to add new deps; do not hand-edit versions.
 
-- `oxidebbs-server`: binary entrypoint
-- `oxidebbs-core`: domain/session/menu/user logic
-- `oxidebbs-term`: ANSI/CP437 rendering
-- `oxidebbs-telnet`: telnet transport
-- `oxidebbs-db`: DecentDB repository layer
-- `oxidebbs-door`: drop files and door runners
-- `oxidebbs-sysop`: local sysop tooling
+Key deps: `anyhow`, `thiserror`, `serde`, `tokio` (full features), `tracing`, `clap` (derive+env), `decentdb` (git tag v2.8.0).
 
-## Coding style
+## Rust code generation rules
 
-- Prefer clear code over clever code.
-- Keep functions small enough to test.
-- Use explicit domain types instead of strings everywhere.
-- Avoid global mutable state.
-- Avoid blocking calls in async tasks unless isolated with the correct runtime pattern.
-- Use structured logging.
-- Prefer `Result<T, Error>` over panics.
-- Add tests for parser, renderer, and drop-file behavior.
+Detailed rules are in `.github/rust-code-generation/SKILL.md`. Key points:
+
+- Prefer `Result<T, E>` with typed errors. No `unwrap()`/`expect()` in library code.
+- No new crate additions without justification.
+- Never hold a lock across `.await`.
+- Layout/ABI changes are effectively irreversible.
+- Read surrounding code before editing.
+
+## Agent prompt templates
+
+`.github/prompts/` has reusable prompt files for implementing features, debugging failures, and reviewing changes.
 
 ## Documentation expectations
 
 When making a significant change:
 
-- Update `SPEC.md` if behavior changes.
-- Update `PRD.md` if product scope changes.
-- Add an ADR for architectural decisions.
-- Update `TASKS.md` when completing or adding work.
-- Update examples in `config/oxidebbs.example.toml`.
+- `design/SPEC.md` if behavior changes.
+- `design/PRD.md` if product scope changes.
+- `design/TASKS.md` when completing or adding work.
+- Add ADR in `design/adr/` for architectural decisions.
+- Update `config/oxidebbs.example.toml` if config schema changes.
 
-## Definition of done
+## VitePress docs site
 
-A task is not done until:
+The docs site in `docs/` is built with VitePress and deployed to GitHub Pages. It is separate from the Rust build:
 
-- Code compiles.
-- Tests pass.
-- `cargo fmt` is clean.
-- Clippy has no warnings.
-- Relevant docs are updated.
-- New behavior has at least basic tests.
-- The change does not violate the hard constraints above.
-
-## Initial implementation order
-
-1. Workspace compiles.
-2. Config loader.
-3. ANSI asset loader.
-4. Telnet listener skeleton.
-5. Transport abstraction.
-6. Session loop.
-7. User repository.
-8. Login/new-user flow.
-9. Menu router.
-10. Local message base.
-11. Door definition loader.
-12. Drop-file generator.
-13. DOSBox runner dry-run.
-14. Real door execution.
-15. Sysop CLI.
+```bash
+npm ci
+npm run docs:dev      # local preview
+npm run docs:build    # production build
+```
