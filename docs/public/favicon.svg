@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="OxideBBS">
+  <rect width="64" height="64" rx="12" fill="#0f172a"/>
+  <path d="M14 18h36v28H14z" fill="#0f766e"/>
+  <path d="M18 22h28v20H18z" fill="#020617"/>
+  <path d="M22 28h8v4h-8zm12 0h8v4h-8zM22 36h20v4H22z" fill="#67e8f9"/>
+</svg>

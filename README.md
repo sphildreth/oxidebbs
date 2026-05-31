@@ -45,12 +45,17 @@ This is a starter repository scaffold. It is meant to give the project shape bef
 │   ├── TASKS.md
 │   └── TELNET.md
 ├── docs/
-│   └── README.md
+│   ├── .vitepress/          # VitePress config
+│   ├── index.md             # documentation home
+│   ├── project/             # project documentation pages
+│   └── public/              # static files copied into the site build
 ├── config/
 │   └── oxidebbs.example.toml
 ├── assets/
 │   └── ansi/
 ├── Cargo.lock
+├── package.json
+├── package-lock.json
 └── AGENTS.md
 ```
 
@@ -83,6 +88,17 @@ cargo fmt --all
 cargo check --workspace --locked
 cargo test --workspace --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
+```
+
+## Documentation site
+
+The documentation site is built with VitePress from `docs/` and deployed to
+GitHub Pages for `https://oxidebbs.com`.
+
+```bash
+npm ci
+npm run docs:dev
+npm run docs:build
 ```
 
 ## Canonical repository

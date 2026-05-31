@@ -8,6 +8,7 @@ This is intended for a local coding agent to work from.
 - [ ] Add real package metadata to each crate.
 - [ ] Add common dependencies.
 - [x] Add CI workflow.
+- [x] Add VitePress documentation site.
 - [x] Add `cargo fmt`, `cargo clippy`, and `cargo test` commands to scripts.
 - [ ] Add a minimal server binary that loads config and logs startup.
 

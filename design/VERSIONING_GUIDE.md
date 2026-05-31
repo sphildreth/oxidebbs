@@ -1,15 +1,22 @@
-# DecentDB Versioning Guide
+# OxideBBS Versioning Guide
 
-This guide defines how DecentDB version jumps work and which files must be
+This guide defines how OxideBBS version jumps work and which files must be
 updated when the project version changes.
 
 ## 1. Versioning policy
 
-DecentDB uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html):
+OxideBBS uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html):
 
-- **Major (`X.0.0`)** for breaking changes to public APIs, the on-disk format, binding behavior, or other compatibility boundaries.
+- **Major (`X.0.0`)** for breaking changes to stable caller behavior, config
+  format, database schema compatibility, door-runner contracts, sysop tooling
+  commands, or other public compatibility boundaries.
 - **Minor (`X.Y.0`)** for backwards-compatible feature additions.
-- **Patch (`X.Y.Z`)** for backwards-compatible fixes, packaging adjustments, CI fixes, and documentation updates that do not change the public contract.
+- **Patch (`X.Y.Z`)** for backwards-compatible fixes, packaging adjustments, CI
+  fixes, and documentation updates that do not change the public contract.
+
+Before `v1.0.0`, OxideBBS may make breaking changes more freely, but release
+notes must still call out anything that affects config files, DecentDB data,
+ANSI assets, door definitions, or operator workflows.
 
 ### Choosing the bump when a branch has mixed changes
 
@@ -20,187 +27,183 @@ Pick the **highest-impact** change class in the branch:
 3. Otherwise (fixes/tooling/docs only) => **Patch**
 
 Examples:
+
 - Feature + bug fix in one branch => **Minor** (not Patch)
 - Docs + CI + packaging only => **Patch**
+- Config key rename + docs update => **Major** after `v1.0.0`
 
 ### Public release line
 
-The current public DecentDB release line begins at `v2.0.0`.
+No stable public release exists yet. The current scaffold line is `0.1.x`; the
+first compatibility-stable line begins at `v1.0.0`.
 
 ## 2. Source of truth
 
-The repository root `VERSION` file is the canonical DecentDB release version.
+The Rust crate versions in `crates/*/Cargo.toml` are the current OxideBBS
+release version source of truth. Keep all workspace crate versions aligned
+unless a crate is intentionally split onto its own release line in a future ADR.
 
-When DecentDB's release version changes:
+When the OxideBBS release version changes:
 
-1. update `VERSION`
-2. run `scripts/bump_version.sh`
-3. refresh binding lockfiles / generated metadata where needed
+1. update all OxideBBS crate versions
+2. update release-facing documentation
+3. refresh lockfiles only when dependency metadata changes
+4. re-scan for stale old-version strings
 
-The bump script propagates the version into the release-facing metadata that
-exists in the Rust repository today.
+If a root `VERSION` file or bump script is added later, update this guide in the
+same change and make that tool the canonical release workflow.
 
-### Core Rust workspace
+### Rust workspace
 
-- `VERSION`
-- `Cargo.toml`  
-  Update `[workspace.package].version`. The Rust crates inherit from the workspace version.
+- `crates/oxidebbs-server/Cargo.toml`
+- `crates/oxidebbs-core/Cargo.toml`
+- `crates/oxidebbs-term/Cargo.toml`
+- `crates/oxidebbs-telnet/Cargo.toml`
+- `crates/oxidebbs-db/Cargo.toml`
+- `crates/oxidebbs-door/Cargo.toml`
+- `crates/oxidebbs-sysop/Cargo.toml`
+- `Cargo.lock`
 
-### Python binding
+The server binary makes `Cargo.lock` release-facing metadata. Commit lockfile
+changes that result from legitimate dependency or package metadata updates.
 
-- `bindings/python/pyproject.toml`  
-  Update `[project].version`.
+### Documentation site
 
-### Java / DBeaver
+- `package.json`
+- `package-lock.json`
+- `docs/**`
 
-- `bindings/java/driver/build.gradle`
-- `bindings/java/driver/src/main/java/com/decentdb/jdbc/DecentDBDriver.java`
-- `bindings/java/dbeaver-extension/build.gradle`
-- `bindings/java/dbeaver-extension/META-INF/MANIFEST.MF`
-
-### Dart binding
-
-- `bindings/dart/dart/pubspec.yaml`  
-  Update `version`.
-- `bindings/dart/flutter/pubspec.yaml`  
-  Update `version` when the Flutter mobile package is released from this
-  repository. If it uses a local path dependency on `decentdb` during
-  development, release packaging must swap or validate that dependency before
-  publishing.
-- `bindings/dart/flutter/android/build.gradle`
-- `bindings/dart/flutter/ios/decentdb_flutter.podspec`
-- `bindings/dart/flutter/example/pubspec.yaml`
-  The checked-in Flutter reference app follows the mobile package release line
-  because it is used by release artifact validation.
-- Dart `pubspec.lock` files that pin local `path` dependencies on `decentdb` or
-  `decentdb_flutter`
-  Refresh only the local path package versions; do not rewrite hosted
-  dependency versions such as `args`.
-
-### Node bindings
-
-- `bindings/node/decentdb/package.json`
-- `bindings/node/decentdb/package-lock.json`
-- `bindings/node/knex-decentdb/package.json`
-- `bindings/node/knex-decentdb/package-lock.json`
-
-For the Node packages, update both the manifest and the lockfile's top-level package version entries.
+The VitePress package metadata exists to build `https://oxidebbs.com`. It should
+not drift accidentally, but frontend tooling dependency bumps are not OxideBBS
+product releases by themselves.
 
 ### Documentation
 
-- `docs/about/changelog.md`  
-  Add or update release notes under `Unreleased` or under the new version heading, depending on the release process being used.
-- `docs/user-guide/benchmarks.md`
-  Update the DecentDB engine version stamp when the workspace release version
-  changes.
-- `design/FUTURE_WINS.md`
-  Update the current public release marker that defines the `vNext` planning
-  bucket. Historical delivered-context references stay unchanged.
+- `CHANGELOG.md`  
+  Add release notes under `Unreleased` or under the new version heading,
+  depending on the release process being used.
+- `README.md`
+- `design/PRD.md`
+- `design/SPEC.md`
+- `design/ROADMAP.md`
+- `design/TASKS.md`
+- `design/VERSIONING_GUIDE.md`
 
-### Secondary lockfiles
+Update docs when the release changes product scope, user-visible behavior,
+operator workflows, or compatibility promises.
 
-- `benchmarks/rust-baseline/Cargo.lock`
-  Update only the local workspace path package versions for `decentdb` and
-  `libpg_query_sys`; leave third-party crate versions untouched.
+### Configuration and examples
+
+- `config/oxidebbs.example.toml`
+- `assets/ansi/**`
+
+Update example config and bundled ANSI assets when a release changes the
+expected config shape, default paths, terminal profile behavior, or included
+starter screens.
+
+### DecentDB dependency
+
+- `Cargo.toml`
+- `Cargo.lock`
+
+DecentDB is an external dependency pinned by Git tag. Updating the DecentDB tag
+is a dependency update, not an OxideBBS release version bump by itself. If the
+new DecentDB tag changes schema behavior or data compatibility, document that in
+`CHANGELOG.md` and `design/DECENTDB_SCHEMA.md`.
 
 ### Release automation
 
-- `.github/workflows/nuget.yml`  
-  The .NET/NuGet packages do **not** hard-code their package versions in the `.csproj` files. CI derives them from Git tags in the format:
-  - `vX.Y.Z`
-  - `vX.Y.Z-rc.N`
+- `.github/workflows/ci.yml`
+- `.github/workflows/pages.yml`
+
+CI and Pages workflows should not hard-code an OxideBBS release version unless a
+future release process explicitly needs it. Git tags remain the release trigger
+for published versions.
 
 ## 3. Files that usually do **not** need a version bump
 
-Do **not** bump unrelated example/demo app versions just to match the DecentDB
-release unless they explicitly surface the shipped DecentDB version to users or
-participate in release artifact validation.
+Do **not** bump unrelated tooling or example metadata just to match the OxideBBS
+release unless it surfaces the shipped OxideBBS version to users or participates
+in release artifact validation.
 
 Examples:
 
-- `bindings/dart/examples/**/pubspec.yaml`
-- dependency versions inside `package-lock.json`
+- third-party dependency versions in `Cargo.lock`
+- third-party dependency versions in `package-lock.json`
+- local development notes
+- generated VitePress build output
 
 Those files may contain version numbers, but they are not automatically part of
-the DecentDB release version.
+the OxideBBS release version.
 
-Exception: if an example uses a local path dependency on the DecentDB package,
-refreshing its lockfile may be appropriate so the locked package version matches
-the current release line.
+Exception: if package metadata changes cause a lockfile to record the new local
+package version, refresh and commit the lockfile.
 
 ## 4. Recommended version-bump procedure
 
-1. Decide the next version according to SemVer (using the highest-impact rule above).
-2. Update `VERSION`.
-3. Run `scripts/bump_version.sh`.
-4. Update `docs/about/changelog.md`.
-5. Refresh Node lockfiles and any example lockfiles that pin the local DecentDB package.
-6. Re-scan the repository for stale release-version strings.
-7. Validate that package metadata still parses and that lockfiles stayed aligned.
-8. Create the release tag when the project is ready to publish.
+1. Decide the next version according to SemVer, using the highest-impact rule
+   above.
+2. Update OxideBBS crate versions in `crates/*/Cargo.toml`.
+3. Update release notes in `CHANGELOG.md`.
+4. Update user-facing docs and examples that changed with the release.
+5. Refresh `Cargo.lock` if package metadata or dependencies changed.
+6. Refresh `package-lock.json` if documentation package metadata or dependencies
+   changed.
+7. Re-scan the repository for stale release-version strings.
+8. Run the full Rust and docs validation commands.
+9. Create the release tag when the project is ready to publish.
 
-## 5. Node-specific procedure
+## 5. Documentation-site procedure
 
-After running `scripts/bump_version.sh`, refresh Node lockfiles with npm
-instead of hand-editing them.
-
-`scripts/bump_version.sh` already updates both Node `package.json` version
-fields, so the normal follow-up is lockfile refresh only.
+The documentation site is built with VitePress from the `docs/` directory. After
+changing `package.json`, refresh the lockfile with npm rather than hand-editing
+it.
 
 ```bash
-cd bindings/node/decentdb
-npm install --package-lock-only --ignore-scripts
-
-cd ../knex-decentdb
 npm install --package-lock-only --ignore-scripts
 ```
 
-This refreshes lockfile metadata (including the local `file:../decentdb`
-dependency in `knex-decentdb`) after the underlying package version changes.
+For normal documentation validation:
+
+```bash
+npm ci
+npm run docs:build
+```
+
+The published site uses the custom domain `https://oxidebbs.com`. GitHub Pages
+must be configured to deploy from GitHub Actions, and DNS must point the domain
+at GitHub Pages.
 
 ## 6. Validation checklist
 
 After a version bump, verify:
 
-- `VERSION` and `Cargo.toml` have the intended workspace version.
-- Python, Java, Dart, and Node package metadata all reflect the same DecentDB release version.
-- `docs/about/changelog.md` explains the release and any important versioning context.
-- No stale old-version references remain in the release-facing files.
-- The NuGet workflow still matches the current tag format.
+- all OxideBBS crate versions have the intended version
+- `Cargo.lock` reflects the intended package and dependency metadata
+- `CHANGELOG.md` explains the release and important compatibility context
+- `README.md`, `docs/**`, and relevant `design/**` files match the release
+- `config/oxidebbs.example.toml` still represents a valid starter config
+- no stale old-version references remain in release-facing files
+- the GitHub Pages workflow still builds the documentation site
 
 Useful commands:
 
 ```bash
 cargo metadata --no-deps --format-version 1 >/dev/null
+npm run docs:build
 
 rg 'OLD_VERSION|vOLD_VERSION' \
-  VERSION \
   Cargo.toml \
-  bindings/python/pyproject.toml \
-  bindings/java/driver/build.gradle \
-  bindings/java/driver/src/main/java/com/decentdb/jdbc/DecentDBDriver.java \
-  bindings/java/dbeaver-extension/build.gradle \
-  bindings/java/dbeaver-extension/META-INF/MANIFEST.MF \
-  bindings/dart/dart/pubspec.yaml \
-  bindings/dart/flutter/pubspec.yaml \
-  bindings/dart/flutter/android/build.gradle \
-  bindings/dart/flutter/ios/decentdb_flutter.podspec \
-  bindings/dart/flutter/example/pubspec.yaml \
-  bindings/dart/flutter/pubspec.lock \
-  bindings/dart/flutter/example/pubspec.lock \
-  bindings/dart/examples/console/pubspec.lock \
-  bindings/dart/examples/console_complex/pubspec.lock \
-  bindings/dart/examples/flutter_desktop/pubspec.lock \
-  tests/bindings/dart/pubspec.lock \
-  bindings/node/decentdb/package.json \
-  bindings/node/decentdb/package-lock.json \
-  bindings/node/knex-decentdb/package.json \
-  bindings/node/knex-decentdb/package-lock.json \
-  benchmarks/rust-baseline/Cargo.lock \
-  docs/about/changelog.md \
-  docs/user-guide/benchmarks.md \
-  design/FUTURE_WINS.md \
-  .github/workflows/nuget.yml
+  crates \
+  Cargo.lock \
+  package.json \
+  package-lock.json \
+  CHANGELOG.md \
+  README.md \
+  docs \
+  design \
+  config \
+  .github/workflows
 ```
 
 Replace `OLD_VERSION` with the version you are replacing.
@@ -209,7 +212,9 @@ Replace `OLD_VERSION` with the version you are replacing.
 
 When publishing, use Git tags with a leading `v`:
 
-- Stable release: `v2.0.0`
-- Release candidate: `v2.1.0-rc.1`
+- Stable release: `v1.0.0`
+- Release candidate: `v1.0.0-rc.1`
+- Pre-1.0 release: `v0.1.0`
 
-The current NuGet workflow converts those tags into package versions without the leading `v`.
+Release automation should convert those tags into package versions without the
+leading `v` only where a downstream package format requires it.

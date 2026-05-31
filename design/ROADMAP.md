@@ -3,7 +3,7 @@
 ## Milestone 0 — Repo foundation
 
 - [x] Workspace compiles
-- [ ] Documentation baseline
+- [x] Documentation baseline
 - [x] Example config
 - [ ] ADRs established
 - [x] Basic CI checks
