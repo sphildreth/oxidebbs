@@ -30,23 +30,27 @@ This is a starter repository scaffold. It is meant to give the project shape bef
 │   ├── oxidebbs-db/         # DecentDB repository layer and schema helpers
 │   ├── oxidebbs-door/       # door metadata, drop files, runners
 │   └── oxidebbs-sysop/      # local sysop/admin TUI and CLI helpers
-├── docs/
+├── design/
 │   ├── adr/                 # architecture decision records
 │   ├── ARCHITECTURE.md
 │   ├── ANSI_CP437.md
 │   ├── DECENTDB_SCHEMA.md
 │   ├── DOORS.md
 │   ├── FTN_NETWORKING.md
-│   ├── TELNET.md
-│   └── RUNBOOK.md
+│   ├── LICENSING.md
+│   ├── PRD.md
+│   ├── ROADMAP.md
+│   ├── RUNBOOK.md
+│   ├── SPEC.md
+│   ├── TASKS.md
+│   └── TELNET.md
+├── docs/
+│   └── README.md
 ├── config/
 │   └── oxidebbs.example.toml
 ├── assets/
 │   └── ansi/
-├── PRD.md
-├── SPEC.md
-├── ROADMAP.md
-├── TASKS.md
+├── Cargo.lock
 └── AGENTS.md
 ```
 
@@ -75,10 +79,10 @@ read/post a local message, launch one configured DOS door, and disconnect cleanl
 ## Development commands
 
 ```bash
-cargo check --workspace
-cargo test --workspace
 cargo fmt --all
-cargo clippy --workspace --all-targets -- -D warnings
+cargo check --workspace --locked
+cargo test --workspace --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
 ```
 
 ## Canonical repository
@@ -93,4 +97,4 @@ A Codeberg mirror may be added later if the project wants a secondary FOSS-commu
 
 ## License
 
-OxideBBS is licensed under the Apache License, Version 2.0. See `LICENSE` and `docs/LICENSING.md`.
+OxideBBS is licensed under the Apache License, Version 2.0. See `LICENSE` and `design/LICENSING.md`.

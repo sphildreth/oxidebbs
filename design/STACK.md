@@ -14,6 +14,10 @@ DecentDB only.
 
 No SQLite, PostgreSQL, MySQL, Redis, MongoDB, or ORM layer.
 
+Use the native Rust `decentdb` crate pinned to a released Git tag from
+`https://github.com/sphildreth/decentdb`. Do not require developers to keep a
+separate local DecentDB checkout just to build OxideBBS.
+
 ## Terminal
 
 Remote caller UI:

@@ -7,8 +7,8 @@ This is intended for a local coding agent to work from.
 - [ ] Confirm workspace crate names.
 - [ ] Add real package metadata to each crate.
 - [ ] Add common dependencies.
-- [ ] Add CI workflow.
-- [ ] Add `cargo fmt`, `cargo clippy`, and `cargo test` commands to scripts.
+- [x] Add CI workflow.
+- [x] Add `cargo fmt`, `cargo clippy`, and `cargo test` commands to scripts.
 - [ ] Add a minimal server binary that loads config and logs startup.
 
 ## Phase 2 — Configuration
@@ -22,12 +22,14 @@ This is intended for a local coding agent to work from.
 
 ## Phase 3 — Terminal
 
-- [ ] Add ANSI writer helper.
-- [ ] Add CP437 byte/string helper.
+- [x] Add ANSI writer helper.
+- [x] Add CP437 byte/string helper.
 - [ ] Add screen asset loader.
+- [ ] Add 40-column screen asset selection.
 - [ ] Add plain text fallback renderer.
-- [ ] Add tests for CP437 round-trip cases.
-- [ ] Add tests for ANSI escape generation.
+- [ ] Add width-aware menu/status/pager layout tests.
+- [x] Add tests for CP437 round-trip cases.
+- [x] Add tests for ANSI escape generation.
 
 ## Phase 4 — Telnet
 
@@ -41,10 +43,10 @@ This is intended for a local coding agent to work from.
 
 ## Phase 5 — DecentDB
 
-- [ ] Add DecentDB dependency/path.
+- [x] Add DecentDB dependency/path.
 - [ ] Add `oxidebbs-db` repository traits.
-- [ ] Add database open/init routine.
-- [ ] Add schema version record.
+- [x] Add database open/init routine.
+- [x] Add schema version record.
 - [ ] Add user repository.
 - [ ] Add audit event repository.
 - [ ] Add test database fixture.

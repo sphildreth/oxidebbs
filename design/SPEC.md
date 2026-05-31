@@ -107,8 +107,15 @@ The terminal layer should support:
 - Box drawing characters
 - 16-color ANSI palette
 - Screen clear, cursor positioning, and basic SGR sequences
+- 40-column and 80-column terminal profiles
+- Width-aware menus, prompts, status bars, line wrapping, and paging
 - Safe line editor for caller input
 - Output paging
+
+The default caller profile may be 80x25, but 40-column callers are a supported
+target, not an edge case. Screen assets should either have width-specific
+variants or render through layouts that can fit within 40 columns without
+truncating commands or corrupting ANSI/CP437 art.
 
 Avoid using Ratatui for remote caller UI. Ratatui is appropriate for local sysop/admin TUI only.
 

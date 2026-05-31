@@ -14,6 +14,7 @@ That means ANSI/CP437 rendering is core infrastructure.
 4. Do not assume Unicode terminals.
 5. Test with SyncTERM early.
 6. Keep screen assets as `.ans` files where practical.
+7. Treat 40-column terminals as a supported caller profile.
 
 ## Screen assets
 
@@ -21,9 +22,11 @@ Suggested asset paths:
 
 ```text
 assets/ansi/welcome.ans
+assets/ansi/welcome-40.ans
 assets/ansi/logon.ans
 assets/ansi/logoff.ans
 assets/ansi/main-menu.ans
+assets/ansi/main-menu-40.ans
 assets/ansi/sysop-menu.ans
 ```
 
@@ -36,6 +39,8 @@ assets/ansi/sysop-menu.ans
 - Write raw bytes
 - Page long output
 - Render menu prompts
+- Select width-specific assets when available
+- Keep prompts, status bars, wrapping, and paging usable at 40 columns
 
 ## Not in scope initially
 

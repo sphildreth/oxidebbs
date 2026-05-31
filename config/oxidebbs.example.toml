@@ -32,7 +32,7 @@ logoff_screen = "logoff.ans"
 enabled = true
 default_runner = "dosbox"
 
-[[door]]
+[[doors.definitions]]
 key = "example"
 name = "Example Door"
 runner = "dosbox"

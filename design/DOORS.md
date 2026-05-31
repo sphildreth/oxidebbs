@@ -18,7 +18,7 @@ OxideBBS should make old DOS door games feel native.
 ## Door definition example
 
 ```toml
-[[doors]]
+[[doors.definitions]]
 key = "lord"
 name = "Legend of the Red Dragon"
 runner = "dosbox"

@@ -1,0 +1,215 @@
+# DecentDB Versioning Guide
+
+This guide defines how DecentDB version jumps work and which files must be
+updated when the project version changes.
+
+## 1. Versioning policy
+
+DecentDB uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html):
+
+- **Major (`X.0.0`)** for breaking changes to public APIs, the on-disk format, binding behavior, or other compatibility boundaries.
+- **Minor (`X.Y.0`)** for backwards-compatible feature additions.
+- **Patch (`X.Y.Z`)** for backwards-compatible fixes, packaging adjustments, CI fixes, and documentation updates that do not change the public contract.
+
+### Choosing the bump when a branch has mixed changes
+
+Pick the **highest-impact** change class in the branch:
+
+1. Any breaking compatibility change => **Major**
+2. Otherwise, any new user-visible capability => **Minor**
+3. Otherwise (fixes/tooling/docs only) => **Patch**
+
+Examples:
+- Feature + bug fix in one branch => **Minor** (not Patch)
+- Docs + CI + packaging only => **Patch**
+
+### Public release line
+
+The current public DecentDB release line begins at `v2.0.0`.
+
+## 2. Source of truth
+
+The repository root `VERSION` file is the canonical DecentDB release version.
+
+When DecentDB's release version changes:
+
+1. update `VERSION`
+2. run `scripts/bump_version.sh`
+3. refresh binding lockfiles / generated metadata where needed
+
+The bump script propagates the version into the release-facing metadata that
+exists in the Rust repository today.
+
+### Core Rust workspace
+
+- `VERSION`
+- `Cargo.toml`  
+  Update `[workspace.package].version`. The Rust crates inherit from the workspace version.
+
+### Python binding
+
+- `bindings/python/pyproject.toml`  
+  Update `[project].version`.
+
+### Java / DBeaver
+
+- `bindings/java/driver/build.gradle`
+- `bindings/java/driver/src/main/java/com/decentdb/jdbc/DecentDBDriver.java`
+- `bindings/java/dbeaver-extension/build.gradle`
+- `bindings/java/dbeaver-extension/META-INF/MANIFEST.MF`
+
+### Dart binding
+
+- `bindings/dart/dart/pubspec.yaml`  
+  Update `version`.
+- `bindings/dart/flutter/pubspec.yaml`  
+  Update `version` when the Flutter mobile package is released from this
+  repository. If it uses a local path dependency on `decentdb` during
+  development, release packaging must swap or validate that dependency before
+  publishing.
+- `bindings/dart/flutter/android/build.gradle`
+- `bindings/dart/flutter/ios/decentdb_flutter.podspec`
+- `bindings/dart/flutter/example/pubspec.yaml`
+  The checked-in Flutter reference app follows the mobile package release line
+  because it is used by release artifact validation.
+- Dart `pubspec.lock` files that pin local `path` dependencies on `decentdb` or
+  `decentdb_flutter`
+  Refresh only the local path package versions; do not rewrite hosted
+  dependency versions such as `args`.
+
+### Node bindings
+
+- `bindings/node/decentdb/package.json`
+- `bindings/node/decentdb/package-lock.json`
+- `bindings/node/knex-decentdb/package.json`
+- `bindings/node/knex-decentdb/package-lock.json`
+
+For the Node packages, update both the manifest and the lockfile's top-level package version entries.
+
+### Documentation
+
+- `docs/about/changelog.md`  
+  Add or update release notes under `Unreleased` or under the new version heading, depending on the release process being used.
+- `docs/user-guide/benchmarks.md`
+  Update the DecentDB engine version stamp when the workspace release version
+  changes.
+- `design/FUTURE_WINS.md`
+  Update the current public release marker that defines the `vNext` planning
+  bucket. Historical delivered-context references stay unchanged.
+
+### Secondary lockfiles
+
+- `benchmarks/rust-baseline/Cargo.lock`
+  Update only the local workspace path package versions for `decentdb` and
+  `libpg_query_sys`; leave third-party crate versions untouched.
+
+### Release automation
+
+- `.github/workflows/nuget.yml`  
+  The .NET/NuGet packages do **not** hard-code their package versions in the `.csproj` files. CI derives them from Git tags in the format:
+  - `vX.Y.Z`
+  - `vX.Y.Z-rc.N`
+
+## 3. Files that usually do **not** need a version bump
+
+Do **not** bump unrelated example/demo app versions just to match the DecentDB
+release unless they explicitly surface the shipped DecentDB version to users or
+participate in release artifact validation.
+
+Examples:
+
+- `bindings/dart/examples/**/pubspec.yaml`
+- dependency versions inside `package-lock.json`
+
+Those files may contain version numbers, but they are not automatically part of
+the DecentDB release version.
+
+Exception: if an example uses a local path dependency on the DecentDB package,
+refreshing its lockfile may be appropriate so the locked package version matches
+the current release line.
+
+## 4. Recommended version-bump procedure
+
+1. Decide the next version according to SemVer (using the highest-impact rule above).
+2. Update `VERSION`.
+3. Run `scripts/bump_version.sh`.
+4. Update `docs/about/changelog.md`.
+5. Refresh Node lockfiles and any example lockfiles that pin the local DecentDB package.
+6. Re-scan the repository for stale release-version strings.
+7. Validate that package metadata still parses and that lockfiles stayed aligned.
+8. Create the release tag when the project is ready to publish.
+
+## 5. Node-specific procedure
+
+After running `scripts/bump_version.sh`, refresh Node lockfiles with npm
+instead of hand-editing them.
+
+`scripts/bump_version.sh` already updates both Node `package.json` version
+fields, so the normal follow-up is lockfile refresh only.
+
+```bash
+cd bindings/node/decentdb
+npm install --package-lock-only --ignore-scripts
+
+cd ../knex-decentdb
+npm install --package-lock-only --ignore-scripts
+```
+
+This refreshes lockfile metadata (including the local `file:../decentdb`
+dependency in `knex-decentdb`) after the underlying package version changes.
+
+## 6. Validation checklist
+
+After a version bump, verify:
+
+- `VERSION` and `Cargo.toml` have the intended workspace version.
+- Python, Java, Dart, and Node package metadata all reflect the same DecentDB release version.
+- `docs/about/changelog.md` explains the release and any important versioning context.
+- No stale old-version references remain in the release-facing files.
+- The NuGet workflow still matches the current tag format.
+
+Useful commands:
+
+```bash
+cargo metadata --no-deps --format-version 1 >/dev/null
+
+rg 'OLD_VERSION|vOLD_VERSION' \
+  VERSION \
+  Cargo.toml \
+  bindings/python/pyproject.toml \
+  bindings/java/driver/build.gradle \
+  bindings/java/driver/src/main/java/com/decentdb/jdbc/DecentDBDriver.java \
+  bindings/java/dbeaver-extension/build.gradle \
+  bindings/java/dbeaver-extension/META-INF/MANIFEST.MF \
+  bindings/dart/dart/pubspec.yaml \
+  bindings/dart/flutter/pubspec.yaml \
+  bindings/dart/flutter/android/build.gradle \
+  bindings/dart/flutter/ios/decentdb_flutter.podspec \
+  bindings/dart/flutter/example/pubspec.yaml \
+  bindings/dart/flutter/pubspec.lock \
+  bindings/dart/flutter/example/pubspec.lock \
+  bindings/dart/examples/console/pubspec.lock \
+  bindings/dart/examples/console_complex/pubspec.lock \
+  bindings/dart/examples/flutter_desktop/pubspec.lock \
+  tests/bindings/dart/pubspec.lock \
+  bindings/node/decentdb/package.json \
+  bindings/node/decentdb/package-lock.json \
+  bindings/node/knex-decentdb/package.json \
+  bindings/node/knex-decentdb/package-lock.json \
+  benchmarks/rust-baseline/Cargo.lock \
+  docs/about/changelog.md \
+  docs/user-guide/benchmarks.md \
+  design/FUTURE_WINS.md \
+  .github/workflows/nuget.yml
+```
+
+Replace `OLD_VERSION` with the version you are replacing.
+
+## 7. Release tag rules
+
+When publishing, use Git tags with a leading `v`:
+
+- Stable release: `v2.0.0`
+- Release candidate: `v2.1.0-rc.1`
+
+The current NuGet workflow converts those tags into package versions without the leading `v`.

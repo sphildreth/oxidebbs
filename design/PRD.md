@@ -62,6 +62,7 @@ A sysop who wants FTN/FidoNet-style shared echomail and netmail using OxideBBS a
 - Basic line input
 - Paging for long text
 - Status bar support
+- Supported 40-column and 80-column caller layouts
 
 ### User system
 
