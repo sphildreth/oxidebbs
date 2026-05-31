@@ -20,7 +20,8 @@ export default defineConfig({
     nav: [
       { text: 'Guide', link: '/project/getting-started' },
       { text: 'Architecture', link: '/project/architecture' },
-      { text: 'Versioning', link: '/project/versioning' }
+      { text: 'Versioning', link: '/project/versioning' },
+      { text: 'Changelog', link: '/about/changelog' }
     ],
     sidebar: [
       {
@@ -32,6 +33,10 @@ export default defineConfig({
           { text: 'Versioning', link: '/project/versioning' },
           { text: 'Deployment', link: '/project/deployment' }
         ]
+      },
+      {
+        text: 'About',
+        items: [{ text: 'Changelog', link: '/about/changelog' }]
       }
     ],
     socialLinks: [

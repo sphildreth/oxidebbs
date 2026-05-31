@@ -1,7 +1,9 @@
 # Changelog
 
-This file mirrors the current website changelog source in `docs/changelog.md`.
+The canonical OxideBBS changelog is maintained in the documentation site source:
 
-**[https://oxidebbs.com/changelog/](https://oxidebbs.com/changelog/)**
+- Source: [`docs/about/changelog.md`](docs/about/changelog.md)
+- Website: [https://oxidebbs.com/about/changelog](https://oxidebbs.com/about/changelog)
 
-See [`docs/changelog.md`](docs/changelog.md) for the source.
+Keep this root file as a pointer so package managers, repository browsers, and
+contributors can find the current changelog without duplicating release notes.
