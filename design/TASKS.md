@@ -4,22 +4,22 @@ This is intended for a local coding agent to work from.
 
 ## Phase 1 — Make the skeleton real
 
-- [ ] Confirm workspace crate names.
-- [ ] Add real package metadata to each crate.
-- [ ] Add common dependencies.
+- [x] Confirm workspace crate names.
+- [x] Add real package metadata to each crate.
+- [x] Add common dependencies.
 - [x] Add CI workflow.
 - [x] Add VitePress documentation site.
 - [x] Add `cargo fmt`, `cargo clippy`, and `cargo test` commands to scripts.
-- [ ] Add a minimal server binary that loads config and logs startup.
+- [x] Add a minimal server binary that loads config and logs startup.
 
 ## Phase 2 — Configuration
 
-- [ ] Define `OxideConfig`.
-- [ ] Parse TOML config.
-- [ ] Validate paths.
-- [ ] Validate node count.
-- [ ] Validate telnet bind address.
-- [ ] Add `oxidebbs-server --config config/oxidebbs.example.toml check`.
+- [x] Define `OxideConfig`.
+- [x] Parse TOML config.
+- [x] Validate paths.
+- [x] Validate node count.
+- [x] Validate telnet bind address.
+- [x] Add `oxidebbs-server --config config/oxidebbs.example.toml check`.
 
 ## Phase 3 — Terminal
 
@@ -31,30 +31,31 @@ This is intended for a local coding agent to work from.
 - [ ] Add width-aware menu/status/pager layout tests.
 - [x] Add tests for CP437 round-trip cases.
 - [x] Add tests for ANSI escape generation.
+- [x] Add ANSI escape sequence parser.
 
 ## Phase 4 — Telnet
 
-- [ ] Define `Transport` trait.
+- [x] Define `Transport` trait.
 - [ ] Add telnet parser for IAC sequences.
 - [ ] Support basic WILL/WONT/DO/DONT.
 - [ ] Add terminal type negotiation later.
 - [ ] Add NAWS/window-size support later.
 - [ ] Add session lifecycle logging.
-- [ ] Add integration test with loopback transport.
+- [x] Add integration test with loopback transport.
 
 ## Phase 5 — DecentDB
 
 - [x] Add DecentDB dependency/path.
-- [ ] Add `oxidebbs-db` repository traits.
+- [x] Add `oxidebbs-db` repository traits.
 - [x] Add database open/init routine.
 - [x] Add schema version record.
-- [ ] Add user repository.
-- [ ] Add audit event repository.
-- [ ] Add test database fixture.
+- [x] Add user repository.
+- [x] Add audit event repository.
+- [x] Add test database fixture.
 
 ## Phase 6 — Users and menus
 
-- [ ] Add user model.
+- [x] Add user model.
 - [ ] Add password hashing decision ADR.
 - [ ] Add new user flow.
 - [ ] Add login flow.
@@ -64,7 +65,7 @@ This is intended for a local coding agent to work from.
 
 ## Phase 7 — Doors
 
-- [ ] Add door definition model.
+- [x] Add door definition model.
 - [ ] Parse `doors.toml`.
 - [ ] Add node runtime directory handling.
 - [ ] Add DOOR.SYS generation.
@@ -76,8 +77,8 @@ This is intended for a local coding agent to work from.
 
 ## Phase 8 — Messages
 
-- [ ] Add message area model.
-- [ ] Add message model.
+- [x] Add message area model.
+- [x] Add message model.
 - [ ] Add post message command.
 - [ ] Add read message command.
 - [ ] Add reply command.

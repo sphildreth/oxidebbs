@@ -1,5 +1,7 @@
 //! ANSI/CP437 terminal rendering helpers.
 
+pub mod ansi_parser;
+
 use std::error::Error;
 use std::fmt;
 
