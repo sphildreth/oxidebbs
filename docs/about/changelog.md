@@ -19,10 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `door_runs` lifecycle updates.
 - Added runtime submenu menu navigation for configured `submenu` menu entries so
   callers can move into nested menus without placeholder fallback text.
-- Added a server-side interactive door bridge that forwards caller bytes to the
-  child process, forwards child stdout/stderr to the caller, enforces timeouts,
-  handles sysop disconnects, cleans node runtime directories, and reports live
-  nodes as `in_door` while active.
+- Added a server-side interactive door bridge that forwards caller bytes through
+  a run-local TCP serial bridge to DOSBox `COM1`, enforces timeouts, handles
+  sysop disconnects, cleans node runtime directories, and reports live nodes as
+  `in_door` while active.
 - Added graceful server lifecycle handling in `oxidebbs-server::run`: startup and
   shutdown signals now stop listener acceptance and request active caller disconnects
   before completing shutdown.
@@ -36,6 +36,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added a documentation-first Oxide Door Check validation flow (`doors check`,
   `doors dropfile`, and `doors test --dry-run`) and live testing guidance via DOSBox
   for the caller `Doors` menu path.
+- Clarified v1 door test modeling to validate `OXIDECHK.EXE` through a local
+  per-door Rust TCP serial bridge using DOSBox
+  `serial1=nullmodem server:127.0.0.1 port:<bridge_port> transparent:1 rxdelay:1000 txdelay:10` and
+  COM1 UART-style I/O.
+- Added an opt-in `scripts/test-oxide-door-dosbox.sh` smoke test for maintainers
+  that drives `OXIDECHK.EXE` over the DOSBox COM1 bridge and verifies
+  `OXIDECHK.RPT` creation.
 
 ### Changed
 
@@ -77,6 +84,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `OXIDECHK.EXE` project fixture verified by `tools/doors/oxide-door-check/SHA256SUMS`,
   and that maintainers must bootstrap/build scripts only when changing
   `oxidechk.pas`.
+- CLI `doors test <key> --user <alias>` now requires `--dry-run`; live
+  interactive DOS door validation runs through a real caller session so the
+  COM1 serial bridge is exercised.
+- Clarified that normal Rust build and validation remain independent of DOSBox and
+  maintainer-only Free Pascal rebuild tooling.
 
 ### Removed
 

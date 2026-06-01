@@ -1,7 +1,7 @@
 //! Door definitions, drop files, and runners.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Command, ExitStatus};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -239,9 +239,9 @@ pub fn resolve_dosbox_command(command: &str) -> Result<String, DoorError> {
     }
 
     if args.is_empty() {
-        Ok(format!("C:\\{command_token}"))
+        Ok(command_token.to_string())
     } else {
-        Ok(format!("C:\\{command_token} {args}"))
+        Ok(format!("{command_token} {args}"))
     }
 }
 
@@ -250,15 +250,18 @@ pub fn dosbox_plan(
     drop_file_path: PathBuf,
 ) -> Result<DoorRunPlan, DoorError> {
     let command = resolve_dosbox_command(&request.door.command)?;
-    let working_dir = request.runtime_dir.clone();
-    let door_working_dir = PathBuf::from(&request.door.working_dir);
+    let working_dir = absolute_host_path(&request.runtime_dir)?;
+    let door_working_dir = absolute_host_path(Path::new(&request.door.working_dir))?;
+    let runtime_dir = absolute_host_path(&request.runtime_dir)?;
     Ok(DoorRunPlan {
         program: request.door.runner.clone(),
         args: vec![
             "-c".to_string(),
-            format!("mount c {}", door_working_dir.display()),
+            mount_command("c", &door_working_dir),
             "-c".to_string(),
-            format!("mount d {}", request.runtime_dir.display()),
+            mount_command("d", &runtime_dir),
+            "-c".to_string(),
+            "path C:\\".to_string(),
             "-c".to_string(),
             "d:".to_string(),
             "-c".to_string(),
@@ -270,6 +273,35 @@ pub fn dosbox_plan(
         drop_file_path,
         timeout: Duration::from_secs(u64::from(request.door.time_limit_minutes) * 60),
     })
+}
+
+fn absolute_host_path(path: &Path) -> Result<PathBuf, DoorError> {
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    Ok(normalize_path(path))
+}
+
+fn normalize_path(path: PathBuf) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(component.as_os_str()),
+            Component::Normal(part) => normalized.push(part),
+        }
+    }
+    normalized
+}
+
+fn mount_command(drive: &str, host_path: &Path) -> String {
+    format!("mount {drive} \"{}\"", host_path.display())
 }
 
 fn run_with_timeout(mut command: Command, timeout: Duration) -> Result<DoorRunResult, DoorError> {
@@ -475,6 +507,9 @@ command = "LORD.EXE"
 
     #[test]
     fn dosbox_plan_mounts_door_working_directory_as_c_and_runtime_as_d() {
+        let cwd = std::env::current_dir().expect("current dir");
+        let expected_door_dir = cwd.join("doors/lord");
+        let expected_runtime_dir = cwd.join("runtime/node-001");
         let request = DoorRunRequest {
             door: door("DORINFO1.DEF"),
             caller: caller(),
@@ -497,23 +532,36 @@ command = "LORD.EXE"
             .iter()
             .find(|(_, window)| window[0] == "-c" && window[1] == "d:")
             .map(|(idx, _)| *idx);
+        let path_c = command_windows
+            .iter()
+            .find(|(_, window)| window[0] == "-c" && window[1] == "path C:\\")
+            .map(|(idx, _)| *idx);
         let command_arg = command_windows
             .iter()
-            .find(|(_, window)| window[0] == "-c" && window[1].starts_with("C:\\"))
+            .find(|(_, window)| window[0] == "-c" && window[1] == "LORD.EXE")
             .map(|(_, window)| window[1].as_str());
 
         assert_eq!(plan.program, "dosbox");
         let mount_c_idx = mount_c.expect("expected mount c command pair");
         let mount_d_idx = mount_d.expect("expected mount d command pair");
+        let path_c_idx = path_c.expect("expected path c command pair");
         let switch_d_idx = switch_d.expect("expected d: switch command pair");
         let command_arg = command_arg.expect("expected resolved DOS command");
-        assert_eq!(plan.args[mount_c_idx + 1], "mount c ./doors/lord");
-        assert_eq!(plan.args[mount_d_idx + 1], "mount d ./runtime/node-001");
+        assert_eq!(
+            plan.args[mount_c_idx + 1],
+            format!("mount c \"{}\"", expected_door_dir.display())
+        );
+        assert_eq!(
+            plan.args[mount_d_idx + 1],
+            format!("mount d \"{}\"", expected_runtime_dir.display())
+        );
+        assert_eq!(plan.args[path_c_idx + 1], "path C:\\");
         assert_eq!(plan.args[switch_d_idx + 1], "d:");
         assert!(mount_c_idx < mount_d_idx);
-        assert!(mount_d_idx < switch_d_idx);
-        assert!(command_arg.starts_with("C:\\"));
-        assert_eq!(plan.working_dir, PathBuf::from("./runtime/node-001"));
+        assert!(mount_d_idx < path_c_idx);
+        assert!(path_c_idx < switch_d_idx);
+        assert_eq!(command_arg, "LORD.EXE");
+        assert_eq!(plan.working_dir, expected_runtime_dir);
         assert_eq!(plan.timeout, Duration::from_secs(60));
     }
 
@@ -535,7 +583,7 @@ command = "LORD.EXE"
     }
 
     #[test]
-    fn dosbox_plan_resolves_bare_command_to_c_drive() {
+    fn dosbox_plan_resolves_bare_command_through_path() {
         let request = DoorRunRequest {
             door: {
                 let mut command_door = door("DORINFO1.DEF");
@@ -554,14 +602,14 @@ command = "LORD.EXE"
             .iter()
             .find(|arg| arg.contains("OXIDECHK.EXE"))
             .expect("missing command arg");
-        assert_eq!(command, "C:\\OXIDECHK.EXE");
+        assert_eq!(command, "OXIDECHK.EXE");
     }
 
     #[test]
-    fn resolve_dosbox_command_prefixes_bare_token() {
+    fn resolve_dosbox_command_preserves_bare_token() {
         assert_eq!(
             resolve_dosbox_command("LORD.EXE /N1").expect("resolved"),
-            "C:\\LORD.EXE /N1"
+            "LORD.EXE /N1"
         );
     }
 

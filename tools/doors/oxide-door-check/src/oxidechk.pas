@@ -1,17 +1,30 @@
 program OxideChk;
 
-uses
-  Crt;
-
 const
   Unknown = 'unknown';
   DropDorInfo = 'DORINFO1.DEF';
   DropDoorSys = 'DOOR.SYS';
   NodeFile = 'OXNODE.TXT';
   ReportFile = 'OXIDECHK.RPT';
+  Com1Base = $3F8;
+  Com1Data = Com1Base;
+  Com1InterruptEnable = Com1Base + 1;
+  Com1FifoControl = Com1Base + 2;
+  Com1LineControl = Com1Base + 3;
+  Com1ModemControl = Com1Base + 4;
+  Com1LineStatus = Com1Base + 5;
+  Com1LineStatusDataReady = $01;
+  Com1LineStatusTransmitterReady = $20;
+  Com1LineControlDlab = $80;
+  Com1LineControl8N1 = $03;
+  Com1ModemControlReady = $0B;
+  Com1FifoEnableClear = $C7;
+  BaudDivisor38400 = 3;
 
 type
-  DropLines = array[1..10] of string;
+  DropLine = string[120];
+  DropLines = array[1..10] of DropLine;
+  FileBuffer = array[1..256] of Byte;
 
 var
   ActiveDropFile: string;
@@ -25,6 +38,16 @@ var
   NodeNumber: string;
   Choice: char;
 
+function UpperAscii(const Value: Char): Char;
+var
+  Code: Byte;
+begin
+  Code := Ord(Value);
+  if (Code >= Ord('a')) and (Code <= Ord('z')) then
+    Code := Code - 32;
+  UpperAscii := Char(Code);
+end;
+
 function ValueOrUnknown(Value: string): string;
 begin
   if Value = '' then
@@ -33,19 +56,48 @@ begin
     ValueOrUnknown := Value;
 end;
 
-function FileExists(Name: string): boolean;
-var
-  F: file;
-  Exists: boolean;
+procedure SerialInit;
 begin
-  Assign(F, Name);
-  {$I-}
-  Reset(F, 1);
-  {$I+}
-  Exists := IOResult = 0;
-  FileExists := Exists;
-  if Exists then
-    Close(F);
+  Port[Com1InterruptEnable] := 0;
+  Port[Com1LineControl] := Com1LineControlDlab;
+  Port[Com1Data] := BaudDivisor38400;
+  Port[Com1InterruptEnable] := 0;
+  Port[Com1LineControl] := Com1LineControl8N1;
+  Port[Com1FifoControl] := Com1FifoEnableClear;
+  Port[Com1ModemControl] := Com1ModemControlReady;
+end;
+
+procedure SerialWriteChar(Value: Char);
+var
+  Delay: Integer;
+begin
+  while (Port[Com1LineStatus] and Com1LineStatusTransmitterReady) = 0 do
+    ;
+  Port[Com1Data] := Ord(Value);
+  for Delay := 1 to 1000 do
+    ;
+end;
+
+procedure SerialWriteString(const Value: string);
+var
+  I: Integer;
+begin
+  for I := 1 to Length(Value) do
+    SerialWriteChar(Value[I]);
+end;
+
+procedure SerialWriteLine(const Value: string);
+begin
+  SerialWriteString(Value);
+  SerialWriteChar(#13);
+  SerialWriteChar(#10);
+end;
+
+function SerialReadChar: Char;
+begin
+  while (Port[Com1LineStatus] and Com1LineStatusDataReady) = 0 do
+    ;
+  SerialReadChar := Char(Port[Com1Data]);
 end;
 
 procedure InitSummary;
@@ -61,59 +113,78 @@ begin
   NodeNumber := Unknown;
 end;
 
-procedure ReadLines(Name: string; var Lines: DropLines);
+function ReadLines(Name: string; var Lines: DropLines): boolean;
 var
-  F: Text;
-  I: integer;
+  F: file;
+  Buffer: FileBuffer;
+  { Free Pascal's BlockRead result parameter is wider than Turbo Pascal's Word. }
+  Count: LongInt;
+  I: Integer;
+  LineNumber: Integer;
+  Ch: Char;
+  LastWasCr: Boolean;
 begin
+  ReadLines := false;
   for I := 1 to 10 do
     Lines[I] := '';
 
   Assign(F, Name);
   {$I-}
-  Reset(F);
+  Reset(F, 1);
   {$I+}
   if IOResult <> 0 then
     Exit;
 
-  I := 1;
-  while (not Eof(F)) and (I <= 10) do
-  begin
-    ReadLn(F, Lines[I]);
-    I := I + 1;
-  end;
+  LineNumber := 1;
+  LastWasCr := false;
+  repeat
+    Count := 0;
+    {$I-}
+    BlockRead(F, Buffer, SizeOf(Buffer), Count);
+    {$I+}
+    if IOResult <> 0 then
+      Break;
+
+    for I := 1 to Count do
+    begin
+      Ch := Char(Buffer[I]);
+      if (Ch = #13) or (Ch = #10) then
+      begin
+        if not ((Ch = #10) and LastWasCr) then
+        begin
+          if LineNumber < 10 then
+            LineNumber := LineNumber + 1;
+        end;
+        LastWasCr := Ch = #13;
+      end
+      else
+      begin
+        LastWasCr := false;
+        if Length(Lines[LineNumber]) < 120 then
+          Lines[LineNumber] := Lines[LineNumber] + Ch;
+      end;
+    end;
+  until Count = 0;
+
   Close(F);
+  ReadLines := true;
 end;
 
 procedure ReadNodeFile;
 var
-  F: Text;
+  Lines: DropLines;
   Line: string;
 begin
-  if not FileExists(NodeFile) then
+  if not ReadLines(NodeFile, Lines) then
     Exit;
 
-  Assign(F, NodeFile);
-  {$I-}
-  Reset(F);
-  {$I+}
-  if IOResult <> 0 then
-    Exit;
-
-  if not Eof(F) then
-  begin
-    ReadLn(F, Line);
-    if Copy(Line, 1, 5) = 'node=' then
-      NodeNumber := ValueOrUnknown(Copy(Line, 6, Length(Line) - 5));
-  end;
-  Close(F);
+  Line := Lines[1];
+  if Copy(Line, 1, 5) = 'node=' then
+    NodeNumber := ValueOrUnknown(Copy(Line, 6, Length(Line) - 5));
 end;
 
-procedure ParseDorInfo;
-var
-  Lines: DropLines;
+procedure ParseDorInfo(var Lines: DropLines);
 begin
-  ReadLines(DropDorInfo, Lines);
   ActiveDropFile := DropDorInfo;
   BoardName := ValueOrUnknown(Lines[1]);
   SysopName := ValueOrUnknown(Lines[2]);
@@ -124,11 +195,8 @@ begin
   MinutesRemaining := ValueOrUnknown(Lines[10]);
 end;
 
-procedure ParseDoorSys;
-var
-  Lines: DropLines;
+procedure ParseDoorSys(var Lines: DropLines);
 begin
-  ReadLines(DropDoorSys, Lines);
   ActiveDropFile := DropDoorSys;
   NodeNumber := ValueOrUnknown(Lines[4]);
   MinutesRemaining := ValueOrUnknown(Lines[5]);
@@ -139,35 +207,45 @@ begin
 end;
 
 function LoadDropFile: boolean;
+var
+  Lines: DropLines;
+  Found: Boolean;
 begin
-  LoadDropFile := true;
-  if FileExists(DropDorInfo) then
-    ParseDorInfo
-  else if FileExists(DropDoorSys) then
-    ParseDoorSys
-  else
-    LoadDropFile := false;
+  Found := false;
+  if ReadLines(DropDorInfo, Lines) then
+  begin
+    ParseDorInfo(Lines);
+    Found := true;
+  end
+  else if ReadLines(DropDoorSys, Lines) then
+  begin
+    ParseDoorSys(Lines);
+    Found := true;
+  end;
 
-  if LoadDropFile then
+  if Found then
     ReadNodeFile;
+
+  { Avoid testing the function name directly; in TP mode that recurses. }
+  LoadDropFile := Found;
 end;
 
 procedure PrintSummary;
 begin
-  WriteLn;
-  WriteLn('Drop file: ', ActiveDropFile);
-  WriteLn('Node: ', NodeNumber);
+  SerialWriteLine('');
+  SerialWriteLine('Drop file: ' + ActiveDropFile);
+  SerialWriteLine('Node: ' + NodeNumber);
   if BoardName <> Unknown then
-    WriteLn('Board: ', BoardName);
+    SerialWriteLine('Board: ' + BoardName);
   if SysopName <> Unknown then
-    WriteLn('Sysop: ', SysopName);
-  WriteLn('Caller: ', CallerName);
+    SerialWriteLine('Sysop: ' + SysopName);
+  SerialWriteLine('Caller: ' + CallerName);
   if CallerAlias <> CallerName then
-    WriteLn('Alias: ', CallerAlias);
-  WriteLn('Location: ', CallerLocation);
-  WriteLn('Security: ', SecurityLevel);
-  WriteLn('Minutes: ', MinutesRemaining);
-  WriteLn;
+    SerialWriteLine('Alias: ' + CallerAlias);
+  SerialWriteLine('Location: ' + CallerLocation);
+  SerialWriteLine('Security: ' + SecurityLevel);
+  SerialWriteLine('Minutes: ' + MinutesRemaining);
+  SerialWriteLine('');
 end;
 
 procedure WriteReport;
@@ -180,7 +258,7 @@ begin
   {$I+}
   if IOResult <> 0 then
   begin
-    WriteLn('ERROR: report file write failed');
+    SerialWriteLine('ERROR: report file write failed');
     Halt(3);
   end;
 
@@ -190,21 +268,22 @@ begin
   WriteLn(F, 'caller=', CallerName);
   WriteLn(F, 'result=report');
   Close(F);
-  WriteLn('Report file written');
+  SerialWriteLine('Report file written');
 end;
 
 procedure Prompt;
 begin
-  Write('[I]nfo  [R]eport  [Q]uit: ');
+  SerialWriteString('[I]nfo  [R]eport  [Q]uit: ');
 end;
 
 begin
+  SerialInit;
   InitSummary;
-  WriteLn('Oxide Door Check');
+  SerialWriteLine('Oxide Door Check');
 
   if not LoadDropFile then
   begin
-    WriteLn('ERROR: no supported drop file found');
+    SerialWriteLine('ERROR: no supported drop file found');
     Halt(2);
   end;
 
@@ -212,14 +291,18 @@ begin
 
   repeat
     Prompt;
-    Choice := UpCase(ReadKey);
-    WriteLn(Choice);
+    Choice := UpperAscii(SerialReadChar);
+    while (Choice = #13) or (Choice = #10) do
+      Choice := UpperAscii(SerialReadChar);
+    SerialWriteChar(Choice);
+    SerialWriteChar(#13);
+    SerialWriteChar(#10);
     case Choice of
       'I': PrintSummary;
       'R': WriteReport;
       'Q':
         begin
-          WriteLn('Returning to OxideBBS');
+          SerialWriteLine('Returning to OxideBBS');
           Halt(0);
         end;
     end;

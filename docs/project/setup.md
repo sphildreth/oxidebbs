@@ -146,10 +146,39 @@ cargo run -p oxidebbs-server -- --config config/oxidebbs.toml serve
 ```
 
 From a BBS caller session: navigate to the Doors menu and launch the test door.
+The corrected v1 model is:
+
+```text
+caller telnet client
+  <-> OxideBBS caller transport
+  <-> run-local 127.0.0.1 TCP bridge
+  <-> DOSBox nullmodem serial backend
+  <-> DOSBox-emulated COM1 UART
+  <-> DOS door program
+```
+
+The bridge is local loopback:
+
+```text
+serial1=nullmodem server:127.0.0.1 port:<bridge_port> transparent:1 rxdelay:1000 txdelay:10
+```
+
+OxideBBS receives caller telnet bytes, writes them to the bridge socket, and
+DOSBox exposes them to the door as COM1 input. Door output follows the same path
+in reverse: the door writes to COM1, DOSBox sends those bytes to the bridge
+socket, and OxideBBS writes them to the caller telnet connection. The caller can
+run the test door only when DOSBox can successfully start the serial endpoint.
+
+Success criteria for the live smoke test:
+
+- `OXIDECHK.EXE` appears to run as a door on screen through the COM1 bridge.
+- The test screen should respond to keystrokes and exit cleanly from `Q`.
+- On successful exit, `OXNODE.TXT` and `OXIDECHK.RPT` appear in the node runtime
+  directory and include matching node metadata.
 
 Notes:
 
 - Maintainership-only rebuild of `OXIDECHK.EXE` requires Free Pascal and the
   staged `i8086-msdos` toolchain.
-- Normal sysop validation and dry-run operation does **not** require Free Pascal or
-  `i8086-msdos`.
+- Normal sysop validation, dry-run validation, and live sysop testing do **not** require
+  Free Pascal or `i8086-msdos`.

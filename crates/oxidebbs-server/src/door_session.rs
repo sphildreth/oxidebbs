@@ -1,4 +1,5 @@
 use std::fs;
+use std::net::SocketAddr;
 use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
@@ -13,12 +14,13 @@ use oxidebbs_db::{
 #[cfg(test)]
 use oxidebbs_door::DoorRunner;
 use oxidebbs_door::{
-    DoorCaller, DoorRunRequest, cleanup_node_runtime_dir, node_runtime_dir, prepare_door_run,
-    prepare_node_runtime_dir,
+    DoorCaller, DoorRunPlan, DoorRunRequest, cleanup_node_runtime_dir, node_runtime_dir,
+    prepare_door_run, prepare_node_runtime_dir,
 };
 use oxidebbs_telnet::Transport;
 use oxidebbs_term::encode_cp437;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
 use tokio::process::{Child, Command};
 use tokio::time::{self, Instant as TokioInstant};
 use tracing::warn;
@@ -232,16 +234,17 @@ impl<'a> DoorService<'a> {
         self.validate_door(door, node_number)
             .map_err(ServeError::Runtime)?;
         let request = self.build_request(user, node_number, door)?;
-        let plan = prepare_door_run(&request).map_err(door_error)?;
+        let mut plan = prepare_door_run(&request).map_err(door_error)?;
+        let serial_listener = prepare_dosbox_serial_bridge(&mut plan, &request.runtime_dir).await?;
         let run_id = self.insert_started_run(door, user, node_number)?;
 
         let mut command = Command::new(&plan.program);
         command
             .args(&plan.args)
             .current_dir(&plan.working_dir)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
 
         let child = match command.spawn() {
             Ok(child) => child,
@@ -266,7 +269,15 @@ impl<'a> DoorService<'a> {
         };
 
         runtime.mark_node_in_door(node_number);
-        let bridge = run_door_bridge(transport, runtime, node_number, child, plan.timeout).await;
+        let bridge = run_door_bridge(
+            transport,
+            runtime,
+            node_number,
+            child,
+            serial_listener,
+            plan.timeout,
+        )
+        .await;
         runtime.heartbeat_node(node_number);
         let bridge = match bridge {
             Ok(bridge) => bridge,
@@ -517,43 +528,87 @@ pub(crate) fn select_door<'a>(
         .unwrap_or(DoorSelection::Invalid)
 }
 
+async fn prepare_dosbox_serial_bridge(
+    plan: &mut DoorRunPlan,
+    runtime_dir: &Path,
+) -> ServeResult<TcpListener> {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+    let addr = listener.local_addr()?;
+    let config_path = runtime_dir.join("OXDOSBOX.CONF");
+    fs::write(&config_path, dosbox_serial_config(addr))?;
+    add_dosbox_serial_config(plan, &config_path);
+    Ok(listener)
+}
+
+fn dosbox_serial_config(addr: SocketAddr) -> String {
+    format!(
+        "[serial]\nserial1=nullmodem server:{} port:{} transparent:1 rxdelay:1000 txdelay:10\n",
+        addr.ip(),
+        addr.port()
+    )
+}
+
+fn add_dosbox_serial_config(plan: &mut DoorRunPlan, config_path: &Path) {
+    let mut args = Vec::with_capacity(plan.args.len() + 5);
+    args.push("--noprimaryconf".to_string());
+    args.push("--nolocalconf".to_string());
+    args.push("--conf".to_string());
+    args.push(config_path.display().to_string());
+    args.append(&mut plan.args);
+    plan.args = args;
+}
+
 pub(crate) async fn run_door_bridge<T: Transport>(
     transport: &mut T,
     runtime: &ServerRuntime,
     node_number: u16,
     mut child: Child,
+    listener: TcpListener,
     timeout: Duration,
 ) -> ServeResult<DoorBridgeResult> {
-    let mut child_stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| ServeError::Runtime("door process missing stdin stream".to_string()))?;
-    let mut child_stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| ServeError::Runtime("door process missing stdout stream".to_string()))?;
-    let mut child_stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| ServeError::Runtime("door process missing stderr stream".to_string()))?;
-
     let deadline = TokioInstant::now() + timeout;
     let mut result = DoorBridgeResult::default();
-    let mut stdout_open = true;
-    let mut stderr_open = true;
-    let mut stdout_buf = [0_u8; 1024];
-    let mut stderr_buf = [0_u8; 1024];
+    let serial = wait_for_serial_connection(
+        transport,
+        runtime,
+        node_number,
+        &mut child,
+        listener,
+        deadline,
+        &mut result,
+    )
+    .await?;
+    let Some(serial) = serial else {
+        return Ok(result);
+    };
 
+    bridge_connected_serial(
+        transport,
+        runtime,
+        node_number,
+        &mut child,
+        serial,
+        deadline,
+        &mut result,
+    )
+    .await?;
+
+    Ok(result)
+}
+
+async fn wait_for_serial_connection<T: Transport>(
+    transport: &mut T,
+    runtime: &ServerRuntime,
+    node_number: u16,
+    child: &mut Child,
+    listener: TcpListener,
+    deadline: TokioInstant,
+    result: &mut DoorBridgeResult,
+) -> ServeResult<Option<TcpStream>> {
     loop {
         if let Some(status) = child.try_wait()? {
             result.exit_code = status.code();
-            if stdout_open {
-                drain_remaining_output(&mut child_stdout, transport, &mut result).await?;
-            }
-            if stderr_open {
-                drain_remaining_output(&mut child_stderr, transport, &mut result).await?;
-            }
-            break;
+            return Ok(None);
         }
 
         let timeout_sleep = time::sleep_until(deadline);
@@ -565,81 +620,106 @@ pub(crate) async fn run_door_bridge<T: Transport>(
             _ = &mut timeout_sleep => {
                 result.timed_out = true;
                 result.disconnect_forced = true;
-                result.exit_code = terminate_child(&mut child).await?;
-                if stdout_open {
-                    drain_remaining_output(&mut child_stdout, transport, &mut result).await?;
+                result.exit_code = terminate_child(child).await?;
+                return Ok(None);
+            }
+            _ = &mut poll_sleep => {
+                runtime.heartbeat_node(node_number);
+            }
+            accepted = listener.accept() => {
+                let (serial, _peer) = accepted?;
+                runtime.heartbeat_node(node_number);
+                return Ok(Some(serial));
+            }
+            commands = runtime.wait_for_node_commands(node_number) => {
+                for message in commands.messages {
+                    write_bridge_message(transport, &message, result).await?;
                 }
-                if stderr_open {
-                    drain_remaining_output(&mut child_stderr, transport, &mut result).await?;
+                if let Some(reason) = commands.disconnect_reason {
+                    write_bridge_message(transport, "Disconnected by sysop.", result).await?;
+                    result.disconnect_forced = true;
+                    result.disconnect_reason = Some(reason);
+                    result.exit_code = terminate_child(child).await?;
+                    return Ok(None);
                 }
-                break;
+            }
+        }
+    }
+}
+
+async fn bridge_connected_serial<T: Transport>(
+    transport: &mut T,
+    runtime: &ServerRuntime,
+    node_number: u16,
+    child: &mut Child,
+    serial: TcpStream,
+    deadline: TokioInstant,
+    result: &mut DoorBridgeResult,
+) -> ServeResult<()> {
+    let (mut serial_reader, mut serial_writer) = serial.into_split();
+    let mut serial_buf = [0_u8; 1024];
+
+    loop {
+        if let Some(status) = child.try_wait()? {
+            result.exit_code = status.code();
+            return Ok(());
+        }
+
+        let timeout_sleep = time::sleep_until(deadline);
+        tokio::pin!(timeout_sleep);
+        let poll_sleep = time::sleep(DOOR_BRIDGE_POLL);
+        tokio::pin!(poll_sleep);
+
+        tokio::select! {
+            _ = &mut timeout_sleep => {
+                result.timed_out = true;
+                result.disconnect_forced = true;
+                result.exit_code = terminate_child(child).await?;
+                return Ok(());
             }
             _ = &mut poll_sleep => {
                 runtime.heartbeat_node(node_number);
             }
             commands = runtime.wait_for_node_commands(node_number) => {
                 for message in commands.messages {
-                    write_bridge_message(transport, &message, &mut result).await?;
+                    write_bridge_message(transport, &message, result).await?;
                 }
                 if let Some(reason) = commands.disconnect_reason {
-                    write_bridge_message(transport, "Disconnected by sysop.", &mut result).await?;
+                    write_bridge_message(transport, "Disconnected by sysop.", result).await?;
                     result.disconnect_forced = true;
                     result.disconnect_reason = Some(reason);
-                    result.exit_code = terminate_child(&mut child).await?;
-                    if stdout_open {
-                        drain_remaining_output(&mut child_stdout, transport, &mut result).await?;
-                    }
-                    if stderr_open {
-                        drain_remaining_output(&mut child_stderr, transport, &mut result).await?;
-                    }
-                    break;
+                    result.exit_code = terminate_child(child).await?;
+                    return Ok(());
                 }
             }
             input = transport.read_byte() => {
                 match input? {
                     Some(byte) => {
                         runtime.heartbeat_node(node_number);
-                        child_stdin.write_all(&[byte]).await?;
+                        serial_writer.write_all(&[byte]).await?;
                         result.bytes_in = result.bytes_in.saturating_add(1);
                     }
                     None => {
                         result.caller_disconnected = true;
                         result.disconnect_forced = true;
-                        result.exit_code = terminate_child(&mut child).await?;
-                        if stdout_open {
-                            drain_remaining_output(&mut child_stdout, transport, &mut result).await?;
-                        }
-                        if stderr_open {
-                            drain_remaining_output(&mut child_stderr, transport, &mut result).await?;
-                        }
-                        break;
+                        result.exit_code = terminate_child(child).await?;
+                        return Ok(());
                     }
                 }
             }
-            read = child_stdout.read(&mut stdout_buf), if stdout_open => {
+            read = serial_reader.read(&mut serial_buf) => {
                 let count = read?;
                 if count == 0 {
-                    stdout_open = false;
+                    result.exit_code = terminate_child(child).await?;
+                    return Ok(());
                 } else {
                     runtime.heartbeat_node(node_number);
-                    transport.write_all(&stdout_buf[..count]).await?;
-                    result.bytes_out = result.bytes_out.saturating_add(i64::try_from(count).unwrap_or(i64::MAX));
-                }
-            }
-            read = child_stderr.read(&mut stderr_buf), if stderr_open => {
-                let count = read?;
-                if count == 0 {
-                    stderr_open = false;
-                } else {
-                    runtime.heartbeat_node(node_number);
-                    transport.write_all(&stderr_buf[..count]).await?;
+                    transport.write_all(&serial_buf[..count]).await?;
                     result.bytes_out = result.bytes_out.saturating_add(i64::try_from(count).unwrap_or(i64::MAX));
                 }
             }
         }
     }
-
-    Ok(result)
 }
 
 fn supported_drop_file(drop_file: &str) -> bool {
@@ -715,22 +795,6 @@ async fn write_bridge_message<T: Transport>(
     result.bytes_out = result
         .bytes_out
         .saturating_add(i64::try_from(bytes.len()).unwrap_or(i64::MAX));
-    Ok(())
-}
-
-async fn drain_remaining_output<R: AsyncRead + Unpin, T: Transport>(
-    reader: &mut R,
-    transport: &mut T,
-    result: &mut DoorBridgeResult,
-) -> ServeResult<()> {
-    let mut bytes = Vec::new();
-    reader.read_to_end(&mut bytes).await?;
-    if !bytes.is_empty() {
-        transport.write_all(&bytes).await?;
-        result.bytes_out = result
-            .bytes_out
-            .saturating_add(i64::try_from(bytes.len()).unwrap_or(i64::MAX));
-    }
     Ok(())
 }
 
@@ -926,6 +990,37 @@ mod tests {
     }
 
     #[test]
+    fn dosbox_serial_config_maps_com1_to_loopback_bridge() {
+        let addr: std::net::SocketAddr = "127.0.0.1:43210".parse().expect("addr");
+
+        let config = dosbox_serial_config(addr);
+
+        assert!(config.contains("[serial]"));
+        assert!(config.contains(
+            "serial1=nullmodem server:127.0.0.1 port:43210 transparent:1 rxdelay:1000 txdelay:10"
+        ));
+    }
+
+    #[test]
+    fn add_dosbox_serial_config_prepends_runtime_conf() {
+        let mut plan = DoorRunPlan {
+            program: "dosbox".to_string(),
+            args: vec!["-c".to_string(), "exit".to_string()],
+            working_dir: Path::new("/tmp").to_path_buf(),
+            drop_file_path: Path::new("/tmp/DORINFO1.DEF").to_path_buf(),
+            timeout: Duration::from_secs(60),
+        };
+
+        add_dosbox_serial_config(&mut plan, Path::new("/tmp/OXDOSBOX.CONF"));
+
+        assert_eq!(plan.args[0], "--noprimaryconf");
+        assert_eq!(plan.args[1], "--nolocalconf");
+        assert_eq!(plan.args[2], "--conf");
+        assert_eq!(plan.args[3], "/tmp/OXDOSBOX.CONF");
+        assert_eq!(plan.args[4], "-c");
+    }
+
+    #[test]
     fn validate_door_rejects_disabled_missing_runner_and_bad_dropfile() {
         let runtime = temp_dir("validate-runtime");
         let working_dir = temp_dir("validate-working");
@@ -1006,7 +1101,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn bridge_forwards_caller_bytes_and_child_output() {
+    async fn bridge_forwards_caller_bytes_and_serial_output() {
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("serial listener");
+        let addr = listener.local_addr().expect("serial addr");
         let (mut transport, mut client) = LoopbackTransport::new();
         client.write_bytes(b"hello\n").expect("caller input");
         let runtime = ServerRuntime::new("test".to_string(), 1, 1, 30);
@@ -1017,29 +1116,53 @@ mod tests {
             "now".to_string(),
         );
 
+        let serial_task = tokio::spawn(async move {
+            let mut serial = TcpStream::connect(addr).await.expect("connect serial");
+            let mut input = [0_u8; 6];
+            serial
+                .read_exact(&mut input)
+                .await
+                .expect("read caller bytes");
+            assert_eq!(&input, b"hello\n");
+            serial
+                .write_all(b"serial-ready\r\n")
+                .await
+                .expect("write serial bytes");
+        });
+
         let child = Command::new("sh")
             .arg("-c")
-            .arg("printf ready; IFS= read -r line; printf 'echo:%s\\n' \"$line\"")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .arg("sleep 5")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .spawn()
-            .expect("spawn echo helper");
+            .expect("spawn sleep helper");
 
-        let result = run_door_bridge(&mut transport, &runtime, 1, child, Duration::from_secs(2))
-            .await
-            .expect("bridge");
+        let result = run_door_bridge(
+            &mut transport,
+            &runtime,
+            1,
+            child,
+            listener,
+            Duration::from_secs(2),
+        )
+        .await
+        .expect("bridge");
+
+        serial_task.await.expect("serial task");
 
         let output = String::from_utf8_lossy(&client.read_output_bytes()).to_string();
-        assert!(output.contains("ready"));
-        assert!(output.contains("echo:hello"));
-        assert!(result.bytes_in >= 6);
-        assert!(result.bytes_out >= 15);
-        assert_eq!(result.exit_code, Some(0));
+        assert!(output.contains("serial-ready"));
+        assert_eq!(result.bytes_in, 6);
+        assert!(result.bytes_out >= 14);
     }
 
     #[tokio::test]
     async fn bridge_times_out_and_terminates_child() {
+        let listener = TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("serial listener");
         let (mut transport, _client) = LoopbackTransport::new();
         let runtime = ServerRuntime::new("test".to_string(), 1, 1, 30);
         runtime.mark_node_connected(
@@ -1051,9 +1174,9 @@ mod tests {
         let child = Command::new("sh")
             .arg("-c")
             .arg("sleep 2")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .spawn()
             .expect("spawn sleep helper");
 
@@ -1062,6 +1185,7 @@ mod tests {
             &runtime,
             1,
             child,
+            listener,
             Duration::from_millis(50),
         )
         .await

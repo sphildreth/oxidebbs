@@ -11,8 +11,8 @@ use oxidebbs_db::{
     list_door_definitions, list_door_runs, update_door_enabled,
 };
 use oxidebbs_door::{
-    DoorCaller, DoorRunRequest, DoorRunner, DosBoxRunner, DryRunDoorRunner, node_runtime_dir,
-    render_door_sys, render_dorinfo1_def,
+    DoorCaller, DoorRunRequest, DoorRunner, DryRunDoorRunner, node_runtime_dir, render_door_sys,
+    render_dorinfo1_def,
 };
 
 use crate::config::DoorDefConfig;
@@ -326,11 +326,9 @@ pub fn run_door_test(
         runtime_dir,
     };
 
-    let result = if args.dry_run {
-        DryRunDoorRunner.run(&request)?
-    } else {
-        DosBoxRunner.run(&request)?
-    };
+    require_cli_door_test_mode(args.dry_run)?;
+
+    let result = DryRunDoorRunner.run(&request)?;
 
     if ctx.json {
         print_json(&json!({
@@ -348,6 +346,16 @@ pub fn run_door_test(
         );
     }
     Ok(())
+}
+
+fn require_cli_door_test_mode(dry_run: bool) -> CliResult<()> {
+    if dry_run {
+        return Ok(());
+    }
+
+    Err(CliError::Message(
+        "interactive DOS door tests require a caller session; use --dry-run for CLI validation and launch the door from the caller Doors menu for live COM1 serial testing".to_string(),
+    ))
 }
 
 pub fn run_door_dropfile(
@@ -686,5 +694,16 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn cli_door_test_requires_dry_run_for_non_caller_context() {
+        assert!(require_cli_door_test_mode(true).is_ok());
+
+        let error = require_cli_door_test_mode(false).expect_err("expected error");
+
+        assert!(error.to_string().contains("require a caller session"));
+        assert!(error.to_string().contains("--dry-run"));
+        assert!(error.to_string().contains("COM1 serial"));
     }
 }

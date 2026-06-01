@@ -153,8 +153,10 @@ This is intended for a local coding agent to work from.
   configuration files.
 - [x] Document `doors check/dropfile/test` smoke-test workflow in setup,
   getting-started, deployment, and sysop CLI docs.
-- [x] Document DOSBox C:/D: runtime mounts, bare command resolution from `C:\`,
-  and `OXNODE.TXT` diagnostics.
+- [x] Document DOSBox C:/D: runtime mounts, DOS `PATH` command lookup from
+  `C:\`, and `OXNODE.TXT` diagnostics.
+- [x] Convert `OXIDECHK.EXE` and live caller launch to validate COM1 serial I/O
+  through a run-local Rust TCP bridge instead of DOSBox console/stdout.
 - [x] Update changelog with the user-facing test-door documentation and config
   behavior.
 - [x] Add optional DOSBox smoke script that is skipped unless explicitly run

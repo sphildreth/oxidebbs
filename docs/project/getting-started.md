@@ -79,6 +79,31 @@ Free Pascal (`i8086-msdos`) is only needed when maintaining
 `tools/doors/oxide-door-check/src/oxidechk.pas`. `check`, `dropfile`, and
 `--dry-run` validation do not need it.
 
+The v1 live model does not use DOSBox console I/O. During a caller door session,
+OxideBBS pauses normal menu parsing and forwards raw bytes through this path:
+
+```text
+caller telnet client
+  <-> OxideBBS caller transport
+  <-> run-local 127.0.0.1 TCP bridge
+  <-> DOSBox nullmodem serial backend
+  <-> DOSBox-emulated COM1 UART
+  <-> DOS door program
+```
+
+OxideBBS starts DOSBox with `COM1` mapped to the run-local bridge:
+
+```text
+serial1=nullmodem server:127.0.0.1 port:<bridge_port> transparent:1 rxdelay:1000 txdelay:10
+```
+
+When the caller presses a key, OxideBBS reads that byte from the telnet session
+and writes it to the bridge socket. DOSBox receives it and presents it as COM1
+input to the door. When the door writes to COM1, DOSBox sends those bytes back to
+the bridge socket, and OxideBBS writes them to the caller's telnet connection.
+That means an end-to-end smoke test validates both launch and serial transport
+behavior, not just console I/O.
+
 ## 3) Start serving
 
 ```bash
@@ -130,7 +155,12 @@ cargo run -p oxidebbs-server -- doors test oxide-check --user sysop --dry-run
 Caller `Doors` menu launch uses live door execution in the caller path and records
 `door_runs` rows with timeout and byte counters. With DOSBox installed and
 `oxide-check` enabled, run the door from the caller `Doors` menu to complete an
-end-to-end live test.
+end-to-end live test and confirm:
+
+- caller keystrokes reach the door through DOSBox COM1,
+- door output written to COM1 reaches the caller's telnet session,
+- the door responds to keyboard input,
+- and `OXIDECHK.RPT`/`OXNODE.TXT` are created under the node runtime directory.
 
 ## 7) Backup, export, and restore
 

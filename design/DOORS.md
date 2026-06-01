@@ -10,7 +10,7 @@ OxideBBS should make old DOS door games feel native.
 - Per-node runtime directories
 - Drop-file generation
 - Process launch
-- I/O bridge
+- COM1 serial bridge
 - Timeout handling
 - Disconnect cleanup
 - Door run logging
@@ -59,7 +59,12 @@ For DOSBox execution:
 - mount door working directory as `C:`
 - mount node runtime directory as `D:`
 - use `D:` as the current directory for command execution
-- resolve bare commands as `C:\<EXE>` in DOSBox plans
+- start a per-door bridge process for the door launch
+- map `COM1` inside DOSBox using
+  `serial1=nullmodem server:127.0.0.1 port:<bridge_port> transparent:1 rxdelay:1000 txdelay:10`
+  to that bridge
+- add `C:\` to DOS `PATH` and run bare commands by name so `D:` remains the
+  current runtime directory for drop-file reads and report writes
 - write `OXNODE.TXT` into the node runtime directory as Oxide-owned diagnostic metadata
   (not required by third-party doors)
 
@@ -107,18 +112,19 @@ logic does not know child-process details.
 
 ## Byte-bridge contract
 
-The bridge uses the existing byte-oriented `Transport` trait; no split or new
-transport methods are required for this phase. While a door is active, the
-normal session read loop is paused and the bridge borrows the caller transport.
-Menu routing, prompt editing, CR/LF normalization, and line-based parsing do
-not run until the bridge returns.
+The bridge uses the existing byte-oriented `Transport` trait and a per-door
+run-local TCP endpoint; no split or new transport methods are required for this
+phase. While a door is active, the normal session read loop is paused and the
+bridge owns caller transport mediation. Menu routing, prompt editing, CR/LF
+normalization, and line-based parsing do not run until the bridge returns.
 
 Bridge behavior:
 
-- Spawn the configured runner with piped stdin, stdout, and stderr.
-- Forward raw caller bytes from `Transport::read_byte()` to child stdin without
-  menu parsing.
-- Forward child stdout and stderr bytes directly to the caller transport.
+- Start a per-door Rust TCP bridge bound to localhost and expose it to the runner.
+- Launch DOSBox with `serial1=nullmodem server:127.0.0.1 port:<bridge_port> transparent:1 rxdelay:1000 txdelay:10`
+  so `COM1` reaches the bridge.
+- Forward serial bytes bidirectionally between the bridge socket and the caller
+  `Transport`.
 - Keep heartbeats fresh while the door bridge is active.
 - Watch the local runtime command channel for sysop messages and disconnects.
 - Kill the child on timeout, caller disconnect, or sysop disconnect.

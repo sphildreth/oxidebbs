@@ -141,13 +141,13 @@ Door management:
 - `oxidebbs-server doors list`
 - `oxidebbs-server doors check` (or `doors check <key>`)
 - `oxidebbs-server doors test <key> --user sysop --dry-run`
-- `oxidebbs-server doors test <key> --user sysop`
 - `oxidebbs-server doors dropfile <key> --user sysop --node 1 --format DORINFO1.DEF`
 
 Meaning:
 
 - `--dry-run` generates drop files and validates input without launching a child.
-- Without `--dry-run`, the configured runner is invoked locally.
+- Live interactive DOS door testing requires a caller session. Start `serve`,
+  connect over telnet, and launch the door from the caller `Doors` menu.
 - The bundled test door is `oxide-check` (`OXIDECHK.EXE`) for validating the DOSBox
   path and door runtime contract.
 - Enabled configured doors are the only ones selectable by live caller menu.
@@ -161,14 +161,22 @@ Recommended smoke-test flow:
 cargo run -p oxidebbs-server -- --config config/oxidebbs.example.toml doors check oxide-check
 cargo run -p oxidebbs-server -- --config config/oxidebbs.example.toml doors dropfile oxide-check --user sysop --node 1 --format DORINFO1.DEF
 cargo run -p oxidebbs-server -- --config config/oxidebbs.example.toml doors test oxide-check --user sysop --dry-run
-cargo run -p oxidebbs-server -- --config config/oxidebbs.example.toml doors test oxide-check --user sysop
 ```
+
+Live test expectation:
+
+- The bridge path should be clearly visible from caller behavior: the door appears to
+  run through COM1 serial and responds through normal keypresses.
+- DOSBox receives a run-local config with
+  `serial1=nullmodem server:127.0.0.1 port:<bridge_port> transparent:1 rxdelay:1000 txdelay:10`.
+- On a clean run, `OXNODE.TXT` and `OXIDECHK.RPT` should be written to the node
+  runtime directory and include matching node metadata.
 
 - `doors dropfile ...` and `doors test ... --dry-run` generate `DORINFO1.DEF`,
   `DOOR.SYS` when requested by command, and the Oxide diagnostic `OXNODE.TXT`
   beside the drop files.
-- Live execution requires DOSBox and should return a clear missing-runner error
-  when `dosbox` is not installed.
+- Live execution requires DOSBox and the serial bridge; it should return a clear missing-runner
+  or bridge-start error when either component is unavailable.
 
 `nodes disconnect <n>` also closes an active door bridge for that node before
 normal disconnect cleanup.

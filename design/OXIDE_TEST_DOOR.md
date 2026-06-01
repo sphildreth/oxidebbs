@@ -50,7 +50,7 @@ The Oxide test door is complete only when all of the following are true:
    Pascal, DOSBox, or the staged `i8086-msdos` toolchain.
 9. Optional/manual validation exists for systems that do have DOSBox installed.
 10. User-facing docs explain how to install DOSBox, configure the test door, run
-   a dry run, and run a live test.
+   a dry run, validate COM1 serial transport expectations, and run a live test.
 11. `docs/about/changelog.md` is updated under `Unreleased`.
 12. `design/TASKS.md` is updated with completed work when implementation is
     finished.
@@ -87,6 +87,17 @@ These decisions are part of the implementation contract.
 - The test-door rebuild script is
   `scripts/build-oxidechk-door.sh`.
 - The canonical runner is DOSBox, configured as `runner = "dosbox"`.
+- The v1 runtime contract uses a per-door Rust TCP bridge:
+  - OxideBBS starts a run-local TCP bridge listener for the caller transport.
+  - DOSBox maps `COM1` with
+    `serial1=nullmodem server:127.0.0.1 port:<bridge_port> transparent:1 rxdelay:1000 txdelay:10`
+    to that listener.
+  - `OXIDECHK.EXE` communicates over `COM1` UART-style, not through console
+    stdio.
+- The v1 bridge is not a Rust FOSSIL TSR. A FOSSIL driver is a DOS-side
+  interrupt/API component inside the emulated machine; OxideBBS v1 validates the
+  host side by providing a real COM1/UART path that DOSBox exposes to the door.
+  A bundled DOS-side FOSSIL-compatible shim can be designed after v1 if needed.
 - The canonical drop-file format for the example config is `DORINFO1.DEF`.
 - The test program must also support `DOOR.SYS` so both supported drop-file
   writers are exercised by tests.
@@ -145,7 +156,7 @@ This project does not need to solve every DOS door compatibility issue in this
 work item.
 
 - Do not add DOSEMU support in this plan. DOSBox remains the v1 test path.
-- Do not add serial/modem support.
+- Do not add physical serial port or modem hardware integration in v1.
 - Do not add a remote admin API.
 - Do not add new drop-file formats beyond the existing `DORINFO1.DEF` and
   `DOOR.SYS`.
@@ -186,7 +197,7 @@ file before changing the plan.
 
 ## Phase 1 - Repository Layout And License Boundary
 
-Status: `TODO`
+Status: `COMPLETE`
 
 ### Objective
 
@@ -346,7 +357,7 @@ sha256sum -c SHA256SUMS
 
 ## Phase 2 - DOS Door Program
 
-Status: `TODO`
+Status: `COMPLETE`
 
 ### Objective
 
@@ -599,7 +610,7 @@ Do not add random or time-dependent exit codes.
 
 ## Phase 3 - DOSBox Runtime Contract
 
-Status: `TODO`
+Status: `COMPLETE`
 
 ### Objective
 
@@ -622,20 +633,41 @@ For DOSBox runs:
 
 - Host door working directory is mounted as DOS drive `C:`.
 - Host node runtime directory is mounted as DOS drive `D:`.
+- A per-door TCP bridge is started for the run.
 - DOS drive `D:` is the current DOS directory when the door command runs.
 - Drop files are written into the host node runtime directory.
 - `OXNODE.TXT` is written into the host node runtime directory beside the drop
   file.
 - Door-created per-run files, including `OXIDECHK.RPT`, are written into the
   host node runtime directory.
-- The configured command is invoked from the current `D:` directory, but bare
-  executable names are resolved from `C:`.
+- The configured command is invoked from the current `D:` directory. Bare
+  executable names are found by adding `C:\` to DOS `PATH`, so drop-file reads
+  and report writes stay rooted in the runtime directory.
+- DOSBox maps COM1 to the run-local bridge port with
+  `serial1=nullmodem server:127.0.0.1 port:<bridge_port> transparent:1 rxdelay:1000 txdelay:10`
+  semantics.
 
-The generated DOSBox command sequence must be:
+The generated DOSBox command sequence must include a run-local config file:
+
+```text
+--noprimaryconf
+--nolocalconf
+--conf <node runtime dir>/OXDOSBOX.CONF
+```
+
+`OXDOSBOX.CONF` must contain:
+
+```ini
+[serial]
+serial1=nullmodem server:127.0.0.1 port:<bridge_port> transparent:1 rxdelay:1000 txdelay:10
+```
+
+The generated DOSBox command sequence must then run:
 
 ```text
 -c "mount c <door working dir>"
 -c "mount d <node runtime dir>"
+-c "path C:\"
 -c "d:"
 -c "<resolved door command>"
 -c "exit"
@@ -650,7 +682,7 @@ command = "OXIDECHK.EXE"
 the resolved DOS command must be:
 
 ```text
-C:\OXIDECHK.EXE
+OXIDECHK.EXE
 ```
 
 ### Command Resolution Rules
@@ -678,8 +710,8 @@ Examples:
 
 | Configured Command | Resolved Command |
 | --- | --- |
-| `OXIDECHK.EXE` | `C:\OXIDECHK.EXE` |
-| `LORD.EXE /N1` | `C:\LORD.EXE /N1` |
+| `OXIDECHK.EXE` | `OXIDECHK.EXE` |
+| `LORD.EXE /N1` | `LORD.EXE /N1` |
 | `C:\LORD\START.BAT` | `C:\LORD\START.BAT` |
 | `UTILS\DOOR.EXE` | `UTILS\DOOR.EXE` |
 
@@ -766,7 +798,7 @@ used.
 
 ## Phase 4 - Config And Sysop CLI Integration
 
-Status: `TODO`
+Status: `COMPLETE`
 
 ### Objective
 
@@ -848,15 +880,17 @@ cargo run -p oxidebbs-server -- --config config/oxidebbs.example.toml doors drop
 cargo run -p oxidebbs-server -- --config config/oxidebbs.example.toml doors test oxide-check --user sysop --dry-run
 ```
 
-Live execution remains:
+Live execution runs through a caller session:
 
 ```bash
-cargo run -p oxidebbs-server -- --config config/oxidebbs.example.toml doors test oxide-check --user sysop
+cargo run -p oxidebbs-server -- --config config/oxidebbs.example.toml serve
 ```
 
-That command may fail with a clear missing-runner error when DOSBox is not
-installed. That is acceptable. The failure must not look like an OxideBBS
-internal error.
+Connect over telnet, log in as a caller, open the caller `Doors` menu, and
+select `oxide-check`.
+
+If DOSBox is not installed, launch must fail with a clear missing-runner error.
+That is acceptable. The failure must not look like an OxideBBS internal error.
 
 ### Acceptance Criteria
 
@@ -868,7 +902,7 @@ internal error.
 
 ## Phase 5 - Testing Automation
 
-Status: `TODO`
+Status: `COMPLETE`
 
 ### Objective
 
@@ -892,8 +926,9 @@ Add or update tests for:
 - `dosbox_plan` mounts the door working directory as `C:`.
 - `dosbox_plan` mounts the node runtime directory as `D:`.
 - `dosbox_plan` switches to `D:`.
-- `dosbox_plan` resolves `OXIDECHK.EXE` to `C:\OXIDECHK.EXE`.
-- `resolve_dosbox_command("LORD.EXE /N1")` returns `C:\LORD.EXE /N1`.
+- `dosbox_plan` adds `C:\` to DOS `PATH`.
+- `dosbox_plan` resolves `OXIDECHK.EXE` to `OXIDECHK.EXE`.
+- `resolve_dosbox_command("LORD.EXE /N1")` returns `LORD.EXE /N1`.
 - commands with a drive or path are not prefixed.
 - empty commands are rejected by validation before plan generation.
 
@@ -1013,7 +1048,7 @@ Normal Cargo build/test, `cargo test --workspace --locked`, and
 
 ## Phase 6 - Documentation And Changelog
 
-Status: `TODO`
+Status: `COMPLETE`
 
 ### Objective
 
@@ -1042,7 +1077,8 @@ Required additions:
   the node runtime directory as `D:`.
 - Document that DOS doors are launched with `D:` as the current directory so
   drop files are visible.
-- Document that bare configured commands are resolved from `C:`.
+- Document that bare configured commands are found through DOS `PATH` after
+  adding `C:\`.
 - Document that OxideBBS writes `OXNODE.TXT` as Oxide-owned per-node metadata
   for diagnostics, and that third-party doors are not expected to consume it.
 - Keep the legal note: no copyrighted or abandonware DOS doors are bundled.
@@ -1143,7 +1179,7 @@ work is being combined with an explicit release-version change.
 
 ## Phase 7 - Final Validation
 
-Status: `TODO`
+Status: `COMPLETE`
 
 ### Objective
 
@@ -1172,7 +1208,7 @@ When changing the Pascal source or regenerating the fixture, also run:
 If DOSBox is installed, also run:
 
 ```bash
-./scripts/test-oxide-door-dosbox.sh
+OXIDE_DOOR_INTERACTIVE=1 ./scripts/test-oxide-door-dosbox.sh
 ```
 
 If DOSBox is missing, do not treat that as a failure. Record the skip in the
@@ -1216,10 +1252,10 @@ Free Pascal validation: `./scripts/bootstrap-fpc-i8086-msdos.sh` staged Free
 Pascal 3.2.2 `ppcross8086`; `./scripts/build-oxidechk-door.sh` rebuilt
 `dist/OXIDECHK.EXE`; `(cd tools/doors/oxide-door-check && sha256sum -c
 SHA256SUMS)` passed.
-DOSBox smoke validation: `./scripts/test-oxide-door-dosbox.sh` skipped with
-exit 77 unless `OXIDE_DOOR_INTERACTIVE=1` is set.
-Skipped validations: interactive DOSBox smoke run was not forced during the
-required automated gate.
+DOSBox smoke validation:
+`OXIDE_DOOR_INTERACTIVE=1 ./scripts/test-oxide-door-dosbox.sh` passed, including
+COM1 output capture, scripted `I`/`R`/`Q` input, and `OXIDECHK.RPT` creation.
+Skipped validations: none for this plan on the local workstation.
 Notable decisions: `OXIDECHK.EXE` is committed as a conformance-test fixture;
 the Free Pascal i8086/MS-DOS cross compiler is staged under `target/` and is
 required only when maintainers rebuild the door fixture.

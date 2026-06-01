@@ -41,12 +41,31 @@ cargo run -p oxidebbs-server -- --config /etc/oxidebbs/oxidebbs.toml doors dropf
 cargo run -p oxidebbs-server -- --config /etc/oxidebbs/oxidebbs.toml doors test oxide-check --user sysop --dry-run
 ```
 
-6. To run a live smoke test:
+6. To run a live smoke test, keep DOSBox installed, enable `oxide-check` in the
+   active config, start the server, and launch `oxide-check` from the caller
+   `Doors` menu.
 
-1. Keep DOSBox installed.
-2. Enable `oxide-check` in the active config (it is intentionally disabled by
-   default in `oxidebbs.example.toml`).
-3. Start the server and launch `oxide-check` from the caller `Doors` menu.
+Confirm the process uses the local COM1 serial bridge path:
+
+- `DOSBox` starts with
+  `serial1=nullmodem server:127.0.0.1 port:<bridge_port> transparent:1 rxdelay:1000 txdelay:10`
+  for this run.
+- the Rust TCP bridge accepts the local bridge connection,
+- caller telnet bytes are forwarded by OxideBBS to the bridge socket and appear
+  to the door as COM1 input, and
+- door output written to COM1 returns through DOSBox and OxideBBS to the caller's
+  telnet session.
+
+The deployed byte path is:
+
+```text
+caller telnet client
+  <-> OxideBBS caller transport
+  <-> run-local 127.0.0.1 TCP bridge
+  <-> DOSBox nullmodem serial backend
+  <-> DOSBox-emulated COM1 UART
+  <-> DOS door program
+```
 
 7. Verify health:
 
@@ -55,8 +74,9 @@ cargo run -p oxidebbs-server -- --config /etc/oxidebbs/oxidebbs.toml status
 cargo run -p oxidebbs-server -- --config /etc/oxidebbs/oxidebbs.toml nodes list
 ```
 
-Live launch requires DOSBox and will fail with a clear external-runner error if
-missing.
+Live launch requires DOSBox and a functioning serial bridge listener. If DOSBox or
+the bridge endpoint cannot start, the launch fails with a clear external-runner or
+bridge-start error rather than a hidden internal panic.
 
 ## Native build prerequisites
 
