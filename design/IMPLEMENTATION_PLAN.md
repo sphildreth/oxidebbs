@@ -17,6 +17,7 @@ Status values:
 | Phase | Status | Goal | Primary Output |
 | --- | --- | --- | --- |
 | Phase 0 — Current Baseline | COMPLETE | CLI-first sysop interface, schema v3, docs, and release metadata are present. | `oxidebbs-server` exposes top-level sysop command groups. |
+| Phase 0.5 — Structural Extraction Gate | TODO | Reduce server monolith risk before adding live control behavior. | Command handler modules, `sysop_cli.rs` under 1000 lines, validated no-behavior-change refactor. |
 | Phase 1 — Local Server Control Plane | TODO | Let sysop CLI commands control a running local server process. | Local control socket, command protocol, node command integration. |
 | Phase 2 — Live Node Heartbeats And State | TODO | Make node status authoritative while the server is running. | Node registry, heartbeat timestamps, stale detection, status output. |
 | Phase 3 — Live Door Launch Integration | TODO | Replace caller-facing door placeholder with controlled door execution. | Door menu launch path, run records, drop files, timeout cleanup. |
@@ -85,38 +86,26 @@ Every phase is complete only when all of the following are true:
 - Prefer small, typed command/request/response structs over stringly typed
   maps inside Rust code.
 
-## Structural Risks To Address Early
+## Required Structural Maintenance Gates
 
 The current `crates/oxidebbs-server/src/sysop_cli.rs` file is large
 (`2694` lines at the time this plan was written). Future phases must not keep
-adding substantial handler logic to that monolith.
+adding substantial handler logic to that monolith. The extraction is not optional
+cleanup; it is Phase 0.5 and must be completed before Phase 1 begins.
 
-Before implementing Phase 1 control-socket integration, extract command handlers
-into focused modules under:
+The current `crates/oxidebbs-server/src/serve.rs` file is also large
+(`1869` lines at the time this plan was written). Its `handle_caller` function
+owns transport setup, session lifecycle, login flow, new-user flow, main menu
+routing, message flow, and disconnect cleanup inline. Phase 3 must not bolt a
+door bridge directly into that shape unless the bridge can be injected through a
+small tested helper. Treat session-loop extraction as the Phase 3 structural
+gate.
 
-```text
-crates/oxidebbs-server/src/commands/
-```
+Required gates:
 
-Recommended initial split:
-
-```text
-commands/status.rs
-commands/nodes.rs
-commands/doors.rs
-commands/messages.rs
-commands/users.rs
-commands/db.rs
-commands/ansi.rs
-commands/logs.rs
-commands/audit.rs
-commands/config.rs
-```
-
-`sysop_cli.rs` should retain the Clap type definitions, top-level dispatch, and
-small shared formatting helpers only. If a phase would push `sysop_cli.rs` over
-`3000` lines, stop and extract handlers first. This is a required maintenance
-step, not optional cleanup.
+- Phase 0.5: extract sysop CLI command handlers before Phase 1.
+- Phase 3 pre-work: extract caller session flow seams before live door bridge
+  work if the bridge cannot be tested without editing `handle_caller` directly.
 
 ## Phase 0 — Current Baseline
 
@@ -161,6 +150,84 @@ The current baseline after the CLI-first sysop implementation includes:
 
 Do not re-implement this phase unless a regression is found.
 
+## Phase 0.5 — Structural Extraction Gate
+
+Status: `TODO`
+
+### Objective
+
+Split CLI command execution out of `sysop_cli.rs` before any control-socket
+behavior is added. This is a no-behavior-change maintenance gate, and Phase 1
+must not start until it is complete.
+
+### Required Work
+
+Create:
+
+```text
+crates/oxidebbs-server/src/commands/
+```
+
+with at least:
+
+```text
+commands/status.rs
+commands/nodes.rs
+commands/doors.rs
+commands/messages.rs
+commands/users.rs
+commands/db.rs
+commands/ansi.rs
+commands/logs.rs
+commands/audit.rs
+commands/config.rs
+```
+
+Move command handler logic out of `sysop_cli.rs`:
+
+- Move all command handler `run_*` functions into the relevant command module,
+  except for a minimal top-level dispatch function if keeping it in
+  `sysop_cli.rs` is simpler.
+- Move command-specific helpers with their handlers. For example, door JSON,
+  door checks, and door sync helpers belong with `commands/doors.rs`.
+- Keep shared CLI types, common error types, `print_json`, `emit_ok`, and small
+  parser/dispatch glue in `sysop_cli.rs` only when they are genuinely shared.
+- Preserve the current command names, aliases, help text, and output behavior.
+- Keep backwards-compatible `admin` aliases.
+- Do not add control-socket behavior in this phase.
+
+### Line-Count Target
+
+After extraction:
+
+- `crates/oxidebbs-server/src/sysop_cli.rs` must be under `1000` lines.
+- If Clap type definitions alone make that target impossible, move subcommand
+  type definitions into command modules too and re-export them through
+  `commands::`.
+
+### Tests
+
+This phase is a refactor, so tests should prove behavior did not change:
+
+- Existing unit tests pass.
+- Add smoke tests for representative command dispatch if practical.
+- At minimum, manually verify `oxidebbs-server --help` still shows the same
+  top-level command order.
+
+### Documentation
+
+No user-facing docs are required for a pure no-behavior-change refactor. Update
+`docs/about/changelog.md` only if module extraction changes user-visible output
+or behavior.
+
+### Phase 0.5 Acceptance Criteria
+
+- `crates/oxidebbs-server/src/commands/` exists.
+- The listed command modules exist.
+- Command handler logic has moved out of `sysop_cli.rs`.
+- `sysop_cli.rs` is under `1000` lines.
+- `./scripts/dev-check.sh` passes before Phase 1 begins.
+
 ## Phase 1 — Local Server Control Plane
 
 Status: `TODO`
@@ -198,19 +265,13 @@ Implementation must be platform-gated:
 - Do not fail `cargo check --workspace` on non-Unix targets because the module
   unconditionally imports Unix-only APIs.
 
-### Required Refactor Before Control Integration
+### Phase 0.5 Dependency
 
-Before adding socket client calls, extract at least status and node handlers out
-of `sysop_cli.rs`:
-
-```text
-crates/oxidebbs-server/src/commands/status.rs
-crates/oxidebbs-server/src/commands/nodes.rs
-```
-
-These modules should own the control-socket client fallback behavior for their
-command group. Keep `sysop_cli.rs` as parser/dispatcher glue. Do not add Phase 1
-control logic directly to the existing monolithic file.
+Phase 0.5 is a hard prerequisite. Do not add control-socket client calls,
+runtime protocol types, or live status/node behavior until command handlers have
+been extracted from `sysop_cli.rs` and the Rust gate passes. The control-socket
+client fallback behavior for `status` and `nodes` belongs in
+`commands/status.rs` and `commands/nodes.rs`, not in `sysop_cli.rs`.
 
 ### Module Shape
 
@@ -223,19 +284,32 @@ crates/oxidebbs-server/src/control.rs
 The module should define:
 
 ```rust
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type")]
 pub enum ControlRequest {
+    #[serde(rename = "status")]
     Status,
+    #[serde(rename = "nodes.list")]
     NodesList,
+    #[serde(rename = "nodes.disconnect")]
     NodeDisconnect { node_number: u16, reason: String },
+    #[serde(rename = "nodes.message")]
     NodeMessage { node_number: u16, text: String },
+    #[serde(rename = "nodes.broadcast")]
     NodeBroadcast { text: String },
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type")]
 pub enum ControlResponse {
-    Ok,
-    Status(ControlStatus),
-    Nodes(Vec<ControlNodeStatus>),
-    Error { message: String },
+    #[serde(rename = "ok")]
+    Ok { ok: bool },
+    #[serde(rename = "status")]
+    Status { ok: bool, status: ControlStatus },
+    #[serde(rename = "nodes")]
+    Nodes { ok: bool, nodes: Vec<ControlNodeStatus> },
+    #[serde(rename = "error")]
+    Error { ok: bool, error: String },
 }
 
 pub struct ControlStatus {
@@ -258,6 +332,29 @@ pub struct ControlNodeStatus {
 The exact field list can expand, but do not remove these fields unless the
 design docs are updated in the same change.
 
+Do not rely on `rename_all` for `ControlRequest`. The protocol uses dotted type
+names, and `rename_all = "snake_case"` would serialize `NodesList` as
+`nodes_list`, which is not the wire contract.
+
+Required request mapping:
+
+| Rust variant | Wire `type` |
+| --- | --- |
+| `Status` | `status` |
+| `NodesList` | `nodes.list` |
+| `NodeDisconnect` | `nodes.disconnect` |
+| `NodeMessage` | `nodes.message` |
+| `NodeBroadcast` | `nodes.broadcast` |
+
+Required response mapping:
+
+| Rust variant | Wire `type` |
+| --- | --- |
+| `Ok` | `ok` |
+| `Status` | `status` |
+| `Nodes` | `nodes` |
+| `Error` | `error` |
+
 ### Wire Format
 
 Use newline-delimited JSON over the Unix socket:
@@ -274,7 +371,7 @@ Responses should also be newline-delimited JSON:
 
 ```json
 {"ok":true,"type":"nodes","nodes":[]}
-{"ok":false,"error":"node 1 is not active"}
+{"ok":false,"type":"error","error":"node 1 is not active"}
 ```
 
 Implementation detail:
@@ -283,6 +380,11 @@ Implementation detail:
 - Read one line per request.
 - Write one line per response.
 - Keep the protocol stable enough for CLI tests.
+- The listener should spawn a task per accepted control connection.
+- A control handler reads one request line, dispatches it, writes one response
+  line, and closes the connection.
+- Do not keep sockets open for streaming, subscriptions, or long-polling in
+  Phase 1. `nodes watch` should issue repeated short request/response calls.
 - Message text fields must not contain literal newline characters in Phase 1.
   Normalize `\r`, `\n`, and `\r\n` to a single ASCII space before serializing
   `NodeMessage` or `NodeBroadcast`.
@@ -296,6 +398,21 @@ Implementation detail:
 In `serve`, start the control listener after config, DecentDB, menus, and the
 node coordinator are initialized but before accepting callers.
 
+Introduce a shared runtime object for data that both caller tasks and the
+control listener need to read or update:
+
+```rust
+pub struct ServerRuntime {
+    // exact fields are implementation-defined for Phase 1
+}
+```
+
+This object should be owned behind `Arc<ServerRuntime>` and cloned into spawned
+caller tasks and control handler tasks. Phase 1 can keep this minimal: uptime,
+configured node count, and enough session/node visibility for `status` and
+`nodes list` are sufficient. Phase 2 can expand or replace it with the full
+node registry.
+
 The control listener must:
 
 - Remove a stale socket file only if no server is listening on it.
@@ -306,7 +423,8 @@ The control listener must:
 
 ### CLI Integration
 
-Update `crates/oxidebbs-server/src/sysop_cli.rs`:
+Update the extracted command modules, with `sysop_cli.rs` remaining dispatch
+glue:
 
 - `status` should try the control socket first. If unavailable, fall back to
   offline DecentDB/config status and clearly mark uptime as unavailable.
@@ -328,6 +446,7 @@ Add tests for:
 - Request JSON parsing.
 - Response JSON serialization.
 - Unknown request type rejection.
+- Two simultaneous control clients do not block each other.
 - Control socket client request/response round trip using a temporary runtime
   path.
 - CLI fallback behavior when the socket is absent can remain covered by unit
@@ -360,6 +479,10 @@ Document that the socket is local-only and located under `runtime/`.
   runbook and leave automatic stale removal out of the implementation.
 - If command extraction becomes larger than expected, complete the extraction
   and validation first, then resume control-socket work in a follow-up change.
+- If extracting shared runtime state from `serve.rs` grows beyond Phase 1,
+  implement an intermediate control state backed by DecentDB active session rows
+  plus a simple process uptime value. That is enough for truthful `status` and
+  `nodes list` while leaving the full runtime registry to Phase 2.
 
 ### Phase 1 Acceptance Criteria
 
@@ -480,6 +603,23 @@ pub struct RuntimeNode {
 }
 ```
 
+`serve.rs` already has a `NodeCoordinator` that owns node slot allocation using
+`occupied: Mutex<Vec<bool>>` plus a `Semaphore`. The new registry must not create
+an unsynchronized second source of truth for node allocation.
+
+Required relationship:
+
+- Prefer replacing `NodeCoordinator` with `NodeRegistry`, where the registry
+  owns allocation, occupancy, runtime state, and the semaphore limit.
+- If direct replacement is too risky, make `NodeRegistry` wrap
+  `NodeCoordinator` so all allocation and release operations pass through one
+  type.
+- Do not leave `NodeCoordinator::occupied` and `NodeRegistry::nodes` as
+  independent mutexes that session tasks update separately.
+- If both structures temporarily exist during refactoring, document the exact
+  synchronization rule and add tests for allocation, release, disconnect, and
+  stale-session cleanup.
+
 `Instant` is allowed only inside the process-local runtime registry. It must not
 appear in control protocol structs or JSON output because it is not
 serializable and has no meaning across processes. Control responses must expose
@@ -575,6 +715,45 @@ Status: `TODO`
 Replace the caller-facing "Doors feature placeholder" with real controlled door
 execution for authenticated callers.
 
+### Required Pre-Design And Structural Work
+
+Before implementing live door launch, inspect `serve.rs` and decide whether the
+bridge can be injected without expanding `handle_caller` directly. If not,
+extract session-flow helpers first.
+
+Required session-loop seam:
+
+- Keep transport setup and final disconnect cleanup in the caller session owner.
+- Move login/new-user flow routing behind small helper functions or a
+  `session/` module.
+- Move main-menu action dispatch behind a helper that can call a door service
+  without embedding process I/O logic in `handle_caller`.
+- Keep message flow separate from door flow.
+- Add focused tests around the extracted helpers before adding the door bridge.
+
+Required transport design task:
+
+- Document the chosen byte-bridge contract in `design/DOORS.md` or
+  `design/TELNET.md` before coding the bridge.
+- The design must explain how the normal session read loop is paused while a
+  door owns caller I/O.
+- The design must explain how raw caller bytes are forwarded without
+  line-based menu parsing.
+- The design must explain how timeout or sysop disconnect can shut down the
+  bridge from outside the caller read path.
+- Update `LoopbackTransport` and any other test doubles in the same change as
+  any `Transport` trait extension.
+
+Preferred transport shape if the existing `Transport` trait is insufficient:
+
+- Add a narrow bridge-specific split or adapter rather than broad terminal
+  semantics to every transport.
+- The adapter should provide independent read and write halves or equivalent
+  concurrency so child output can be sent while waiting for caller input.
+- The bridge must return control to the normal session loop after the child
+  exits, so the implementation must either recompose the transport or expose a
+  bridge API that borrows and restores it safely.
+
 ### Required Behavior
 
 When an authenticated caller chooses the configured door menu action:
@@ -662,7 +841,8 @@ Transport interaction rules:
 
 - The bridge should work against the existing `Transport` trait where possible.
 - If the trait lacks the methods needed for bidirectional streaming and
-  shutdown, extend the trait narrowly and update existing telnet tests.
+  shutdown, complete the required transport design task before changing code,
+  then extend the trait narrowly and update existing telnet tests.
 - The session loop must not process menu commands while the bridge owns the
   caller transport.
 - The node registry should report `in_door` while the bridge is active if
@@ -866,9 +1046,15 @@ Recommended decision:
 - It imports only into a schema-initialized, data-empty database.
 - The only pre-existing rows allowed are internal schema/config rows required
   to open the database, such as `system_config.schema_version`.
-- Add `db init --empty` before enabling import if no existing command can create
-  this target state. `db init --empty` must create the current schema without
-  seeding a sysop user, message areas, doors, sessions, or audit events.
+- At the time this plan was written, `DbCommand::Init` calls `open_database`
+  and does not seed a sysop user, message areas, doors, sessions, or audit
+  events. Phase 5 must lock that behavior with a test and may use existing
+  `db init` as the import-ready target creator if the test proves it remains
+  schema-only.
+- Add `db init --empty` before enabling import only if `db init` grows starter
+  data behavior or shares code with `setup`. `db init --empty` must create the
+  current schema without seeding a sysop user, message areas, doors, sessions,
+  or audit events.
 - A database created by the starter `setup` flow is not an import target if it
   already contains a sysop user or audit events. In that case, import must fail
   with a message that tells the sysop to create a schema-only target with
@@ -905,7 +1091,8 @@ If DecentDB does not expose compaction:
 
 Add tests for:
 
-- `db init --empty` creates an import-ready target if the command is added.
+- Existing `db init` creates a schema-only import-ready target, or
+  `db init --empty` does if that command is added.
 - Export/import round trip into an empty in-memory DB or temp DB.
 - Import accepts a schema-only target with only allowed internal rows.
 - Import rejects a starter `setup` database that already has sysop or audit
@@ -1075,6 +1262,18 @@ Required successful response shapes:
 
 When a node has an active session, `session` uses the same object shape as
 existing session JSON and `user_alias` is the resolved alias when available.
+
+If Phase 1 or Phase 2 live state is unavailable when Phase 6 is implemented,
+keep this same object shape:
+
+- Include every configured node number.
+- For a configured node with no active DB session row, use
+  `state: "available"`.
+- For a node with an active DB session row but no live runtime heartbeat, use
+  `state: "offline"` and include the session row so operators can see the
+  stale/offline evidence.
+- Set `last_heartbeat_at` and `heartbeat_age_seconds` to `null`.
+- Resolve `user_alias` from the DB when practical; otherwise keep it `null`.
 
 `messages areas list --json`:
 
@@ -1246,20 +1445,27 @@ npm run docs:build
 
 ## Recommended Immediate Next Step
 
-Start with **Phase 1 — Local Server Control Plane**.
+Start with **Phase 0.5 — Structural Extraction Gate**.
 
-This is the highest-leverage next step because the CLI already presents live
-node-control commands. Until the running server has a local control socket, those
-commands can only record intent. The control plane should be implemented before
-adding more CLI surface area so future sysop commands can use the same live
-runtime path.
+The next implementation sequence is:
+
+1. Create `crates/oxidebbs-server/src/commands/`.
+2. Move command handlers out of `sysop_cli.rs` until `sysop_cli.rs` is under
+   `1000` lines.
+3. Run `./scripts/dev-check.sh`.
+4. Then proceed to **Phase 1 — Local Server Control Plane**.
+
+This ordering matters because the CLI already presents live node-control
+commands, and Phase 1 needs to add control-socket client behavior to several of
+those handlers. Adding that logic before extraction would make the current CLI
+monolith harder to review and test.
 
 ## Implementation Notes For Coding Agents
 
 - Work one phase at a time.
 - Keep commits scoped to the phase.
 - Before editing, read the modules named in that phase.
-- Prefer adding small modules over expanding `sysop_cli.rs` further.
+- Do not expand `sysop_cli.rs` further. Complete Phase 0.5 first.
 - Do not remove compatibility aliases unless explicitly requested.
 - Do not introduce a remote admin service.
 - If a phase exposes a behavior as implemented in CLI help, it must either work
