@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   child process, forwards child stdout/stderr to the caller, enforces timeouts,
   handles sysop disconnects, cleans node runtime directories, and reports live
   nodes as `in_door` while active.
+- Added `db import --format json <path>` as a full, schema-validated restore into
+  schema-only DecentDB targets, with transactional insertion and FK-aware load
+  ordering.
+- Documented and enforced `db compact` explicit unsupported behavior in this
+  release because DecentDB exposes no safe production compaction API.
 
 ### Changed
 

@@ -398,7 +398,11 @@ oxidebbs db verify
 
 ### Notes
 
-Backup/restore should be designed around DecentDB. Do not assume SQLite or PostgreSQL tooling.
+Backup/restore should be designed around DecentDB. `db import --format json <path>`
+is the v1 restore boundary; it is safe only for schema-only targets and runs
+transactionally.
+`db compact` is explicit but unsupported in this release because DecentDB does not
+expose a production-safe compaction API.
 
 ## Log and audit commands
 
@@ -533,8 +537,6 @@ oxidebbs messages search
 oxidebbs doors add
 oxidebbs doors edit
 oxidebbs ansi convert
-oxidebbs db import
-oxidebbs db compact
 oxidebbs config set
 oxidebbs sysop
 ```

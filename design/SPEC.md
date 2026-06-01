@@ -300,14 +300,16 @@ The server exposes CLI-first local sysop command groups:
 - `doors` for configured door inspection, checks, dry-run testing, drop-file
   generation, run history, and runtime cleanup
 - `ansi` for screen listing, validation, preview, conversion, and inspection
-- `db` for DecentDB initialization, doctor/stats, backup, verify, and read-only
-  JSON export
+- `db` for DecentDB initialization, doctor/stats, backup, verify, read-only JSON
+  export, and JSON import restore
 - `logs`, `audit`, and `config` for local troubleshooting
 
 When a live control socket is unavailable, node disconnect/message/broadcast
 commands preserve the previous audit intent behavior and report that live delivery
-was not available. `db import` and `db compact` are explicit command boundaries
-but remain blocked until DecentDB restore and compaction semantics are specified.
+was not available. `db import --format json <path>` is now a full restore into a
+schema-only database with schema checks and transactional insertion.
+`db compact` is explicitly unsupported in this release because DecentDB does not
+expose a safe compaction API; the command returns a clear error.
 
 The local control socket is Unix-domain only in this phase and lives at
 `runtime/oxidebbs-control.sock`. The protocol uses one newline-delimited JSON

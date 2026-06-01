@@ -22,7 +22,7 @@ Status values:
 | Phase 2 — Live Node Heartbeats And State | COMPLETE | Make node status authoritative while the server is running. | Node registry, heartbeat timestamps, stale detection, status output. |
 | Phase 3 — Live Door Launch Integration | COMPLETE | Replace caller-facing door placeholder with controlled door execution. | Door menu launch path, run records, drop files, timeout cleanup. |
 | Phase 4 — DecentDB Schema Migrations | COMPLETE | Upgrade compatible pre-alpha databases instead of requiring recreation. | Migration runner and schema `2 -> 3` migration. |
-| Phase 5 — DecentDB Restore And Compact Semantics | TODO | Make `db import` and `db compact` real, safe commands. | Restore design, import command, compaction command or documented unsupported state. |
+| Phase 5 — DecentDB Restore And Compact Semantics | COMPLETE | Make `db import` and `db compact` real, safe commands. | Restore design, import command, compaction command or documented unsupported state. |
 | Phase 6 — Sysop CLI Hardening | TODO | Make CLI output, error behavior, and smoke coverage production-friendly. | CLI integration tests, stable JSON contracts, help ordering tests. |
 | Phase 7 — Documentation And Runbook Completion | TODO | Bring operator docs to parity with implemented runtime behavior. | Updated docs site, runbook, changelog, and design docs. |
 
@@ -144,8 +144,9 @@ The current baseline after the CLI-first sysop implementation includes:
   such as "live transport control requires a future control socket" and
   "recorded for delivery by a future live control channel"; Phase 1 replaces
   those fallback messages only when a live control socket is actually reached.
-- `db import` and `db compact` are explicit command boundaries but intentionally
-  blocked until restore and compaction semantics are specified.
+- `db import` and `db compact` are explicit command boundaries. Phase 5 defines
+  restore semantics, enables JSON import into schema-only databases, and keeps
+  compaction explicitly unsupported until DecentDB exposes a safe compaction API.
 
 Do not re-implement this phase unless a regression is found.
 
@@ -1113,7 +1114,12 @@ Update:
 
 ## Phase 5 — DecentDB Restore And Compact Semantics
 
-Status: `TODO`
+Status: `COMPLETE`
+
+Implementation completed in this phase:
+
+- `db import --format json` now performs a schema-validated, transactional full restore into a schema-only DecentDB target.
+- `db compact` returns an explicit, documented unsupported error because DecentDB exposes no safe compaction API in this release.
 
 ### Objective
 

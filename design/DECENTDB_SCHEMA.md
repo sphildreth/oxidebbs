@@ -21,6 +21,20 @@ compatible pre-alpha databases and keeps development upgrades safe:
   OxideBBS reports a clear error.
 - newer schema versions are rejected until this software understands them.
 
+## Restore and Compaction Semantics
+
+- `db import --format json <path>` is a full, whole-database restore. It expects a
+  schema `3` payload and fails fast on schema mismatch or malformed foreign-key
+  references.
+- Restore targets must be schema-only: existing rows are only allowed in
+  `system_config` for the `schema_version` marker.
+- Restore order is dependency-aware:
+  `users -> message_areas -> messages -> sessions -> doors -> door_runs -> audit_events`.
+- Restores are executed inside one DecentDB transaction; validation is complete before
+  any rows are written.
+- `db compact` is intentionally unsupported in this phase because DecentDB does not
+  expose a safe compaction API contract in this release.
+
 ## Type Rules
 
 - Entity identifiers use `UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID()`.

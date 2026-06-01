@@ -83,10 +83,23 @@ Use the DecentDB-aware sysop command boundary:
 ```bash
 oxidebbs-server db backup backups/oxidebbs.ddb
 oxidebbs-server db export --format json > backups/oxidebbs.json
+oxidebbs-server db import --format json backups/oxidebbs.json
+oxidebbs-server db compact
 ```
 
-JSON import and compaction remain disabled until restore and compaction
-semantics are specified for DecentDB.
+`db import --format json` requires a schema-initialized, schema-only target:
+
+1. Create a fresh target with `oxidebbs-server db init`. A database created by
+   `oxidebbs-server setup` is seeded with a sysop account and starter data, so it
+   is not an import target.
+2. Verify with `oxidebbs-server db stats`.
+3. Import from a full backup JSON file.
+
+`db import --format json` is implemented as a full restore (not merge), preserving
+UUIDs with full foreign-key-aware insertion order and transactionality.
+
+`db compact` is intentionally unsupported in this release because DecentDB does
+not expose a safe compaction API contract.
 
 ## Troubleshooting checklist
 

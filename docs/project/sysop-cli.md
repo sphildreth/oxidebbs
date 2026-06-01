@@ -58,9 +58,18 @@ an active door, live node status reports `in_door`; `nodes disconnect <node>`
 terminates the bridge and then disconnects the caller through normal session
 cleanup.
 
-`db export --format json` is read-only. `db import` and `db compact` are present
-as explicit command boundaries, but remain blocked until restore and compaction
-semantics are specified for DecentDB.
+`db export --format json` is read-only. `db import --format json <path>` is now
+implemented as a full restore into a schema-initialized, data-empty database:
+
+- it validates schema compatibility and export reference integrity before writing;
+- it preserves UUIDs and import ordering for message/user/door relationships;
+- it runs as one transaction and rejects partially-written restores; and
+- it returns an explicit failure if the target database has data outside schema
+  metadata.
+
+`db compact` is explicitly unsupported in this release because DecentDB does not
+expose a production-safe compaction API. The command returns a clear error
+rather than faking compaction.
 
 ## Schema Compatibility
 
