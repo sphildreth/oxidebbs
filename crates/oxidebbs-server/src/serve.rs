@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 use std::fmt::Write as FmtWrite;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use argon2::password_hash::{PasswordHash, PasswordHasher, SaltString};
@@ -8,7 +8,6 @@ use argon2::{Argon2, PasswordVerifier as Argon2PasswordVerifier};
 use rand_core::OsRng;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time::timeout;
 use tracing::{error, info, warn};
 
@@ -34,7 +33,9 @@ use oxidebbs_term::{
 };
 
 use crate::config::OxideConfig;
-use crate::control::{ControlError, RuntimeNodeCommands, ServerRuntime, start_control_listener};
+use crate::control::{
+    ControlError, NodeAllocation, RuntimeNodeCommands, ServerRuntime, start_control_listener,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ServeError {
@@ -72,6 +73,8 @@ pub async fn run(config: &OxideConfig) -> ServeResult<()> {
     let runtime = Arc::new(ServerRuntime::new(
         config.board.name.clone(),
         config.nodes.count,
+        config.telnet.max_connections,
+        config.telnet.idle_timeout_seconds.saturating_add(30),
     ));
 
     let login_menu = Arc::new(
@@ -86,10 +89,6 @@ pub async fn run(config: &OxideConfig) -> ServeResult<()> {
             .map_err(|error| ServeError::Config(error.to_string()))?,
     );
 
-    let node_slots = Arc::new(NodeCoordinator::new(
-        config.nodes.count,
-        config.telnet.max_connections,
-    ));
     let _control_listener =
         match start_control_listener(&config.paths.runtime, Arc::clone(&runtime)).await {
             Ok(handle) => Some(handle),
@@ -116,7 +115,7 @@ pub async fn run(config: &OxideConfig) -> ServeResult<()> {
             port: i64::from(peer_addr.port()),
         };
 
-        if let Some(allocation) = node_slots.try_allocate() {
+        if let Some(allocation) = runtime.try_allocate_node() {
             let resources = CallerResources {
                 db: Arc::clone(&db),
                 config: Arc::new(config.clone()),
@@ -225,6 +224,7 @@ async fn handle_caller(
             .map_err(ServeError::Transport)?;
     }
 
+    runtime.mark_node_login(node_number_u16);
     send_login_flow(&mut transport, &config, &login_menu, &mut capabilities).await?;
 
     let mut in_main_menu = false;
@@ -324,6 +324,7 @@ async fn handle_caller(
                                         &mut capabilities,
                                     )
                                     .await?;
+                                    runtime.mark_node_main_menu(node_number_u16);
                                     in_main_menu = true;
                                 }
                                 AuthFlowResult::Retry => {
@@ -365,6 +366,7 @@ async fn handle_caller(
                                         &mut capabilities,
                                     )
                                     .await?;
+                                    runtime.mark_node_main_menu(node_number_u16);
                                     in_main_menu = true;
                                 }
                                 AuthFlowResult::Retry => {
@@ -391,17 +393,24 @@ async fn handle_caller(
                             send_menu_prompt(&mut transport, &main_menu).await?;
                         }
                         Some(MenuAction::Messages) => {
+                            runtime.mark_node_reading_messages(node_number_u16);
+                            let mut message_state = MessageFlowState {
+                                db: db.as_ref(),
+                                idle_timeout,
+                                disconnect_reason: &mut disconnect_reason,
+                                runtime: runtime.as_ref(),
+                                node_number: node_number_u16,
+                            };
                             match run_messages_flow(
                                 authenticated_user.as_ref(),
                                 &mut transport,
                                 &mut input,
-                                &db,
-                                idle_timeout,
-                                &mut disconnect_reason,
+                                &mut message_state,
                             )
                             .await?
                             {
                                 MenuFlowResult::Continue => {
+                                    runtime.mark_node_main_menu(node_number_u16);
                                     send_menu_prompt(&mut transport, &main_menu).await?;
                                 }
                                 MenuFlowResult::Exit => {
@@ -454,6 +463,7 @@ async fn handle_caller(
         }
     }
 
+    runtime.mark_node_disconnecting(node_number_u16);
     if let Err(error) = transport.hangup().await {
         warn!("failed to hang up telnet transport: {error}");
     }
@@ -485,7 +495,6 @@ async fn handle_caller(
         "session ended"
     );
 
-    drop(allocation);
     Ok(())
 }
 
@@ -523,6 +532,14 @@ struct AuthFlowState<'a> {
     authenticated_user: &'a mut Option<User>,
     idle_timeout: Duration,
     disconnect_reason: &'a mut String,
+}
+
+struct MessageFlowState<'a> {
+    db: &'a OxideDb,
+    idle_timeout: Duration,
+    disconnect_reason: &'a mut String,
+    runtime: &'a ServerRuntime,
+    node_number: u16,
 }
 
 async fn run_login_flow(
@@ -882,10 +899,14 @@ async fn run_messages_flow(
     authenticated_user: Option<&User>,
     transport: &mut TcpTransport,
     input: &mut InputSession,
-    db: &OxideDb,
-    idle_timeout: Duration,
-    disconnect_reason: &mut String,
+    state: &mut MessageFlowState<'_>,
 ) -> ServeResult<MenuFlowResult> {
+    let db = state.db;
+    let idle_timeout = state.idle_timeout;
+    let runtime = state.runtime;
+    let node_number = state.node_number;
+    let disconnect_reason = &mut *state.disconnect_reason;
+
     let Some(user) = authenticated_user else {
         send_text(transport, "You must be signed in to use messages.\r\n").await?;
         return Ok(MenuFlowResult::Continue);
@@ -945,6 +966,7 @@ async fn run_messages_flow(
         let area = message_area_from_record(&area_record)?;
 
         loop {
+            runtime.mark_node_reading_messages(node_number);
             let visible =
                 visible_messages_for_user(db, &area, user.security_level, transport).await?;
             display_message_list(transport, db, &area, &visible).await?;
@@ -996,6 +1018,7 @@ async fn run_messages_flow(
                     display_message(transport, db, &visible[index]).await?;
                 }
                 Some('P') => {
+                    runtime.mark_node_posting_message(node_number);
                     let subject = match prompt_for_line(
                         transport,
                         input,
@@ -1051,6 +1074,7 @@ async fn run_messages_flow(
                     };
                     insert_message(db.db(), &message_record_from_message(&message))?;
                     send_text(transport, "Message posted.\r\n").await?;
+                    runtime.mark_node_reading_messages(node_number);
                 }
                 Some('Y') => {
                     if visible.is_empty() {
@@ -1058,6 +1082,7 @@ async fn run_messages_flow(
                         continue;
                     }
 
+                    runtime.mark_node_posting_message(node_number);
                     let index = match prompt_for_message_index(
                         transport,
                         input,
@@ -1103,6 +1128,7 @@ async fn run_messages_flow(
                     };
                     insert_message(db.db(), &message_record_from_message(&message))?;
                     send_text(transport, "Reply posted.\r\n").await?;
+                    runtime.mark_node_reading_messages(node_number);
                 }
                 Some(_) => {
                     send_text(transport, "Unknown command.\r\n").await?;
@@ -1705,61 +1731,6 @@ fn db_scalar_text(db: &OxideDb, sql: &str) -> ServeResult<String> {
     }
 }
 
-struct NodeCoordinator {
-    occupied: Mutex<Vec<bool>>,
-    limit: Arc<Semaphore>,
-}
-
-impl NodeCoordinator {
-    fn new(node_count: u16, max_connections: u32) -> Self {
-        let node_count = usize::from(node_count);
-        let max_connections = usize::try_from(max_connections).unwrap_or(usize::MAX);
-        let max_slots = node_count.min(max_connections);
-
-        Self {
-            occupied: Mutex::new(vec![false; node_count]),
-            limit: Arc::new(Semaphore::new(max_slots)),
-        }
-    }
-
-    fn try_allocate(self: &Arc<Self>) -> Option<NodeAllocation> {
-        let permit = self.limit.clone().try_acquire_owned().ok()?;
-
-        let mut occupied = self.occupied.lock().ok()?;
-        let Some(index) = occupied.iter().position(|used| !*used) else {
-            drop(permit);
-            return None;
-        };
-
-        occupied[index] = true;
-
-        Some(NodeAllocation {
-            node_number: (index + 1) as u16,
-            coordinator: Arc::clone(self),
-            _permit: permit,
-        })
-    }
-}
-
-struct NodeAllocation {
-    node_number: u16,
-    coordinator: Arc<NodeCoordinator>,
-    _permit: OwnedSemaphorePermit,
-}
-
-impl Drop for NodeAllocation {
-    fn drop(&mut self) {
-        if let Ok(mut occupied) = self.coordinator.occupied.lock()
-            && self.node_number > 0
-        {
-            let index = usize::from(self.node_number - 1);
-            if let Some(slot) = occupied.get_mut(index) {
-                *slot = false;
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1792,14 +1763,16 @@ mod tests {
 
     #[test]
     fn node_slots_are_reused_after_drop() {
-        let coordinator = Arc::new(NodeCoordinator::new(2, 4));
-        let first = coordinator.try_allocate().expect("first slot");
-        let second = coordinator.try_allocate().expect("second slot");
+        let runtime = Arc::new(ServerRuntime::new("test".to_string(), 2, 4, 30));
+        let first = runtime.try_allocate_node().expect("first slot");
+        let second = runtime.try_allocate_node().expect("second slot");
 
-        assert!(coordinator.try_allocate().is_none());
+        assert!(runtime.try_allocate_node().is_none());
 
         drop(first);
-        let third = coordinator.try_allocate().expect("slot should be released");
+        let third = runtime
+            .try_allocate_node()
+            .expect("slot should be released");
 
         assert!(third.node_number > 0);
         drop(second);

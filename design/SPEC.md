@@ -309,6 +309,14 @@ disconnect, message, and broadcast requests enqueue runtime commands consumed by
 active caller tasks; disconnects use normal session cleanup, and messages are
 rendered through the caller telnet transport.
 
+While the server is running, node state is process-local and authoritative from
+the runtime registry. Live node responses use stable snake_case states:
+`available`, `connecting`, `login`, `main_menu`, `reading_messages`,
+`posting_message`, `in_door`, `disconnecting`, `offline`, and `stale`. Stale
+detection is based on heartbeat age with a threshold of telnet idle timeout plus
+30 seconds. `nodes reset-stale` requests live disconnects for stale nodes when
+the control socket is reachable.
+
 Remote callers must never see Ratatui output; Ratatui remains local sysop/admin
 UI only.
 

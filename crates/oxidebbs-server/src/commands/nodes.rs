@@ -9,7 +9,7 @@ use serde_json::json;
 use crate::{
     control::{
         ControlNodeStatus, ControlResponse, request_nodes, request_nodes_broadcast,
-        request_nodes_disconnect, request_nodes_message,
+        request_nodes_disconnect, request_nodes_message, request_nodes_reset_stale,
     },
     sysop_cli::{
         AppContext, CliError, CliResult, audit, current_timestamp, emit_ok, open_database,
@@ -114,6 +114,7 @@ fn control_nodes_to_json(nodes: &[ControlNodeStatus]) -> JsonValue {
                     "remote_address": node.remote_address,
                     "connected_at": node.connected_at,
                     "last_heartbeat_at": node.last_heartbeat_at,
+                    "heartbeat_age_seconds": node.heartbeat_age_seconds,
                 })
             })
             .collect(),
@@ -127,7 +128,7 @@ fn print_nodes_from_control(nodes: &[ControlNodeStatus], json_output: bool) -> C
     }
 
     for node in nodes {
-        if node.state == "active" {
+        if node.user_alias.is_some() || node.remote_address.is_some() {
             println!(
                 "node {}\t{}\t{}\t{}",
                 node.node_number,
@@ -174,6 +175,7 @@ fn show_node_live(
             "remote_address": node.remote_address,
             "connected_at": node.connected_at,
             "last_heartbeat_at": node.last_heartbeat_at,
+            "heartbeat_age_seconds": node.heartbeat_age_seconds,
         }))?;
         return Ok(());
     }
@@ -190,6 +192,9 @@ fn show_node_live(
     }
     if let Some(last_heartbeat) = node.last_heartbeat_at.as_deref() {
         println!("last_heartbeat_at: {last_heartbeat}");
+    }
+    if let Some(age) = node.heartbeat_age_seconds {
+        println!("heartbeat_age_seconds: {age}");
     }
     Ok(())
 }
@@ -371,12 +376,40 @@ pub fn run_nodes(command: NodesCommand, ctx: &AppContext) -> CliResult<()> {
             Ok(())
         }
         NodesCommand::ResetStale => {
-            audit(&db, "node_reset_stale_requested", None, None, "")?;
-            emit_ok(
-                ctx.json,
-                "stale-node reset recorded; stale detection requires runtime heartbeats",
-                json!({}),
-            )
+            match request_nodes_reset_stale(&ctx.config.paths.runtime) {
+                Ok(ControlResponse::Ok { .. }) => {
+                    emit_ok(
+                        ctx.json,
+                        "stale-node reset sent through live control socket",
+                        json!({}),
+                    )?;
+                }
+                Ok(ControlResponse::Error { error, .. }) => {
+                    return Err(CliError::Message(format!(
+                        "stale-node reset failed: {error}"
+                    )));
+                }
+                Ok(ControlResponse::Status { .. }) | Ok(ControlResponse::Nodes { .. }) => {
+                    return Err(CliError::Message(
+                        "control socket returned unexpected response for stale-node reset"
+                            .to_string(),
+                    ));
+                }
+                Err(error) if error.is_unreachable() => {
+                    audit(&db, "node_reset_stale_requested", None, None, "")?;
+                    emit_ok(
+                        ctx.json,
+                        "stale-node reset recorded; live server not reachable",
+                        json!({}),
+                    )?;
+                }
+                Err(error) => {
+                    return Err(CliError::Message(format!(
+                        "stale-node reset failed: {error}"
+                    )));
+                }
+            }
+            Ok(())
         }
     }
 }

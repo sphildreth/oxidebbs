@@ -19,7 +19,7 @@ Status values:
 | Phase 0 — Current Baseline | COMPLETE | CLI-first sysop interface, schema v3, docs, and release metadata are present. | `oxidebbs-server` exposes top-level sysop command groups. |
 | Phase 0.5 — Structural Extraction Gate | COMPLETE | Reduce server monolith risk before adding live control behavior. | Command handler modules, `sysop_cli.rs` under 1000 lines, validated no-behavior-change refactor. |
 | Phase 1 — Local Server Control Plane | COMPLETE | Let sysop CLI commands control a running local server process. | Local control socket, command protocol, node command integration. |
-| Phase 2 — Live Node Heartbeats And State | TODO | Make node status authoritative while the server is running. | Node registry, heartbeat timestamps, stale detection, status output. |
+| Phase 2 — Live Node Heartbeats And State | COMPLETE | Make node status authoritative while the server is running. | Node registry, heartbeat timestamps, stale detection, status output. |
 | Phase 3 — Live Door Launch Integration | TODO | Replace caller-facing door placeholder with controlled door execution. | Door menu launch path, run records, drop files, timeout cleanup. |
 | Phase 4 — DecentDB Schema Migrations | TODO | Upgrade compatible pre-alpha databases instead of requiring recreation. | Migration runner and schema `2 -> 3` migration. |
 | Phase 5 — DecentDB Restore And Compact Semantics | TODO | Make `db import` and `db compact` real, safe commands. | Restore design, import command, compaction command or documented unsupported state. |
@@ -529,7 +529,7 @@ Document that the socket is local-only and located under `runtime/`.
 
 ## Phase 2 — Live Node Heartbeats And State
 
-Status: `TODO`
+Status: `COMPLETE`
 
 ### Objective
 
@@ -736,6 +736,24 @@ Update:
 - Stale state is detectable and visible.
 - No lock is held across `.await`.
 - `./scripts/dev-check.sh` passes.
+
+### Completion Notes
+
+- Replaced the previous `serve.rs` `NodeCoordinator` with `ServerRuntime` as the
+  single owner of node allocation, occupancy, runtime state, heartbeat data, and
+  the connection semaphore.
+- Added server-only `RuntimeNodeState` values for `available`, `connecting`,
+  `login`, `main_menu`, `reading_messages`, `posting_message`, `in_door`,
+  `disconnecting`, `offline`, and `stale`, with tests covering the explicit
+  mapping to `oxidebbs_core::node::NodeStatus`.
+- Control node responses now include stable snake_case state strings plus
+  `last_heartbeat_at` and `heartbeat_age_seconds`.
+- The stale threshold is `telnet.idle_timeout_seconds + 30`. Stale nodes remain
+  visible and are not killed automatically.
+- `nodes reset-stale` now uses the control socket when available, marks stale
+  nodes as `disconnecting`, and asks their caller tasks to terminate through the
+  runtime command channel. When the live server is unreachable, it records
+  audited intent instead of claiming live reset.
 
 ## Phase 3 — Live Door Launch Integration
 

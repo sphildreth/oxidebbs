@@ -40,8 +40,15 @@ runners are not installed.
 local server control socket at `runtime/oxidebbs-control.sock`. `nodes
 disconnect`, `nodes message`, and `nodes broadcast` use the same socket to queue
 commands for active caller sessions; when the socket is unreachable they still
-record explicit sysop intent in audit rows. `nodes enable` and `nodes disable`
-remain audited command boundaries until persistent node state is modeled.
+record explicit sysop intent in audit rows.
+
+Live node output reports runtime states such as `connecting`, `login`,
+`main_menu`, `reading_messages`, `posting_message`, `disconnecting`, and
+`stale`, along with heartbeat age when available. `nodes reset-stale` asks the
+running server to disconnect stale sessions through the live control channel;
+when the socket is unreachable it records audited intent instead. `nodes enable`
+and `nodes disable` remain audited command boundaries until persistent node
+state is modeled.
 
 `doors test --dry-run` creates drop files without launching DOSBox. Without
 `--dry-run`, the configured runner is invoked locally.

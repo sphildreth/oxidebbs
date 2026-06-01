@@ -260,7 +260,12 @@ stale
 
 ### Notes
 
-`nodes watch` can be simple in v1: refresh every few seconds and print a table. The Ratatui console can replace this later with a real live dashboard.
+`nodes watch` can be simple in v1: refresh every few seconds and print a table.
+The Ratatui console can replace this later with a real live dashboard. When the
+server is running, these states come from the local runtime registry and include
+heartbeat age for stale-session diagnosis. `nodes reset-stale` should use the
+live control channel when available and fall back to audited intent when the
+server is unreachable.
 
 ## Message commands
 

@@ -113,6 +113,8 @@ This is intended for a local coding agent to work from.
 - [x] Extract sysop CLI command handlers into `oxidebbs-server::commands`
   modules before adding live server control behavior.
 - [x] Add live server control socket for node disconnect/message/broadcast delivery.
+- [x] Add authoritative live node states, heartbeat ages, stale detection, and
+  live stale-node reset.
 - [ ] Specify DecentDB restore and compaction semantics before enabling `db import` and `db compact`.
 
 ## Phase 10 — FTN/OxideNet design

@@ -4,13 +4,14 @@ use std::io::{BufRead, BufReader, Write as IoWrite};
 use std::io::{Error as IoError, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-#[cfg(unix)]
+#[cfg(any(unix, test))]
 use std::time::Duration;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+use oxidebbs_core::node::NodeStatus;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::sync::Notify;
+use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
 
 pub const CONTROL_SOCKET_NAME: &str = "oxidebbs-control.sock";
 pub const MAX_CONTROL_REQUEST_BYTES: usize = 64 * 1024;
@@ -74,6 +75,9 @@ pub enum ControlRequest {
 
     #[serde(rename = "nodes.broadcast")]
     NodeBroadcast { text: String },
+
+    #[serde(rename = "nodes.reset_stale")]
+    NodesResetStale,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -111,6 +115,7 @@ pub struct ControlNodeStatus {
     pub remote_address: Option<String>,
     pub connected_at: Option<String>,
     pub last_heartbeat_at: Option<String>,
+    pub heartbeat_age_seconds: Option<u64>,
 }
 
 #[derive(Debug, Default)]
@@ -125,37 +130,131 @@ impl RuntimeNodeCommands {
     }
 }
 
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeNodeState {
+    Available,
+    Connecting,
+    Login,
+    MainMenu,
+    ReadingMessages,
+    PostingMessage,
+    InDoor,
+    Disconnecting,
+    Offline,
+    Stale,
+}
+
+impl RuntimeNodeState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Available => "available",
+            Self::Connecting => "connecting",
+            Self::Login => "login",
+            Self::MainMenu => "main_menu",
+            Self::ReadingMessages => "reading_messages",
+            Self::PostingMessage => "posting_message",
+            Self::InDoor => "in_door",
+            Self::Disconnecting => "disconnecting",
+            Self::Offline => "offline",
+            Self::Stale => "stale",
+        }
+    }
+
+    #[allow(dead_code)]
+    pub const fn to_core_status(self) -> NodeStatus {
+        match self {
+            Self::Available => NodeStatus::Idle,
+            Self::Connecting => NodeStatus::Connected,
+            Self::Login => NodeStatus::LoggingIn,
+            Self::MainMenu | Self::ReadingMessages | Self::PostingMessage => NodeStatus::InMenu,
+            Self::InDoor => NodeStatus::InDoor,
+            Self::Disconnecting | Self::Offline | Self::Stale => NodeStatus::Disconnected,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct RuntimeNode {
-    session_id: String,
+    session_id: Option<String>,
     user_id: Option<String>,
     user_alias: Option<String>,
-    remote_address: String,
-    connected_at: String,
-    last_heartbeat_at: String,
+    state: RuntimeNodeState,
+    remote_address: Option<String>,
+    connected_at: Option<String>,
+    last_heartbeat_at: Instant,
+    last_heartbeat_text: String,
 }
 
 #[derive(Debug)]
 pub struct ServerRuntime {
     board_name: String,
     node_count: u16,
+    stale_after_seconds: u64,
     started_at: SystemTime,
     nodes: Mutex<BTreeMap<u16, RuntimeNode>>,
+    allocation: Arc<Semaphore>,
     disconnect_requests: Mutex<BTreeMap<u16, String>>,
     node_messages: Mutex<BTreeMap<u16, Vec<String>>>,
     command_notify: Notify,
 }
 
 impl ServerRuntime {
-    pub fn new(board_name: String, node_count: u16) -> Self {
+    pub fn new(
+        board_name: String,
+        node_count: u16,
+        max_connections: u32,
+        stale_after_seconds: u64,
+    ) -> Self {
+        let max_connections = usize::try_from(max_connections).unwrap_or(usize::MAX);
+        let max_slots = usize::from(node_count).min(max_connections);
         Self {
             board_name,
             node_count,
+            stale_after_seconds,
             started_at: SystemTime::now(),
             nodes: Mutex::new(BTreeMap::new()),
+            allocation: Arc::new(Semaphore::new(max_slots)),
             disconnect_requests: Mutex::new(BTreeMap::new()),
             node_messages: Mutex::new(BTreeMap::new()),
             command_notify: Notify::new(),
+        }
+    }
+
+    pub fn try_allocate_node(self: &Arc<Self>) -> Option<NodeAllocation> {
+        let permit = self.allocation.clone().try_acquire_owned().ok()?;
+        let now = timestamp_string();
+        let now_instant = Instant::now();
+        let node_number = {
+            let mut nodes = self.nodes.lock().ok()?;
+            let node_number =
+                (1..=self.node_count).find(|node_number| !nodes.contains_key(node_number));
+            if let Some(node_number) = node_number {
+                nodes.insert(
+                    node_number,
+                    RuntimeNode {
+                        session_id: None,
+                        user_id: None,
+                        user_alias: None,
+                        state: RuntimeNodeState::Connecting,
+                        remote_address: None,
+                        connected_at: Some(now.clone()),
+                        last_heartbeat_at: now_instant,
+                        last_heartbeat_text: now.clone(),
+                    },
+                );
+            }
+            node_number
+        };
+        if let Some(node_number) = node_number {
+            Some(NodeAllocation {
+                runtime: Arc::clone(self),
+                node_number,
+                _permit: permit,
+            })
+        } else {
+            drop(permit);
+            None
         }
     }
 
@@ -166,19 +265,34 @@ impl ServerRuntime {
         remote_address: String,
         connected_at: String,
     ) {
-        let now = timestamp_string();
         if let Ok(mut nodes) = self.nodes.lock() {
-            nodes.insert(
-                node_number,
-                RuntimeNode {
-                    session_id,
-                    user_id: None,
-                    user_alias: None,
-                    remote_address,
-                    connected_at,
-                    last_heartbeat_at: now,
-                },
-            );
+            match nodes.get_mut(&node_number) {
+                Some(node) => {
+                    node.session_id = Some(session_id);
+                    node.user_id = None;
+                    node.user_alias = None;
+                    node.state = RuntimeNodeState::Connecting;
+                    node.remote_address = Some(remote_address);
+                    node.connected_at = Some(connected_at);
+                    node.last_heartbeat_at = Instant::now();
+                    node.last_heartbeat_text = timestamp_string();
+                }
+                None => {
+                    nodes.insert(
+                        node_number,
+                        RuntimeNode {
+                            session_id: Some(session_id),
+                            user_id: None,
+                            user_alias: None,
+                            state: RuntimeNodeState::Connecting,
+                            remote_address: Some(remote_address),
+                            connected_at: Some(connected_at),
+                            last_heartbeat_at: Instant::now(),
+                            last_heartbeat_text: timestamp_string(),
+                        },
+                    );
+                }
+            }
         }
         if let Ok(mut disconnects) = self.disconnect_requests.lock() {
             disconnects.remove(&node_number);
@@ -189,42 +303,38 @@ impl ServerRuntime {
     }
 
     pub fn mark_node_disconnected(&self, node_number: u16) -> Option<String> {
-        let session_id = self
-            .nodes
-            .lock()
-            .ok()
-            .and_then(|mut nodes| nodes.remove(&node_number))
-            .map(|node| node.session_id);
-        if let Ok(mut disconnects) = self.disconnect_requests.lock() {
-            disconnects.remove(&node_number);
-        }
-        if let Ok(mut messages) = self.node_messages.lock() {
-            messages.remove(&node_number);
-        }
-        session_id
+        self.nodes.lock().ok().and_then(|mut nodes| {
+            let session_id = nodes.remove(&node_number).and_then(|node| node.session_id);
+            if session_id.is_some() {
+                if let Ok(mut disconnects) = self.disconnect_requests.lock() {
+                    disconnects.remove(&node_number);
+                }
+                if let Ok(mut messages) = self.node_messages.lock() {
+                    messages.remove(&node_number);
+                }
+            }
+            session_id
+        })
     }
 
-    pub fn set_node_user(
-        &self,
-        node_number: u16,
-        user_id: Option<String>,
-        user_alias: Option<String>,
-    ) {
-        if let Ok(mut nodes) = self.nodes.lock()
-            && let Some(node) = nodes.get_mut(&node_number)
-        {
-            node.user_id = user_id;
-            node.user_alias = user_alias;
-            node.last_heartbeat_at = timestamp_string();
-        }
+    pub fn mark_node_login(&self, node_number: u16) {
+        self.set_node_state(node_number, RuntimeNodeState::Login);
     }
 
-    pub fn heartbeat_node(&self, node_number: u16) {
-        if let Ok(mut nodes) = self.nodes.lock()
-            && let Some(node) = nodes.get_mut(&node_number)
-        {
-            node.last_heartbeat_at = timestamp_string();
-        }
+    pub fn mark_node_main_menu(&self, node_number: u16) {
+        self.set_node_state(node_number, RuntimeNodeState::MainMenu);
+    }
+
+    pub fn mark_node_reading_messages(&self, node_number: u16) {
+        self.set_node_state(node_number, RuntimeNodeState::ReadingMessages);
+    }
+
+    pub fn mark_node_posting_message(&self, node_number: u16) {
+        self.set_node_state(node_number, RuntimeNodeState::PostingMessage);
+    }
+
+    pub fn mark_node_disconnecting(&self, node_number: u16) {
+        self.set_node_state(node_number, RuntimeNodeState::Disconnecting);
     }
 
     pub fn status(&self) -> ControlStatus {
@@ -248,41 +358,47 @@ impl ServerRuntime {
     }
 
     pub fn nodes_snapshot(&self) -> Vec<ControlNodeStatus> {
+        let now = Instant::now();
+        let stale_after_seconds = self.stale_after_seconds;
         let nodes = self
             .nodes
             .lock()
             .map(|nodes| nodes.clone())
             .unwrap_or_default();
+
         (1..=self.node_count)
             .map(|node_number| {
                 if let Some(node) = nodes.get(&node_number) {
-                    node_status(node_number, Some(node))
+                    node_status(node_number, node, now, stale_after_seconds)
                 } else {
-                    ControlNodeStatus {
-                        node_number,
-                        state: "available".to_string(),
-                        user_alias: None,
-                        remote_address: None,
-                        connected_at: None,
-                        last_heartbeat_at: None,
-                    }
+                    available_node_status(node_number)
                 }
             })
             .collect()
     }
 
+    #[cfg(test)]
     pub fn node_status(&self, node_number: u16) -> Option<ControlNodeStatus> {
-        self.nodes.lock().ok().and_then(|nodes| {
-            nodes
-                .get(&node_number)
-                .map(|node| node_status(node_number, Some(node)))
-        })
+        if node_number == 0 || node_number > self.node_count {
+            return None;
+        }
+
+        let now = Instant::now();
+        let stale_after_seconds = self.stale_after_seconds;
+        match self.nodes.lock() {
+            Ok(nodes) => Some(match nodes.get(&node_number) {
+                Some(node) => node_status(node_number, node, now, stale_after_seconds),
+                None => available_node_status(node_number),
+            }),
+            Err(_) => None,
+        }
     }
 
     pub fn request_node_disconnect(&self, node_number: u16, reason: String) -> bool {
-        if self.node_status(node_number).is_none() {
+        if !self.has_runtime_node(node_number) {
             return false;
         }
+        self.mark_node_disconnecting(node_number);
         if let Ok(mut disconnects) = self.disconnect_requests.lock() {
             disconnects.insert(node_number, reason);
             self.command_notify.notify_waiters();
@@ -292,7 +408,7 @@ impl ServerRuntime {
     }
 
     pub fn queue_node_message(&self, node_number: u16, text: String) -> bool {
-        if self.node_status(node_number).is_none() {
+        if !self.has_runtime_node(node_number) {
             return false;
         }
         if let Ok(mut messages) = self.node_messages.lock() {
@@ -321,6 +437,39 @@ impl ServerRuntime {
             return active_nodes.len();
         }
         0
+    }
+
+    pub fn request_stale_disconnects(&self, reason: &str) -> Vec<u16> {
+        let now = Instant::now();
+        let stale_after_seconds = self.stale_after_seconds;
+        let stale_nodes = self
+            .nodes
+            .lock()
+            .map(|mut nodes| {
+                nodes
+                    .iter_mut()
+                    .filter_map(|(node_number, node)| {
+                        if node_state_is_stale(node, now, stale_after_seconds) {
+                            node.state = RuntimeNodeState::Disconnecting;
+                            Some(*node_number)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        if !stale_nodes.is_empty() {
+            if let Ok(mut disconnects) = self.disconnect_requests.lock() {
+                for node_number in &stale_nodes {
+                    disconnects.insert(*node_number, reason.to_string());
+                }
+            }
+            self.command_notify.notify_waiters();
+        }
+
+        stale_nodes
     }
 
     pub fn take_node_commands(&self, node_number: u16) -> RuntimeNodeCommands {
@@ -352,28 +501,128 @@ impl ServerRuntime {
             notified.await;
         }
     }
-}
 
-fn node_status(node_number: u16, node: Option<&RuntimeNode>) -> ControlNodeStatus {
-    if let Some(node) = node {
-        ControlNodeStatus {
-            node_number,
-            state: "active".to_string(),
-            user_alias: node.user_alias.clone(),
-            remote_address: Some(node.remote_address.clone()),
-            connected_at: Some(node.connected_at.clone()),
-            last_heartbeat_at: Some(node.last_heartbeat_at.clone()),
-        }
-    } else {
-        ControlNodeStatus {
-            node_number,
-            state: "available".to_string(),
-            user_alias: None,
-            remote_address: None,
-            connected_at: None,
-            last_heartbeat_at: None,
+    pub fn set_node_user(
+        &self,
+        node_number: u16,
+        user_id: Option<String>,
+        user_alias: Option<String>,
+    ) {
+        if let Ok(mut nodes) = self.nodes.lock()
+            && let Some(node) = nodes.get_mut(&node_number)
+        {
+            node.user_id = user_id;
+            node.user_alias = user_alias;
+            node.last_heartbeat_at = Instant::now();
+            node.last_heartbeat_text = timestamp_string();
         }
     }
+
+    pub fn heartbeat_node(&self, node_number: u16) {
+        if let Ok(mut nodes) = self.nodes.lock()
+            && let Some(node) = nodes.get_mut(&node_number)
+        {
+            node.last_heartbeat_at = Instant::now();
+            node.last_heartbeat_text = timestamp_string();
+        }
+    }
+
+    fn set_node_state(&self, node_number: u16, state: RuntimeNodeState) {
+        if let Ok(mut nodes) = self.nodes.lock()
+            && let Some(node) = nodes.get_mut(&node_number)
+        {
+            node.state = state;
+            node.last_heartbeat_at = Instant::now();
+            node.last_heartbeat_text = timestamp_string();
+        }
+    }
+
+    fn has_runtime_node(&self, node_number: u16) -> bool {
+        self.nodes
+            .lock()
+            .map(|nodes| nodes.contains_key(&node_number))
+            .unwrap_or(false)
+    }
+
+    #[cfg(test)]
+    fn force_node_heartbeat_age(&self, node_number: u16, age: Duration) {
+        if let Ok(mut nodes) = self.nodes.lock()
+            && let Some(node) = nodes.get_mut(&node_number)
+        {
+            node.last_heartbeat_at = Instant::now() - age;
+            node.last_heartbeat_text = format!("forced-{}s-ago", age.as_secs());
+        }
+    }
+
+    fn release_node(&self, node_number: u16) {
+        if let Ok(mut nodes) = self.nodes.lock() {
+            nodes.remove(&node_number);
+        }
+        if let Ok(mut disconnects) = self.disconnect_requests.lock() {
+            disconnects.remove(&node_number);
+        }
+        if let Ok(mut messages) = self.node_messages.lock() {
+            messages.remove(&node_number);
+        }
+    }
+}
+
+pub struct NodeAllocation {
+    pub node_number: u16,
+    runtime: Arc<ServerRuntime>,
+    _permit: OwnedSemaphorePermit,
+}
+
+impl Drop for NodeAllocation {
+    fn drop(&mut self) {
+        self.runtime.release_node(self.node_number);
+    }
+}
+
+fn node_status(
+    node_number: u16,
+    node: &RuntimeNode,
+    now: Instant,
+    stale_after_seconds: u64,
+) -> ControlNodeStatus {
+    let heartbeat_age_seconds = now.duration_since(node.last_heartbeat_at).as_secs();
+    let state = if node_state_is_stale(node, now, stale_after_seconds) {
+        RuntimeNodeState::Stale
+    } else {
+        node.state
+    };
+
+    ControlNodeStatus {
+        node_number,
+        state: state.as_str().to_string(),
+        user_alias: node.user_alias.clone(),
+        remote_address: node.remote_address.clone(),
+        connected_at: node.connected_at.clone(),
+        last_heartbeat_at: Some(node.last_heartbeat_text.clone()),
+        heartbeat_age_seconds: Some(heartbeat_age_seconds),
+    }
+}
+
+fn available_node_status(node_number: u16) -> ControlNodeStatus {
+    ControlNodeStatus {
+        node_number,
+        state: RuntimeNodeState::Available.as_str().to_string(),
+        user_alias: None,
+        remote_address: None,
+        connected_at: None,
+        last_heartbeat_at: None,
+        heartbeat_age_seconds: None,
+    }
+}
+
+fn node_state_is_stale(node: &RuntimeNode, now: Instant, stale_after_seconds: u64) -> bool {
+    if matches!(
+        node.state,
+        RuntimeNodeState::Disconnecting | RuntimeNodeState::Offline
+    ) {
+        return false;
+    }
+    now.duration_since(node.last_heartbeat_at).as_secs() > stale_after_seconds
 }
 
 pub fn control_socket_path(runtime_dir: &Path) -> PathBuf {
@@ -445,6 +694,10 @@ pub fn request_nodes_disconnect(
             reason: normalize_control_text(&reason),
         },
     )
+}
+
+pub fn request_nodes_reset_stale(runtime_dir: &Path) -> Result<ControlResponse, ControlError> {
+    send_control_request(runtime_dir, &ControlRequest::NodesResetStale)
 }
 
 #[cfg(unix)]
@@ -699,6 +952,14 @@ fn handle_control_request(request: ControlRequest, runtime: Arc<ServerRuntime>) 
             );
             ControlResponse::Ok { ok: true }
         }
+        ControlRequest::NodesResetStale => {
+            let nodes = runtime.request_stale_disconnects("stale_node_reset");
+            tracing::info!(
+                stale_nodes = nodes.len(),
+                "stale node reset requested through control socket"
+            );
+            ControlResponse::Ok { ok: true }
+        }
     }
 }
 
@@ -773,6 +1034,7 @@ mod tests {
                 remote_address: Some("127.0.0.1:10".to_string()),
                 connected_at: Some("now".to_string()),
                 last_heartbeat_at: Some("now".to_string()),
+                heartbeat_age_seconds: Some(0),
             }],
         };
         let response_json = serde_json::to_string(&response).expect("serialize");
@@ -792,12 +1054,150 @@ mod tests {
         assert!(serde_json::from_str::<ControlRequest>(bad).is_err());
     }
 
+    #[test]
+    fn runtime_states_map_to_core_node_status() {
+        assert_eq!(
+            RuntimeNodeState::Available.to_core_status(),
+            NodeStatus::Idle
+        );
+        assert_eq!(
+            RuntimeNodeState::Connecting.to_core_status(),
+            NodeStatus::Connected
+        );
+        assert_eq!(
+            RuntimeNodeState::Login.to_core_status(),
+            NodeStatus::LoggingIn
+        );
+        assert_eq!(
+            RuntimeNodeState::MainMenu.to_core_status(),
+            NodeStatus::InMenu
+        );
+        assert_eq!(
+            RuntimeNodeState::ReadingMessages.to_core_status(),
+            NodeStatus::InMenu
+        );
+        assert_eq!(
+            RuntimeNodeState::PostingMessage.to_core_status(),
+            NodeStatus::InMenu
+        );
+        assert_eq!(
+            RuntimeNodeState::InDoor.to_core_status(),
+            NodeStatus::InDoor
+        );
+        assert_eq!(
+            RuntimeNodeState::Disconnecting.to_core_status(),
+            NodeStatus::Disconnected
+        );
+        assert_eq!(
+            RuntimeNodeState::Stale.to_core_status(),
+            NodeStatus::Disconnected
+        );
+    }
+
+    #[test]
+    fn runtime_state_transitions_and_heartbeat_updates() {
+        let runtime = Arc::new(ServerRuntime::new(
+            "test".to_string(),
+            TEST_NODE_COUNT,
+            4,
+            60,
+        ));
+        runtime.mark_node_connected(
+            1,
+            "session-1".to_string(),
+            "127.0.0.1:5000".to_string(),
+            "connected".to_string(),
+        );
+        runtime.mark_node_login(1);
+        assert_eq!(runtime.node_status(1).expect("node").state, "login");
+
+        runtime.force_node_heartbeat_age(1, Duration::from_secs(10));
+        assert!(
+            runtime
+                .node_status(1)
+                .expect("aged node")
+                .heartbeat_age_seconds
+                .expect("heartbeat age")
+                >= 10
+        );
+
+        runtime.heartbeat_node(1);
+        assert!(
+            runtime
+                .node_status(1)
+                .expect("fresh node")
+                .heartbeat_age_seconds
+                .expect("heartbeat age")
+                <= 1
+        );
+    }
+
+    #[test]
+    fn stale_nodes_are_detected_and_reset_to_disconnect() {
+        let runtime = Arc::new(ServerRuntime::new(
+            "test".to_string(),
+            TEST_NODE_COUNT,
+            4,
+            1,
+        ));
+        runtime.mark_node_connected(
+            2,
+            "session-2".to_string(),
+            "127.0.0.1:5001".to_string(),
+            "connected".to_string(),
+        );
+        runtime.force_node_heartbeat_age(2, Duration::from_secs(5));
+
+        assert_eq!(runtime.node_status(2).expect("node").state, "stale");
+        assert_eq!(
+            runtime.request_stale_disconnects("stale_node_reset"),
+            vec![2]
+        );
+        assert_eq!(runtime.node_status(2).expect("node").state, "disconnecting");
+        assert_eq!(
+            runtime.take_node_commands(2).disconnect_reason.as_deref(),
+            Some("stale_node_reset")
+        );
+    }
+
+    #[test]
+    fn runtime_nodes_snapshot_is_ordered() {
+        let runtime = Arc::new(ServerRuntime::new(
+            "test".to_string(),
+            TEST_NODE_COUNT,
+            4,
+            60,
+        ));
+        runtime.mark_node_connected(
+            3,
+            "session-3".to_string(),
+            "127.0.0.1:5002".to_string(),
+            "connected".to_string(),
+        );
+
+        let nodes = runtime.nodes_snapshot();
+        assert_eq!(
+            nodes
+                .iter()
+                .map(|node| node.node_number)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3, 4]
+        );
+        assert_eq!(nodes[0].state, "available");
+        assert_eq!(nodes[2].state, "connecting");
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn control_socket_round_trip() {
         let runtime_dir = temporary_runtime_path();
         fs::create_dir_all(&runtime_dir).expect("runtime dir");
-        let runtime = Arc::new(ServerRuntime::new("test".to_string(), TEST_NODE_COUNT));
+        let runtime = Arc::new(ServerRuntime::new(
+            "test".to_string(),
+            TEST_NODE_COUNT,
+            4,
+            60,
+        ));
 
         let listen_task = start_control_listener(&runtime_dir, Arc::clone(&runtime))
             .await
@@ -864,6 +1264,25 @@ mod tests {
             Some("sysop_disconnect")
         );
 
+        runtime.mark_node_connected(
+            2,
+            "session-2".to_string(),
+            "127.0.0.1:5001".to_string(),
+            "connected".to_string(),
+        );
+        runtime.force_node_heartbeat_age(2, Duration::from_secs(120));
+        let response = tokio::task::spawn_blocking({
+            let runtime_dir = runtime_dir.clone();
+            move || request_nodes_reset_stale(&runtime_dir).expect("request reset stale")
+        })
+        .await
+        .expect("join");
+        assert!(matches!(response, ControlResponse::Ok { ok: true }));
+        assert_eq!(
+            runtime.take_node_commands(2).disconnect_reason.as_deref(),
+            Some("stale_node_reset")
+        );
+
         listen_task.abort();
         let _ = fs::remove_dir_all(&runtime_dir);
     }
@@ -873,7 +1292,12 @@ mod tests {
     async fn control_socket_clients_do_not_block_each_other() {
         let runtime_dir = temporary_runtime_path();
         fs::create_dir_all(&runtime_dir).expect("runtime dir");
-        let runtime = Arc::new(ServerRuntime::new("test".to_string(), TEST_NODE_COUNT));
+        let runtime = Arc::new(ServerRuntime::new(
+            "test".to_string(),
+            TEST_NODE_COUNT,
+            4,
+            60,
+        ));
 
         let listen_task = start_control_listener(&runtime_dir, Arc::clone(&runtime))
             .await

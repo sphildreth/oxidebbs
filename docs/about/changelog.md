@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unavailable.
 - Live node disconnects, direct sysop messages, and broadcasts are now queued
   through the running server and consumed by active caller sessions.
+- Added authoritative live node runtime states, heartbeat ages, stale detection,
+  and live `nodes reset-stale` handling through the control socket.
 
 ### Removed
 
