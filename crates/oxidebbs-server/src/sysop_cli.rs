@@ -88,6 +88,7 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+// Top-level order intentionally matches CLI contract and leaves the Clap help command at the bottom.
 enum Command {
     /// Inspect ANSI/CP437 screen assets
     Ansi {
@@ -543,5 +544,36 @@ pub(crate) fn prompt_line(prompt: &str, default: Option<&str>) -> CliResult<Stri
             .ok_or_else(|| CliError::Message(format!("{prompt} is required")))
     } else {
         Ok(trimmed.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn top_level_help_order_is_stable() {
+        let mut names: Vec<_> = Cli::command()
+            .get_subcommands()
+            .map(|command| command.get_name().to_string())
+            .collect();
+
+        let has_help = names.iter().any(|name| name == "help");
+        if has_help {
+            assert_eq!(
+                names.pop(),
+                Some("help".to_string()),
+                "help subcommand must be last"
+            );
+        }
+
+        assert_eq!(
+            names,
+            vec![
+                "ansi", "audit", "check", "config", "db", "doors", "logs", "messages", "nodes",
+                "serve", "setup", "status", "sysop", "users",
+            ]
+        );
     }
 }

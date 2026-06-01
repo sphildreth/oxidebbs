@@ -61,6 +61,10 @@ Global options:
 -v, --verbose            Increase local log verbosity
 ```
 
+`--json` outputs are intentionally stable objects for automation. The hardening
+phase normalizes top-level JSON responses for `status`, `users list`, `nodes
+list`, `messages areas list`, `doors list`, and `db stats`.
+
 ## Essential v1 command groups
 
 ```text
@@ -76,6 +80,26 @@ oxidebbs ansi ...
 oxidebbs db ...
 oxidebbs logs ...
 ```
+
+Canonical top-level order is currently:
+
+```text
+ansi
+audit
+check
+config
+db
+doors
+logs
+messages
+nodes
+serve
+setup
+status
+sysop
+users
+```
+with Clap help appended after the command list.
 
 ## Essential v1 commands
 
@@ -162,6 +186,9 @@ Required behavior:
 
 This should be one of the most polished v1 commands.
 
+`oxidebbs check` is expected to return no errors for
+`config/oxidebbs.example.toml`.
+
 ### 4. Show board status
 
 ```bash
@@ -179,6 +206,9 @@ Required behavior:
 - Show uptime if server is running
 - Show enabled doors
 - Show message area count
+
+`status --json` returns a stable top-level object with `board`, `version`,
+`database`, `telnet`, `nodes`, `doors`, and `messages`.
 
 Example output:
 
@@ -403,6 +433,10 @@ is the v1 restore boundary; it is safe only for schema-only targets and runs
 transactionally.
 `db compact` is explicit but unsupported in this release because DecentDB does not
 expose a production-safe compaction API.
+
+`db stats --json` is a stable object contract with counts for schema version,
+users, message areas, messages, sessions, active sessions, doors, door runs, and
+audit events.
 
 ## Log and audit commands
 

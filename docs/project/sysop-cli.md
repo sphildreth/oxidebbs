@@ -16,6 +16,22 @@ cargo run -p oxidebbs-server -- logs recent
 cargo run -p oxidebbs-server -- audit recent
 ```
 
+The automation contracts below always emit JSON objects with stable top-level
+keys when `--json` is present:
+
+- `status`:
+  `{"board","version","database","telnet","nodes","doors","messages"}`
+- `users list`:
+  `{"users": [...]}`
+- `nodes list`:
+  `{"nodes": [...]}`
+- `messages areas list`:
+  `{"areas": [...]}`
+- `doors list`:
+  `{"doors": [...]}`
+- `db stats`:
+  `{"schema_version","users","message_areas","messages","sessions",...}`
+
 Global options:
 
 ```bash
@@ -70,6 +86,26 @@ implemented as a full restore into a schema-initialized, data-empty database:
 `db compact` is explicitly unsupported in this release because DecentDB does not
 expose a production-safe compaction API. The command returns a clear error
 rather than faking compaction.
+
+Top-level help follows the canonical order:
+
+```text
+ansi
+audit
+check
+config
+db
+doors
+logs
+messages
+nodes
+serve
+setup
+status
+sysop
+users
+help
+```
 
 ## Schema Compatibility
 

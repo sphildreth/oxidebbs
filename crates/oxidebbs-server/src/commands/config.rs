@@ -339,3 +339,78 @@ fn infer_toml_value(raw: &str) -> toml::Value {
     }
     toml::Value::String(raw.to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{config::OxideConfig, sysop_cli::AppContext};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_path(tag: &str) -> std::path::PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "oxidebbs-phase6-{tag}-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time should be valid")
+                .as_nanos()
+        ));
+        path
+    }
+
+    fn load_example_config_for_repo() -> (OxideConfig, std::path::PathBuf) {
+        let mut config_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        config_path.push("../../config/oxidebbs.example.toml");
+        let workspace_root = config_path
+            .parent()
+            .and_then(|path| path.parent())
+            .expect("workspace root");
+        let mut config = OxideConfig::load(&config_path).expect("load example config");
+
+        config.paths.ansi = workspace_root.join(config.paths.ansi);
+        config.paths.screens = workspace_root.join(config.paths.screens);
+        config.paths.doors = workspace_root.join(config.paths.doors);
+        config.paths.runtime = workspace_root.join(config.paths.runtime);
+        config.paths.logs = workspace_root.join(config.paths.logs);
+        config.database.path = workspace_root.join(&config.database.path);
+
+        for door in &mut config.doors.definitions {
+            door.working_dir = workspace_root
+                .join(&door.working_dir)
+                .to_string_lossy()
+                .to_string();
+        }
+
+        (config, config_path)
+    }
+
+    #[test]
+    fn run_check_on_example_config_has_no_errors() {
+        let (mut config, config_path) = load_example_config_for_repo();
+        let runtime = temp_path("runtime");
+        config.paths.runtime = runtime.clone();
+        let ctx = AppContext {
+            config_path,
+            config,
+            json: false,
+        };
+        run_check(&ctx).expect("example config check");
+        let _ = std::fs::remove_dir_all(runtime);
+    }
+
+    #[test]
+    fn check_issues_require_valid_telnet_bind() {
+        let (mut config, config_path) = load_example_config_for_repo();
+        let runtime = temp_path("runtime");
+        config.paths.runtime = runtime.clone();
+        config.telnet.bind = "bad bind".to_string();
+        let issues = validate_runtime(&config, &config_path);
+        assert_eq!(
+            issues.iter().filter(|issue| issue.level == "error").count(),
+            1
+        );
+        let first = issues.first().expect("issue exists");
+        assert!(first.message.contains("telnet.bind"));
+        let _ = std::fs::remove_dir_all(runtime);
+    }
+}

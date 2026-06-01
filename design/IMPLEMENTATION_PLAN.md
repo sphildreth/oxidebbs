@@ -23,7 +23,7 @@ Status values:
 | Phase 3 — Live Door Launch Integration | COMPLETE | Replace caller-facing door placeholder with controlled door execution. | Door menu launch path, run records, drop files, timeout cleanup. |
 | Phase 4 — DecentDB Schema Migrations | COMPLETE | Upgrade compatible pre-alpha databases instead of requiring recreation. | Migration runner and schema `2 -> 3` migration. |
 | Phase 5 — DecentDB Restore And Compact Semantics | COMPLETE | Make `db import` and `db compact` real, safe commands. | Restore design, import command, compaction command or documented unsupported state. |
-| Phase 6 — Sysop CLI Hardening | TODO | Make CLI output, error behavior, and smoke coverage production-friendly. | CLI integration tests, stable JSON contracts, help ordering tests. |
+| Phase 6 — Sysop CLI Hardening | COMPLETE | Make CLI output, error behavior, and smoke coverage production-friendly. | CLI integration tests, stable JSON contracts, help ordering tests. |
 | Phase 7 — Documentation And Runbook Completion | TODO | Bring operator docs to parity with implemented runtime behavior. | Updated docs site, runbook, changelog, and design docs. |
 
 ## Definition Of Done
@@ -1236,7 +1236,7 @@ Update:
 
 ## Phase 6 — Sysop CLI Hardening
 
-Status: `TODO`
+Status: `COMPLETE`
 
 ### Objective
 
@@ -1256,7 +1256,8 @@ Add tests or smoke coverage for:
   - `db stats`
 - Non-interactive setup with `--data`.
 - Config check on `config/oxidebbs.example.toml`.
-- Error messages for unsupported `db import`/`db compact`.
+- Error messages for unsupported `db import` formats and unsupported
+  `db compact`.
 
 ### Command Ordering
 
@@ -1457,6 +1458,22 @@ Update:
 - CLI help order has a test.
 - Representative JSON commands have tests.
 - `./scripts/dev-check.sh` passes.
+
+### Completion Notes
+
+- Top-level command order is covered by a Clap command-factory test.
+- Stable successful JSON object contracts are covered for `status`,
+  `users list`, `nodes list`, `messages areas list`, `doors list`, and
+  `db stats`.
+- `users list`, `nodes list`, `messages areas list`, and `doors list` no
+  longer emit top-level arrays under `--json`; this is an intentional pre-alpha
+  contract hardening decision.
+- Non-interactive setup with a global `--data` override and config checking for
+  `config/oxidebbs.example.toml` are covered by command-level tests.
+- Because Phase 5 implemented JSON restore, Phase 6 validates unsupported
+  import formats instead of treating `db import` itself as unsupported. `db
+  compact` remains explicitly unsupported until DecentDB exposes a safe
+  compaction API.
 
 ## Phase 7 — Documentation And Runbook Completion
 

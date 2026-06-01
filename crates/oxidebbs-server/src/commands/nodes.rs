@@ -16,7 +16,9 @@ use crate::{
         print_json, print_session, require_active_session, session_json,
     },
 };
-use oxidebbs_db::{end_session, find_active_session_by_node, list_active_sessions};
+use oxidebbs_db::{
+    SessionRecord, end_session, find_active_session_by_node, find_user_by_id, list_active_sessions,
+};
 
 #[derive(Subcommand)]
 pub enum NodesCommand {
@@ -76,14 +78,10 @@ fn print_nodes_fallback(db: &oxidebbs_db::OxideDb, ctx: &AppContext) -> CliResul
             .map(|number| {
                 let node_number = i64::from(number);
                 let session = by_node.get(&node_number);
-                json!({
-                    "node": node_number,
-                    "state": if session.is_some() { "active" } else { "available" },
-                    "session": session.map(session_json)
-                })
+                nodes_json_from_db_session(db, node_number, session)
             })
             .collect::<Vec<_>>();
-        print_json(&JsonValue::Array(nodes))?;
+        print_json(&nodes_json_payload(nodes))?;
         return Ok(());
     }
 
@@ -103,22 +101,51 @@ fn print_nodes_fallback(db: &oxidebbs_db::OxideDb, ctx: &AppContext) -> CliResul
 }
 
 fn control_nodes_to_json(nodes: &[ControlNodeStatus]) -> JsonValue {
-    JsonValue::Array(
+    nodes_json_payload(
         nodes
             .iter()
-            .map(|node| {
-                json!({
-                    "node": node.node_number,
-                    "state": node.state,
-                    "user_alias": node.user_alias,
-                    "remote_address": node.remote_address,
-                    "connected_at": node.connected_at,
-                    "last_heartbeat_at": node.last_heartbeat_at,
-                    "heartbeat_age_seconds": node.heartbeat_age_seconds,
-                })
-            })
-            .collect(),
+            .map(control_node_status_json)
+            .collect::<Vec<_>>(),
     )
+}
+
+fn nodes_json_payload(nodes: Vec<JsonValue>) -> JsonValue {
+    json!({ "nodes": nodes })
+}
+
+fn control_node_status_json(node: &ControlNodeStatus) -> JsonValue {
+    json!({
+        "node_number": node.node_number,
+        "state": node.state,
+        "user_alias": node.user_alias,
+        "session": JsonValue::Null,
+        "last_heartbeat_at": node.last_heartbeat_at,
+        "heartbeat_age_seconds": node.heartbeat_age_seconds,
+    })
+}
+
+fn nodes_json_from_db_session(
+    db: &oxidebbs_db::OxideDb,
+    node_number: i64,
+    session: Option<&SessionRecord>,
+) -> JsonValue {
+    let user_alias = session.and_then(|session| {
+        session.user_id.as_deref().and_then(|user_id| {
+            find_user_by_id(db.db(), user_id)
+                .ok()
+                .flatten()
+                .map(|user| user.alias)
+        })
+    });
+
+    json!({
+        "node_number": node_number,
+        "state": if session.is_some() { "offline" } else { "available" },
+        "user_alias": user_alias,
+        "session": session.map(session_json),
+        "last_heartbeat_at": JsonValue::Null,
+        "heartbeat_age_seconds": JsonValue::Null,
+    })
 }
 
 fn print_nodes_from_control(nodes: &[ControlNodeStatus], json_output: bool) -> CliResult<()> {
@@ -169,7 +196,7 @@ fn show_node_live(
 
     if json_output {
         print_json(&json!({
-            "node": node.node_number,
+            "node_number": node.node_number,
             "state": node.state,
             "user_alias": node.user_alias,
             "remote_address": node.remote_address,
@@ -221,8 +248,18 @@ pub fn run_nodes(command: NodesCommand, ctx: &AppContext) -> CliResult<()> {
             let session = find_active_session_by_node(db.db(), node_number)?;
             if ctx.json {
                 print_json(&json!({
-                    "node": node_number,
-                    "state": if session.is_some() { "active" } else { "available" },
+                    "node_number": node_number,
+                    "state": if session.is_some() { "offline" } else { "available" },
+                    "user_alias": session
+                        .as_ref()
+                        .and_then(|session| {
+                            session.user_id.as_deref().and_then(|user_id| {
+                                find_user_by_id(db.db(), user_id)
+                                    .ok()
+                                    .flatten()
+                                    .map(|user| user.alias)
+                            })
+                        }),
                     "session": session.as_ref().map(session_json)
                 }))?;
             } else if let Some(session) = session {
@@ -411,5 +448,115 @@ pub fn run_nodes(command: NodesCommand, ctx: &AppContext) -> CliResult<()> {
             }
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use oxidebbs_db::{SCHEMA_VERSION, SessionRecord, insert_session};
+
+    fn session_from_timestamp(id: &str, node_number: i64, started_at: &str) -> SessionRecord {
+        SessionRecord {
+            id: id.to_string(),
+            node_number,
+            user_id: Some("00000000-0000-4000-8000-000000000001".to_string()),
+            transport: "telnet".to_string(),
+            remote_address: "127.0.0.1:2323".to_string(),
+            remote_ip: Some("127.0.0.1".to_string()),
+            remote_port: Some(2323),
+            started_at: started_at.to_string(),
+            ended_at: None,
+            disconnect_reason: None,
+        }
+    }
+
+    #[test]
+    fn nodes_list_json_shape_matches_contract() {
+        let db = oxidebbs_db::OxideDb::open_memory().expect("open in-memory db");
+        assert_eq!(db.schema_version().expect("schema version"), SCHEMA_VERSION);
+
+        let user = oxidebbs_db::UserRecord {
+            id: "00000000-0000-4000-8000-000000000001".to_string(),
+            alias: "sysop".to_string(),
+            real_name: "Sysop".to_string(),
+            email: None,
+            password_hash: "hash".to_string(),
+            security_level: 100,
+            is_sysop: true,
+            created_at: "2026-01-01T00:00:00.000000Z".to_string(),
+            last_login_at: None,
+            total_calls: 0,
+            time_bank_minutes: 0,
+            status: "active".to_string(),
+        };
+        oxidebbs_db::insert_user(db.db(), &user).expect("seed user");
+
+        let session = session_from_timestamp(
+            "00000000-0000-4000-8000-000000000010",
+            1,
+            "2026-01-01T00:00:00.000000Z",
+        );
+        insert_session(db.db(), &session).expect("seed session");
+
+        let payload = nodes_json_payload(vec![
+            nodes_json_from_db_session(&db, 1, Some(&session)),
+            nodes_json_from_db_session(&db, 2, None),
+        ]);
+
+        let nodes = payload
+            .as_object()
+            .expect("payload object")
+            .get("nodes")
+            .expect("nodes key")
+            .as_array()
+            .expect("nodes array");
+        assert_eq!(nodes.len(), 2);
+        assert_eq!(
+            nodes[0].as_object().expect("first node").get("node_number"),
+            Some(&JsonValue::from(1))
+        );
+        assert_eq!(
+            nodes[0].as_object().expect("first node").get("state"),
+            Some(&JsonValue::String("offline".into()))
+        );
+        assert_eq!(
+            nodes[1].as_object().expect("second node").get("state"),
+            Some(&JsonValue::String("available".into()))
+        );
+        let first = nodes[0].as_object().expect("first node");
+        assert!(
+            first
+                .get("session")
+                .and_then(JsonValue::as_object)
+                .is_some()
+        );
+        assert_eq!(
+            first.get("user_alias"),
+            Some(&JsonValue::String("sysop".to_string()))
+        );
+    }
+
+    #[test]
+    fn control_nodes_json_shape_matches_contract() {
+        let payload = control_nodes_to_json(&[ControlNodeStatus {
+            node_number: 1,
+            state: "main_menu".to_string(),
+            user_alias: Some("sysop".to_string()),
+            remote_address: Some("127.0.0.1:2323".to_string()),
+            connected_at: Some("2026-01-01T00:00:00.000000Z".to_string()),
+            last_heartbeat_at: Some("2026-01-01T00:00:05.000000Z".to_string()),
+            heartbeat_age_seconds: Some(2),
+        }]);
+
+        let nodes = payload["nodes"].as_array().expect("nodes array");
+        let node = nodes[0].as_object().expect("node object");
+        assert_eq!(node.get("node_number"), Some(&JsonValue::from(1)));
+        assert_eq!(
+            node.get("state"),
+            Some(&JsonValue::String("main_menu".to_string()))
+        );
+        assert_eq!(node.get("session"), Some(&JsonValue::Null));
+        assert_eq!(node.get("heartbeat_age_seconds"), Some(&JsonValue::from(2)));
     }
 }

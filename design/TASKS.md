@@ -124,6 +124,12 @@ This is intended for a local coding agent to work from.
 - [x] Specify DecentDB restore and compaction semantics.
 - [x] Enable schema-validated JSON restore for `db import --format json`.
 - [x] Keep `db compact` explicitly unsupported until DecentDB exposes a safe compaction API.
+- [x] Stabilize successful `--json` object contracts for `status`,
+  `users list`, `nodes list`, `messages areas list`, `doors list`, and
+  `db stats`.
+- [x] Add CLI hardening tests for top-level help order, non-interactive
+  setup with `--data`, example-config checking, unsupported import formats, and
+  unsupported compaction.
 
 ## Phase 10 — FTN/OxideNet design
 

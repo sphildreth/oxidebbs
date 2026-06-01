@@ -170,3 +170,48 @@ fn seed_default_message_area(db: &OxideDb) -> CliResult<()> {
     )?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_path(tag: &str) -> std::path::PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "oxidebbs-phase6-{tag}-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time should be valid")
+                .as_nanos()
+        ));
+        path
+    }
+
+    #[test]
+    fn setup_accepts_global_data_override() {
+        let base_dir = temp_path("setup-data");
+        let output = base_dir.join("oxidebbs.toml");
+        let db_override = base_dir.join("data").join("oxidebbs.ddb");
+
+        let args = SetupArgs {
+            output: output.clone(),
+            force: true,
+            board_name: Some("Phase 6 CLI".to_string()),
+            sysop_alias: Some("sysop".to_string()),
+            sysop_password: Some("passw0rd".to_string()),
+            telnet_port: Some(2324),
+            nodes: Some(4),
+            no_sample_ansi: true,
+        };
+
+        run_setup_command(args, Some(db_override.clone()), false).expect("setup command");
+
+        let output_contents = std::fs::read_to_string(&output).expect("read setup config");
+        assert!(output_contents.contains(&db_override.to_string_lossy().to_string()));
+        assert!(db_override.exists());
+        let _ = std::fs::remove_file(&output);
+        let _ = std::fs::remove_file(&db_override);
+        let _ = std::fs::remove_dir_all(&base_dir);
+    }
+}

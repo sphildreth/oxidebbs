@@ -88,7 +88,7 @@ pub fn run_users(command: UsersCommand, ctx: &AppContext) -> CliResult<()> {
         UsersCommand::List => {
             let users = list_users(db.db())?;
             if ctx.json {
-                print_json(&JsonValue::Array(users.iter().map(user_json).collect()))?;
+                print_json(&users_json_payload(&users))?;
             } else {
                 for user in users {
                     println!(
@@ -193,6 +193,12 @@ pub fn run_users(command: UsersCommand, ctx: &AppContext) -> CliResult<()> {
     Ok(())
 }
 
+fn users_json_payload(users: &[UserRecord]) -> JsonValue {
+    json!({
+        "users": users.iter().map(user_json).collect::<Vec<_>>()
+    })
+}
+
 fn add_user(args: UserAddArgs, db: &oxidebbs_db::OxideDb, json_output: bool) -> CliResult<()> {
     let alias = match args.alias {
         Some(value) => value,
@@ -228,4 +234,47 @@ fn add_user(args: UserAddArgs, db: &oxidebbs_db::OxideDb, json_output: bool) -> 
         println!("user added: {}", user.alias);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sysop_cli::current_timestamp;
+    use oxidebbs_db::{OxideDb, SCHEMA_VERSION};
+
+    #[test]
+    fn users_list_json_shape_matches_contract() {
+        let db = OxideDb::open_memory().expect("open in-memory db");
+        assert_eq!(db.schema_version().expect("schema version"), SCHEMA_VERSION);
+        let now = current_timestamp(&db).expect("timestamp");
+        let users = vec![UserRecord {
+            id: "00000000-0000-4000-8000-000000000001".to_string(),
+            alias: "sysop".to_string(),
+            real_name: "System Operator".to_string(),
+            email: None,
+            password_hash: "hash".to_string(),
+            security_level: 100,
+            is_sysop: true,
+            created_at: now,
+            last_login_at: None,
+            total_calls: 0,
+            time_bank_minutes: 0,
+            status: "active".to_string(),
+        }];
+
+        let payload = users_json_payload(&users);
+        let users = payload
+            .as_object()
+            .expect("users payload is object")
+            .get("users")
+            .expect("users key")
+            .as_array()
+            .expect("users as array");
+        assert_eq!(users.len(), 1);
+        let user = users[0].as_object().expect("user object");
+        assert_eq!(user.get("alias"), Some(&JsonValue::String("sysop".into())));
+        assert_eq!(user.get("security_level"), Some(&JsonValue::from(100)));
+        assert_eq!(user.get("is_sysop"), Some(&JsonValue::Bool(true)));
+        assert!(user.get("password_hash").is_none());
+    }
 }

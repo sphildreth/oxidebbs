@@ -150,7 +150,7 @@ pub fn run_doors(command: DoorsCommand, ctx: &AppContext) -> CliResult<()> {
         DoorsCommand::List => {
             let doors = effective_doors(&db, &ctx.config)?;
             if ctx.json {
-                print_json(&JsonValue::Array(doors.iter().map(door_json).collect()))?;
+                print_json(&doors_json_payload(&doors))?;
             } else {
                 for door in doors {
                     println!(
@@ -295,6 +295,12 @@ pub fn run_doors(command: DoorsCommand, ctx: &AppContext) -> CliResult<()> {
         }
     }
     Ok(())
+}
+
+fn doors_json_payload(doors: &[DoorDefinitionRecord]) -> JsonValue {
+    json!({
+        "doors": doors.iter().map(door_json).collect::<Vec<_>>()
+    })
 }
 
 pub fn run_door_test(
@@ -565,4 +571,42 @@ fn door_run_json(run: &oxidebbs_db::DoorRunRecord) -> JsonValue {
         "bytes_in": run.bytes_in,
         "bytes_out": run.bytes_out
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn doors_list_json_shape_matches_contract() {
+        let doors = vec![DoorDefinitionRecord {
+            id: "00000000-0000-4000-8000-000000000001".to_string(),
+            key: "lord".to_string(),
+            name: "Legend of the Red Dragon".to_string(),
+            runner: "dry-run".to_string(),
+            working_dir: "doors/lord".to_string(),
+            command: "lord.exe".to_string(),
+            drop_file: "door.sys".to_string(),
+            exclusive: false,
+            time_limit_minutes: 30,
+            enabled: true,
+        }];
+
+        let payload = doors_json_payload(&doors);
+        let doors = payload
+            .as_object()
+            .expect("payload object")
+            .get("doors")
+            .expect("doors key")
+            .as_array()
+            .expect("doors array");
+        assert_eq!(doors.len(), 1);
+        let door = doors[0].as_object().expect("single door");
+        assert_eq!(
+            door.get("runner"),
+            Some(&JsonValue::String("dry-run".into()))
+        );
+        assert_eq!(door.get("enabled"), Some(&JsonValue::Bool(true)));
+        assert_eq!(door.get("time_limit_minutes"), Some(&JsonValue::from(30)));
+    }
 }

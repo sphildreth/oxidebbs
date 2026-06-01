@@ -44,6 +44,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and live `nodes reset-stale` handling through the control socket.
 - Door run finalization now persists byte counters, and door command planning
   uses the configured runner executable instead of hard-coding `dosbox`.
+- Hardened CLI automation by normalizing `--json` output for:
+  `status`, `users list`, `nodes list`, `messages areas list`, `doors list`, and
+  `db stats` into stable top-level objects.
+- Added phase-6 hardening checks for top-level help ordering, non-interactive
+  setup `--data` override behavior, config check on
+  `config/oxidebbs.example.toml`, unsupported `db import` formats, and
+  unsupported `db compact` behavior.
 
 ### Removed
 

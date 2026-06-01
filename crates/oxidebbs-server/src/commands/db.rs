@@ -778,6 +778,7 @@ fn db_compact() -> CliResult<()> {
 }
 
 #[derive(Subcommand)]
+// Lifecycle order keeps admin verbs grouped by maintenance workflow, with `verify` after restore primitives.
 pub enum DbCommand {
     Init,
     Doctor,
@@ -1162,5 +1163,27 @@ mod tests {
     fn compact_reports_explicit_unsupported_error() {
         let err = db_compact().expect_err("compact remains unsupported");
         assert!(err.to_string().contains("DecentDB does not expose"));
+    }
+
+    #[test]
+    fn db_stats_json_shape_matches_contract() {
+        let db = test_db();
+        let stats = db_stats(db.db()).expect("stats");
+        let obj = stats.as_object().expect("stats object");
+        assert!(obj.contains_key("schema_version"));
+        assert!(obj.contains_key("users"));
+        assert!(obj.contains_key("message_areas"));
+        assert!(obj.contains_key("messages"));
+        assert!(obj.contains_key("sessions"));
+        assert!(obj.contains_key("active_sessions"));
+        assert!(obj.contains_key("doors"));
+        assert!(obj.contains_key("door_runs"));
+        assert!(obj.contains_key("audit_events"));
+    }
+
+    #[test]
+    fn import_rejects_unsupported_format() {
+        let err = require_json_format("yaml").expect_err("unsupported import format");
+        assert!(err.to_string().contains("unsupported format"));
     }
 }

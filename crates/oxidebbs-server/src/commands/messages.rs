@@ -164,7 +164,7 @@ fn run_message_areas(
         MessageAreasCommand::List => {
             let areas = oxidebbs_db::list_message_areas(db.db())?;
             if ctx.json {
-                print_json(&JsonValue::Array(areas.iter().map(area_json).collect()))?;
+                print_json(&message_areas_json_payload(&areas))?;
             } else {
                 for area in areas {
                     println!(
@@ -238,4 +238,45 @@ fn run_message_areas(
         }
     }
     Ok(())
+}
+
+fn message_areas_json_payload(areas: &[MessageAreaRecord]) -> JsonValue {
+    json!({
+        "areas": areas.iter().map(area_json).collect::<Vec<_>>()
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn message_areas_list_json_shape_matches_contract() {
+        let areas = vec![MessageAreaRecord {
+            id: "00000000-0000-4000-8000-000000000001".to_string(),
+            key: "general".to_string(),
+            name: "General".to_string(),
+            description: "General discussion".to_string(),
+            kind: "local".to_string(),
+            network_id: None,
+            read_security_level: 0,
+            post_security_level: 10,
+            moderated: false,
+            enabled: true,
+        }];
+
+        let payload = message_areas_json_payload(&areas);
+        let areas = payload
+            .as_object()
+            .expect("payload object")
+            .get("areas")
+            .expect("areas key")
+            .as_array()
+            .expect("areas array");
+        assert_eq!(areas.len(), 1);
+        let area = areas[0].as_object().expect("single area");
+        assert_eq!(area.get("key"), Some(&JsonValue::String("general".into())));
+        assert_eq!(area.get("read_security_level"), Some(&JsonValue::from(0)));
+        assert_eq!(area.get("enabled"), Some(&JsonValue::Bool(true)));
+    }
 }
