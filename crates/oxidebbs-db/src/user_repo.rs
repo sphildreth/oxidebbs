@@ -47,6 +47,15 @@ pub fn find_user_by_alias(db: &Db, alias: &str) -> decentdb::Result<Option<UserR
     Ok(result.rows().first().map(row_to_user))
 }
 
+pub fn find_user_by_alias_ci(db: &Db, alias: &str) -> decentdb::Result<Option<UserRecord>> {
+    let result = db.execute_with_params(
+        "SELECT UUID_TO_STRING(id), alias, real_name, email, password_hash, security_level, is_sysop, CAST(created_at AS TEXT), CAST(last_login_at AS TEXT), total_calls, time_bank_minutes, status
+         FROM users WHERE LOWER(alias) = LOWER($1)",
+        &[Value::Text(alias.to_string())],
+    )?;
+    Ok(result.rows().first().map(row_to_user))
+}
+
 pub fn find_user_by_id(db: &Db, id: &str) -> decentdb::Result<Option<UserRecord>> {
     let result = db.execute_with_params(
         "SELECT UUID_TO_STRING(id), alias, real_name, email, password_hash, security_level, is_sysop, CAST(created_at AS TEXT), CAST(last_login_at AS TEXT), total_calls, time_bank_minutes, status
@@ -186,6 +195,16 @@ mod tests {
         let db = test_db();
         let found = find_user_by_alias(&db, "nobody").expect("find");
         assert_eq!(found, None);
+    }
+
+    #[test]
+    fn find_by_alias_is_case_insensitive() {
+        let db = test_db();
+        let user = sample_user("Alice");
+        insert_user(&db, &user).expect("insert");
+
+        let found = find_user_by_alias_ci(&db, "alice").expect("find");
+        assert_eq!(found, Some(user));
     }
 
     #[test]

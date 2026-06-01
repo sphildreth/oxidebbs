@@ -67,6 +67,17 @@ pub fn end_session(
     Ok(())
 }
 
+pub fn update_session_user(db: &Db, session_id: &str, user_id: &str) -> decentdb::Result<()> {
+    db.execute_with_params(
+        "UPDATE sessions SET user_id = UUID_PARSE($1) WHERE id = UUID_PARSE($2)",
+        &[
+            Value::Text(user_id.to_string()),
+            Value::Text(session_id.to_string()),
+        ],
+    )?;
+    Ok(())
+}
+
 pub fn list_active_sessions(db: &Db) -> decentdb::Result<Vec<SessionRecord>> {
     let result = db.execute(
         "SELECT UUID_TO_STRING(id), node_number, UUID_TO_STRING(user_id), transport, remote_address, CAST(remote_ip AS TEXT), remote_port, CAST(started_at AS TEXT), CAST(ended_at AS TEXT), disconnect_reason
@@ -132,6 +143,7 @@ fn opt_int_value(value: &Value) -> Option<i64> {
 mod tests {
     use super::*;
     use crate::schema;
+    use crate::user_repo::{UserRecord, insert_user};
     use decentdb::DbConfig;
 
     const SESSION_1: &str = "00000000-0000-4000-8000-000000000601";
@@ -171,6 +183,37 @@ mod tests {
         assert_eq!(active[0].id, SESSION_1);
         assert_eq!(active[0].remote_ip.as_deref(), Some("127.0.0.1"));
         assert_eq!(active[0].remote_port, Some(2323));
+    }
+
+    #[test]
+    fn can_update_session_user_id() {
+        let db = test_db();
+        insert_session(&db, &sample_session(SESSION_1, 1)).expect("insert");
+        let user_id = "00000000-0000-4000-8000-000000000101";
+        insert_user(
+            &db,
+            &UserRecord {
+                id: user_id.to_string(),
+                alias: "alice".to_string(),
+                real_name: "Alice".to_string(),
+                email: Some("alice@example.com".to_string()),
+                password_hash: "hash".to_string(),
+                security_level: 10,
+                is_sysop: false,
+                created_at: "2026-01-01T00:00:00.000000Z".to_string(),
+                last_login_at: None,
+                total_calls: 0,
+                time_bank_minutes: 0,
+                status: "active".to_string(),
+            },
+        )
+        .expect("insert user");
+
+        update_session_user(&db, SESSION_1, user_id).expect("update session");
+
+        let session = list_active_sessions(&db).expect("list active").remove(0);
+
+        assert_eq!(session.user_id, Some(user_id.to_string()));
     }
 
     #[test]

@@ -65,7 +65,7 @@ Global options:
 
 ```text
 oxidebbs serve
-oxidebbs init
+oxidebbs setup
 oxidebbs check
 oxidebbs status
 oxidebbs users ...
@@ -107,10 +107,10 @@ oxidebbs serve --bind 0.0.0.0:2323
 oxidebbs serve --dry-run
 ```
 
-### 2. Initialize a new board
+### 2. Setup a new board
 
 ```bash
-oxidebbs init
+oxidebbs setup
 ```
 
 Creates a new local OxideBBS instance.
@@ -139,7 +139,7 @@ Create sample ANSI screens? [Y/n]:
 Non-interactive option:
 
 ```bash
-oxidebbs init --board-name "My BBS" --sysop-alias sysop --nodes 4
+oxidebbs setup --board-name "My BBS" --sysop-alias sysop --nodes 4
 ```
 
 ### 3. Validate configuration
@@ -482,7 +482,7 @@ The TUI should not duplicate business logic. It should call the same application
 If v1 has to be ruthless, these are the must-have commands:
 
 ```bash
-oxidebbs init
+oxidebbs setup
 oxidebbs check
 oxidebbs serve
 oxidebbs status
@@ -542,7 +542,7 @@ Suggested Rust module structure:
 
 ```text
 oxidebbs-server/src/cli.rs
-oxidebbs-server/src/commands/init.rs
+oxidebbs-server/src/commands/setup.rs
 oxidebbs-server/src/commands/check.rs
 oxidebbs-server/src/commands/serve.rs
 oxidebbs-server/src/commands/status.rs

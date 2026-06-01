@@ -17,8 +17,9 @@ format.
 
 The core login flow treats password verification as a boundary dependency. It
 does not compare plaintext passwords directly and does not own hash parameter
-selection. The server/auth adapter will verify PHC strings and create new PHC
-hashes when user registration and password reset wiring is added.
+selection. The server/auth adapter verifies PHC strings and creates new PHC
+hashes for telnet user registration. Local password resets currently accept a
+precomputed PHC string.
 
 ## Consequences
 

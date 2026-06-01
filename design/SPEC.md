@@ -260,10 +260,10 @@ preferred for ANSI callers at 40 columns or less.
 ## 10. Users and authentication
 
 New-user and login flows are modeled in `oxidebbs-core`. User registration
-normalizes profile fields, applies starter security defaults, and requires a
-precomputed password hash. Login verifies aliases case-insensitively, rejects
-inactive or locked accounts, and updates call counters after a successful
-password verification.
+normalizes profile fields, applies starter security defaults, and stores a
+precomputed password hash created by the server/auth adapter. Login verifies
+aliases case-insensitively, rejects inactive or locked accounts, and updates
+call counters after a successful password verification.
 
 Password hashes must use Argon2id PHC strings. Core code accepts a verifier
 boundary so cryptographic verification can live in the server/auth adapter
@@ -275,6 +275,10 @@ Message commands cover posting, reading visible messages, replies, private mail
 recipient targeting, and local moderation state changes. Security levels gate
 read and post operations. Moderated areas create pending messages until a sysop
 approves or deletes them.
+
+The telnet message menu must provide at least local area selection, visible
+message listing, message reading, multi-line posting, and replies for
+authenticated callers.
 
 ## 12. Sysop tooling
 

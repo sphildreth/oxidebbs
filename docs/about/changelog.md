@@ -37,7 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added the first real `oxidebbs-server serve` runtime with a telnet listener,
   node-slot allocation, DecentDB session/audit records, configured screen
   rendering, starter menu routing, NAWS width updates, idle timeout handling,
-  and placeholder responses for auth, messages, and doors.
+  login/new-user authentication, local message reading/posting/replies, and a
+  placeholder response for doors.
 
 ### Changed
 

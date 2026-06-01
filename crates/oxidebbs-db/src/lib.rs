@@ -27,10 +27,11 @@ pub use message_repo::{
 pub use schema::schema_version as read_schema_version;
 pub use session_repo::{
     SessionRecord, end_session, insert_session, list_active_sessions, list_recent_sessions,
+    update_session_user,
 };
 pub use user_repo::{
-    UserRecord, find_user_by_alias, find_user_by_id, insert_user, list_users, update_user_login,
-    update_user_password_hash,
+    UserRecord, find_user_by_alias, find_user_by_alias_ci, find_user_by_id, insert_user,
+    list_users, update_user_login, update_user_password_hash,
 };
 
 pub struct OxideDb {
