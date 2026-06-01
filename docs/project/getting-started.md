@@ -97,6 +97,20 @@ OxideBBS starts DOSBox with `COM1` mapped to the run-local bridge:
 serial1=nullmodem server:127.0.0.1 port:<bridge_port> transparent:1 rxdelay:1000 txdelay:10
 ```
 
+OxideBBS also writes quiet DOSBox settings into the run-local config:
+`startup_verbosity=quiet`, `waitonerror=false`, `pause_when_inactive=false`, and
+`mute_when_inactive=true`. These settings keep DOSBox logs and inactive-window
+behavior out of the caller path, but plain DOSBox still creates an SDL window on
+desktop systems.
+
+For no visible DOSBox window, install Xvfb and point the door runner at the
+headless wrapper. Use an absolute path or put the wrapper on `PATH`, because door
+processes run from the node runtime directory:
+
+```toml
+runner = "/path/to/oxidebbs/scripts/run-dosbox-headless.sh"
+```
+
 When the caller presses a key, OxideBBS reads that byte from the telnet session
 and writes it to the bridge socket. DOSBox receives it and presents it as COM1
 input to the door. When the door writes to COM1, DOSBox sends those bytes back to

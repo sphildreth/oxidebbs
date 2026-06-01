@@ -165,18 +165,40 @@ cargo run -p oxidebbs-server -- --config config/oxidebbs.example.toml doors test
 
 Live test expectation:
 
-- The bridge path should be clearly visible from caller behavior: the door appears to
-  run through COM1 serial and responds through normal keypresses.
 - DOSBox receives a run-local config with
   `serial1=nullmodem server:127.0.0.1 port:<bridge_port> transparent:1 rxdelay:1000 txdelay:10`.
+- DOSBox also receives quiet runtime settings:
+  `startup_verbosity=quiet`, `waitonerror=false`, `pause_when_inactive=false`,
+  and `mute_when_inactive=true`.
+- The door believes it is reading and writing `COM1`; it is not reading from
+  DOSBox console stdin/stdout.
+- OxideBBS receives caller telnet bytes and forwards them to the run-local TCP
+  bridge. DOSBox converts those bridge bytes into COM1 input for the door.
+- Door output follows the reverse path: COM1 output becomes DOSBox nullmodem TCP
+  bytes, OxideBBS reads them from the bridge, and OxideBBS writes them to the
+  caller's telnet connection.
 - On a clean run, `OXNODE.TXT` and `OXIDECHK.RPT` should be written to the node
   runtime directory and include matching node metadata.
+
+Byte path:
+
+```text
+caller telnet client
+  <-> OxideBBS caller transport
+  <-> run-local 127.0.0.1 TCP bridge
+  <-> DOSBox nullmodem serial backend
+  <-> DOSBox-emulated COM1 UART
+  <-> DOS door program
+```
 
 - `doors dropfile ...` and `doors test ... --dry-run` generate `DORINFO1.DEF`,
   `DOOR.SYS` when requested by command, and the Oxide diagnostic `OXNODE.TXT`
   beside the drop files.
 - Live execution requires DOSBox and the serial bridge; it should return a clear missing-runner
   or bridge-start error when either component is unavailable.
+- To run DOSBox without a visible SDL window, install Xvfb and configure the
+  door runner as an absolute path to `scripts/run-dosbox-headless.sh`, or put
+  that wrapper on `PATH`.
 
 `nodes disconnect <n>` also closes an active door bridge for that node before
 normal disconnect cleanup.

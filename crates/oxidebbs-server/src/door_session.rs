@@ -542,7 +542,7 @@ async fn prepare_dosbox_serial_bridge(
 
 fn dosbox_serial_config(addr: SocketAddr) -> String {
     format!(
-        "[serial]\nserial1=nullmodem server:{} port:{} transparent:1 rxdelay:1000 txdelay:10\n",
+        "[sdl]\nwaitonerror=false\npause_when_inactive=false\nmute_when_inactive=true\n\n[dosbox]\nstartup_verbosity=quiet\n\n[serial]\nserial1=nullmodem server:{} port:{} transparent:1 rxdelay:1000 txdelay:10\n",
         addr.ip(),
         addr.port()
     )
@@ -995,6 +995,12 @@ mod tests {
 
         let config = dosbox_serial_config(addr);
 
+        assert!(config.contains("[sdl]"));
+        assert!(config.contains("waitonerror=false"));
+        assert!(config.contains("pause_when_inactive=false"));
+        assert!(config.contains("mute_when_inactive=true"));
+        assert!(config.contains("[dosbox]"));
+        assert!(config.contains("startup_verbosity=quiet"));
         assert!(config.contains("[serial]"));
         assert!(config.contains(
             "serial1=nullmodem server:127.0.0.1 port:43210 transparent:1 rxdelay:1000 txdelay:10"

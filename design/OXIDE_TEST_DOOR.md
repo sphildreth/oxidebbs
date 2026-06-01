@@ -94,6 +94,12 @@ These decisions are part of the implementation contract.
     to that listener.
   - `OXIDECHK.EXE` communicates over `COM1` UART-style, not through console
     stdio.
+- Generated DOSBox configs include quiet runtime settings:
+  `startup_verbosity=quiet`, `waitonerror=false`, `pause_when_inactive=false`,
+  and `mute_when_inactive=true`.
+- Plain DOSBox may still create an SDL window. Sysops who need a no-window
+  server-side launch can configure the runner to an absolute path for
+  `scripts/run-dosbox-headless.sh`, which wraps DOSBox with `xvfb-run`.
 - The v1 bridge is not a Rust FOSSIL TSR. A FOSSIL driver is a DOS-side
   interrupt/API component inside the emulated machine; OxideBBS v1 validates the
   host side by providing a real COM1/UART path that DOSBox exposes to the door.
@@ -658,6 +664,14 @@ The generated DOSBox command sequence must include a run-local config file:
 `OXDOSBOX.CONF` must contain:
 
 ```ini
+[sdl]
+waitonerror=false
+pause_when_inactive=false
+mute_when_inactive=true
+
+[dosbox]
+startup_verbosity=quiet
+
 [serial]
 serial1=nullmodem server:127.0.0.1 port:<bridge_port> transparent:1 rxdelay:1000 txdelay:10
 ```

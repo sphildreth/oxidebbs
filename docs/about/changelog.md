@@ -43,6 +43,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added an opt-in `scripts/test-oxide-door-dosbox.sh` smoke test for maintainers
   that drives `OXIDECHK.EXE` over the DOSBox COM1 bridge and verifies
   `OXIDECHK.RPT` creation.
+- Added `scripts/run-dosbox-headless.sh` as an optional Xvfb wrapper for sysops
+  who want live DOS doors to run without a visible DOSBox window.
 
 ### Changed
 
@@ -89,6 +91,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   COM1 serial bridge is exercised.
 - Clarified that normal Rust build and validation remain independent of DOSBox and
   maintainer-only Free Pascal rebuild tooling.
+- Clarified user-facing door documentation with the exact telnet-to-OxideBBS-to-
+  DOSBox-COM1 byte path used by live DOS door sessions.
+- Live DOSBox door runs now receive quiet runtime settings
+  (`startup_verbosity=quiet`, `waitonerror=false`, `pause_when_inactive=false`,
+  and `mute_when_inactive=true`) in the generated per-node DOSBox config.
 
 ### Removed
 

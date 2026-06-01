@@ -163,6 +163,23 @@ The bridge is local loopback:
 serial1=nullmodem server:127.0.0.1 port:<bridge_port> transparent:1 rxdelay:1000 txdelay:10
 ```
 
+The generated DOSBox config is quiet by default:
+
+```ini
+[sdl]
+waitonerror=false
+pause_when_inactive=false
+mute_when_inactive=true
+
+[dosbox]
+startup_verbosity=quiet
+```
+
+These settings suppress DOSBox startup noise and avoid inactive-window pauses,
+but they do not make DOSBox truly headless. For server hosts that should not
+show a DOSBox window, install Xvfb and configure the door runner with an absolute
+path to `scripts/run-dosbox-headless.sh`.
+
 OxideBBS receives caller telnet bytes, writes them to the bridge socket, and
 DOSBox exposes them to the door as COM1 input. Door output follows the same path
 in reverse: the door writes to COM1, DOSBox sends those bytes to the bridge

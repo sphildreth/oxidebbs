@@ -157,6 +157,8 @@ This is intended for a local coding agent to work from.
   `C:\`, and `OXNODE.TXT` diagnostics.
 - [x] Convert `OXIDECHK.EXE` and live caller launch to validate COM1 serial I/O
   through a run-local Rust TCP bridge instead of DOSBox console/stdout.
+- [x] Add quiet DOSBox runtime config and optional `xvfb-run` wrapper support
+  for sysops who want live DOS doors without a visible DOSBox window.
 - [x] Update changelog with the user-facing test-door documentation and config
   behavior.
 - [x] Add optional DOSBox smoke script that is skipped unless explicitly run

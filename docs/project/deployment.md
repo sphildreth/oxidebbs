@@ -33,6 +33,22 @@ cargo run -p oxidebbs-server -- --config /etc/oxidebbs/oxidebbs.toml serve
 sudo apt-get install -y dosbox
 ```
 
+For hosts that should run DOSBox without a visible SDL window, also install
+Xvfb and configure door definitions to use the headless wrapper:
+
+```bash
+sudo apt-get install -y xvfb
+```
+
+```toml
+runner = "/path/to/oxidebbs/scripts/run-dosbox-headless.sh"
+```
+
+Use an absolute wrapper path or place the wrapper on `PATH`; live door processes
+run from the node runtime directory. The wrapper still launches DOSBox, but does
+so under `xvfb-run` with dummy SDL audio. OxideBBS continues to pass the same
+run-local DOSBox config and COM1 bridge arguments.
+
 5. Validate and dry-run the bundled test door:
 
 ```bash
@@ -50,6 +66,9 @@ Confirm the process uses the local COM1 serial bridge path:
 - `DOSBox` starts with
   `serial1=nullmodem server:127.0.0.1 port:<bridge_port> transparent:1 rxdelay:1000 txdelay:10`
   for this run.
+- DOSBox receives quiet runtime settings:
+  `startup_verbosity=quiet`, `waitonerror=false`, `pause_when_inactive=false`,
+  and `mute_when_inactive=true`.
 - the Rust TCP bridge accepts the local bridge connection,
 - caller telnet bytes are forwarded by OxideBBS to the bridge socket and appear
   to the door as COM1 input, and

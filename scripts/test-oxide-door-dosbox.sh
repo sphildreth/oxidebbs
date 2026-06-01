@@ -4,8 +4,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 
-if ! command -v dosbox >/dev/null 2>&1; then
-  printf 'SKIP: dosbox not found\n'
+DOSBOX_BIN="${DOSBOX_BIN:-dosbox}"
+
+if ! command -v "$DOSBOX_BIN" >/dev/null 2>&1; then
+  printf 'SKIP: DOSBox executable %s not found\n' "$DOSBOX_BIN"
   exit 77
 fi
 
@@ -39,6 +41,14 @@ printf 'OxideBBS\r\nSysop\r\nCOM1\r\n38400 BAUD,N,8,1\r\n0\r\nTest\r\nCaller\r\n
 printf 'node=1\r\n' > "$RUNTIME_DIR/OXNODE.TXT"
 
 cat > "$DOSBOX_CONF" <<EOF
+[sdl]
+waitonerror=false
+pause_when_inactive=false
+mute_when_inactive=true
+
+[dosbox]
+startup_verbosity=quiet
+
 [serial]
 serial1=nullmodem server:127.0.0.1 port:$SERIAL_PORT transparent:1 rxdelay:1000 txdelay:10
 EOF
@@ -64,7 +74,7 @@ NC_PID=$!
 trap 'kill "$NC_PID" >/dev/null 2>&1 || true' EXIT
 
 DOSBOX_CMD=(
-  dosbox
+  "$DOSBOX_BIN"
   --noprimaryconf
   --nolocalconf
   --conf "$DOSBOX_CONF"

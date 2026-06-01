@@ -63,6 +63,9 @@ For DOSBox execution:
 - map `COM1` inside DOSBox using
   `serial1=nullmodem server:127.0.0.1 port:<bridge_port> transparent:1 rxdelay:1000 txdelay:10`
   to that bridge
+- set quiet per-run DOSBox options in the generated config:
+  `startup_verbosity=quiet`, `waitonerror=false`, `pause_when_inactive=false`,
+  and `mute_when_inactive=true`
 - add `C:\` to DOS `PATH` and run bare commands by name so `D:` remains the
   current runtime directory for drop-file reads and report writes
 - write `OXNODE.TXT` into the node runtime directory as Oxide-owned diagnostic metadata
@@ -123,6 +126,10 @@ Bridge behavior:
 - Start a per-door Rust TCP bridge bound to localhost and expose it to the runner.
 - Launch DOSBox with `serial1=nullmodem server:127.0.0.1 port:<bridge_port> transparent:1 rxdelay:1000 txdelay:10`
   so `COM1` reaches the bridge.
+- Launch DOSBox with generated quiet runtime settings. These suppress startup
+  noise and avoid inactive-window pauses, but plain DOSBox can still create a
+  visible SDL window. Sysops who need no visible window should configure an
+  Xvfb-backed runner wrapper.
 - Forward serial bytes bidirectionally between the bridge socket and the caller
   `Transport`.
 - Keep heartbeats fresh while the door bridge is active.
