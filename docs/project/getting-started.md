@@ -70,9 +70,9 @@ cargo run -p oxidebbs-server -- audit recent
 cargo run -p oxidebbs-server -- db doctor
 ```
 
-Use `--json` on commands that support machine-readable output. The original
-`admin` group remains as a compatibility alias. See the [Sysop CLI](./sysop-cli)
-guide for the full command surface and current live-control limits.
+Use `--json` on commands that support machine-readable output. See the
+[Sysop CLI](./sysop-cli) guide for the full command surface and current
+live-control limits.
 
 ## Documentation Site
 

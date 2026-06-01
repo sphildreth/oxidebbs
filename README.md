@@ -142,8 +142,6 @@ cargo run -p oxidebbs-server -- ansi list
 cargo run -p oxidebbs-server -- db doctor
 ```
 
-The original `admin` command group remains as a compatibility alias.
-
 ## Documentation site
 
 The documentation site is built with VitePress from `docs/` and deployed to

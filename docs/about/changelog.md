@@ -7,7 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-No unreleased changes yet.
+### Changed
+
+- Extracted sysop CLI command handlers into `oxidebbs-server::commands`
+  modules as a no-behavior-change structural refactor before live control
+  socket work.
+
+### Removed
+
+- Removed the legacy top-level `admin` CLI alias group during early development;
+  use the direct top-level sysop command groups instead.
 
 ## [0.2.0] - 2026-06-01
 

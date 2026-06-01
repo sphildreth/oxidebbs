@@ -26,9 +26,6 @@ Global options:
 -v, --verbose
 ```
 
-The old `admin` group remains as a compatibility alias for the first local
-admin commands.
-
 ## Operational Notes
 
 `setup` writes a starter config, initializes DecentDB, creates the initial sysop

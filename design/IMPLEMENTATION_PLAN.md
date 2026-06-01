@@ -17,7 +17,7 @@ Status values:
 | Phase | Status | Goal | Primary Output |
 | --- | --- | --- | --- |
 | Phase 0 — Current Baseline | COMPLETE | CLI-first sysop interface, schema v3, docs, and release metadata are present. | `oxidebbs-server` exposes top-level sysop command groups. |
-| Phase 0.5 — Structural Extraction Gate | TODO | Reduce server monolith risk before adding live control behavior. | Command handler modules, `sysop_cli.rs` under 1000 lines, validated no-behavior-change refactor. |
+| Phase 0.5 — Structural Extraction Gate | COMPLETE | Reduce server monolith risk before adding live control behavior. | Command handler modules, `sysop_cli.rs` under 1000 lines, validated no-behavior-change refactor. |
 | Phase 1 — Local Server Control Plane | TODO | Let sysop CLI commands control a running local server process. | Local control socket, command protocol, node command integration. |
 | Phase 2 — Live Node Heartbeats And State | TODO | Make node status authoritative while the server is running. | Node registry, heartbeat timestamps, stale detection, status output. |
 | Phase 3 — Live Door Launch Integration | TODO | Replace caller-facing door placeholder with controlled door execution. | Door menu launch path, run records, drop files, timeout cleanup. |
@@ -114,7 +114,6 @@ Status: `COMPLETE`
 The current baseline after the CLI-first sysop implementation includes:
 
 - Top-level `oxidebbs-server` command groups:
-  - `admin`
   - `ansi`
   - `audit`
   - `check`
@@ -152,7 +151,7 @@ Do not re-implement this phase unless a regression is found.
 
 ## Phase 0.5 — Structural Extraction Gate
 
-Status: `TODO`
+Status: `COMPLETE`
 
 ### Objective
 
@@ -192,8 +191,7 @@ Move command handler logic out of `sysop_cli.rs`:
   door checks, and door sync helpers belong with `commands/doors.rs`.
 - Keep shared CLI types, common error types, `print_json`, `emit_ok`, and small
   parser/dispatch glue in `sysop_cli.rs` only when they are genuinely shared.
-- Preserve the current command names, aliases, help text, and output behavior.
-- Keep backwards-compatible `admin` aliases.
+- Preserve the current command names, help text, and output behavior.
 - Do not add control-socket behavior in this phase.
 
 ### Line-Count Target
@@ -227,6 +225,19 @@ or behavior.
 - Command handler logic has moved out of `sysop_cli.rs`.
 - `sysop_cli.rs` is under `1000` lines.
 - `./scripts/dev-check.sh` passes before Phase 1 begins.
+
+### Phase 0.5 Completion Notes
+
+- Command handlers and command-specific Clap types now live under
+  `crates/oxidebbs-server/src/commands/`, including the required command
+  modules plus `serve.rs`, `setup.rs`, and `sysop.rs`.
+- `sysop_cli.rs` remains the parser/dispatch boundary and owns shared CLI
+  context, error, JSON output, prompt, audit, and small database lookup helpers.
+- The extraction intentionally does not add control-socket behavior. Phase 1
+  remains responsible for live server control.
+- Top-level help order was manually verified after extraction:
+  `ansi`, `audit`, `check`, `config`, `db`, `doors`, `logs`, `messages`,
+  `nodes`, `serve`, `setup`, `status`, `sysop`, `users`.
 
 ## Phase 1 — Local Server Control Plane
 
@@ -1168,7 +1179,6 @@ Top-level help should remain alphabetized, with Clap's generated `help` command
 allowed at the bottom:
 
 ```text
-admin
 ansi
 audit
 check
@@ -1445,28 +1455,30 @@ npm run docs:build
 
 ## Recommended Immediate Next Step
 
-Start with **Phase 0.5 — Structural Extraction Gate**.
+Start with **Phase 1 — Local Server Control Plane**.
 
 The next implementation sequence is:
 
-1. Create `crates/oxidebbs-server/src/commands/`.
-2. Move command handlers out of `sysop_cli.rs` until `sysop_cli.rs` is under
-   `1000` lines.
-3. Run `./scripts/dev-check.sh`.
-4. Then proceed to **Phase 1 — Local Server Control Plane**.
+1. Keep new live-control client behavior in `commands/status.rs` and
+   `commands/nodes.rs`.
+2. Add the local-only control socket and protocol under
+   `crates/oxidebbs-server/src/control.rs`.
+3. Preserve the existing offline fallback messages when no live control socket
+   is reachable.
+4. Run `./scripts/dev-check.sh` before proceeding to Phase 2.
 
 This ordering matters because the CLI already presents live node-control
 commands, and Phase 1 needs to add control-socket client behavior to several of
-those handlers. Adding that logic before extraction would make the current CLI
-monolith harder to review and test.
+those extracted handlers.
 
 ## Implementation Notes For Coding Agents
 
 - Work one phase at a time.
 - Keep commits scoped to the phase.
 - Before editing, read the modules named in that phase.
-- Do not expand `sysop_cli.rs` further. Complete Phase 0.5 first.
-- Do not remove compatibility aliases unless explicitly requested.
+- Do not add substantial command handler logic back to `sysop_cli.rs`; keep it
+  as parser/dispatch glue and shared CLI helpers.
+- Do not remove active command names unless explicitly requested.
 - Do not introduce a remote admin service.
 - If a phase exposes a behavior as implemented in CLI help, it must either work
   or clearly return an explicit unsupported/offline message.

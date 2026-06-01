@@ -83,7 +83,7 @@ Validate the generated config:
 cargo run -p oxidebbs-server -- --config config/oxidebbs.toml check
 ```
 
-Then inspect local admin commands:
+Then inspect local sysop commands:
 
 ```bash
 cargo run -p oxidebbs-server -- --config config/oxidebbs.toml users list

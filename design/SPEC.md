@@ -296,9 +296,6 @@ The server exposes CLI-first local sysop command groups:
   JSON export
 - `logs`, `audit`, and `config` for local troubleshooting
 
-The legacy `admin` command group remains as an alias for the original local
-commands.
-
 Live node disconnect/message/broadcast delivery is recorded as audit intent
 until a local server control socket and heartbeat model exist. `db import` and
 `db compact` are explicit command boundaries but remain blocked until DecentDB

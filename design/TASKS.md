@@ -93,7 +93,7 @@ This is intended for a local coding agent to work from.
 
 ## Phase 9 — Sysop CLI/TUI
 
-- [x] Add admin command group.
+- [x] Add local sysop command foundation.
 - [x] Add top-level CLI-first sysop command groups.
 - [x] Add global config, data-path, JSON, no-color, and verbosity options.
 - [x] Add setup, check, serve dry-run, and status commands.
@@ -110,6 +110,8 @@ This is intended for a local coding agent to work from.
 - [x] Show recent calls.
 - [x] Test door config.
 - [x] Prototype Ratatui sysop console.
+- [x] Extract sysop CLI command handlers into `oxidebbs-server::commands`
+  modules before adding live server control behavior.
 - [ ] Add live server control socket for node disconnect/message/broadcast delivery.
 - [ ] Specify DecentDB restore and compaction semantics before enabling `db import` and `db compact`.
 
