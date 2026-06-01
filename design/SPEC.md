@@ -181,6 +181,11 @@ Drop files to support early:
 - `DOORFILE.SR`
 - `CHAIN.TXT`
 
+The initial implementation includes `DOOR.SYS` and `DORINFO1.DEF` generation,
+per-node runtime directory helpers, dry-run execution, DOSBox command planning,
+timeout handling, and DecentDB door-run records. Additional drop-file formats
+remain compatible with this boundary.
+
 ## 9. Configuration
 
 Configuration should be TOML.
@@ -204,9 +209,76 @@ runtime = "./runtime"
 
 [nodes]
 count = 4
+
+[flow]
+login_screen = "login"
+login_menu = "login"
+post_login_screens = ["screen1", "screen2"]
+main_menu = "main"
+
+[screens.login]
+ansi = "login/login.ans"
+ansi_40 = "login/login-40.ans"
+ascii = "login/login.asc"
+text = "login/login.txt"
+
+[menus.main]
+screen = "main_menu"
+prompt = "Command? "
+
+[[menus.main.items]]
+key = "D"
+label = "Doors"
+action = "doors"
 ```
 
-## 10. Observability
+Menu item actions must resolve to safe internal actions such as login, new user,
+doors, messages, logoff, show screen, submenu, or no-op. Configured menu keys
+are single ASCII characters and route case-insensitively. Screen assets are
+selected from the best variant supported by the caller, with 40-column ANSI
+preferred for ANSI callers at 40 columns or less.
+
+## 10. Users and authentication
+
+New-user and login flows are modeled in `oxidebbs-core`. User registration
+normalizes profile fields, applies starter security defaults, and requires a
+precomputed password hash. Login verifies aliases case-insensitively, rejects
+inactive or locked accounts, and updates call counters after a successful
+password verification.
+
+Password hashes must use Argon2id PHC strings. Core code accepts a verifier
+boundary so cryptographic verification can live in the server/auth adapter
+without weakening domain tests.
+
+## 11. Local messages
+
+Message commands cover posting, reading visible messages, replies, private mail
+recipient targeting, and local moderation state changes. Security levels gate
+read and post operations. Moderated areas create pending messages until a sysop
+approves or deletes them.
+
+## 12. Sysop tooling
+
+The server exposes an `admin` command group for local sysop operations:
+
+- list users
+- reset a password hash
+- list active node sessions
+- show recent audit events
+- validate a `doors.toml` file
+- render a text preview of the local Ratatui sysop console
+
+Remote callers must never see Ratatui output; Ratatui remains local sysop/admin
+UI only.
+
+## 13. FTN/OxideNet boundary
+
+FTN/OxideNet support starts with core domain types for FTN addresses,
+echomail-area mappings, netmail messages, duplicate-detection keys, and packet
+import/export boundaries. Packet parsing, bundling, compression, and transport
+remain future infrastructure behind this boundary.
+
+## 14. Observability
 
 Use structured logging.
 
@@ -225,7 +297,7 @@ Required events:
 - db_write_failed
 - config_loaded
 
-## 11. Error handling
+## 15. Error handling
 
 - Avoid panics in long-running server paths.
 - Use domain-specific errors.
@@ -233,7 +305,7 @@ Required events:
 - Preserve caller-friendly messages.
 - Never expose sensitive config or password hashes to callers.
 
-## 12. Testing strategy
+## 16. Testing strategy
 
 Required test categories:
 

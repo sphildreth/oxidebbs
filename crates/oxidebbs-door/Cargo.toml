@@ -6,3 +6,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+oxidebbs-core = { path = "../oxidebbs-core" }
+serde.workspace = true
+thiserror.workspace = true
+toml.workspace = true

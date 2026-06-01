@@ -11,6 +11,7 @@ oxidebbs-term = { path = "../oxidebbs-term" }
 oxidebbs-telnet = { path = "../oxidebbs-telnet" }
 oxidebbs-db = { path = "../oxidebbs-db" }
 oxidebbs-door = { path = "../oxidebbs-door" }
+oxidebbs-sysop = { path = "../oxidebbs-sysop" }
 clap.workspace = true
 serde.workspace = true
 thiserror.workspace = true

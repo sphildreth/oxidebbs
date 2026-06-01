@@ -5,84 +5,84 @@
 - [x] Workspace compiles
 - [x] Documentation baseline
 - [x] Example config
-- [ ] ADRs established
+- [x] ADRs established
 - [x] Basic CI checks
 
 ## Milestone 1 — Terminal foundation
 
-- [ ] ANSI asset loader
-- [ ] CP437 conversion helper
-- [ ] Screen renderer
+- [x] ANSI asset loader
+- [x] CP437 conversion helper
+- [x] Screen renderer
 - [ ] Line input
-- [ ] Pager
+- [x] Pager
 - [ ] Welcome/logoff screens
 
 ## Milestone 2 — Telnet sessions
 
 - [ ] Telnet listener
-- [ ] Telnet negotiation parser
-- [ ] Transport trait
-- [ ] Session task lifecycle
+- [x] Telnet negotiation parser
+- [x] Transport trait
+- [x] Session task lifecycle
 - [ ] Node assignment
 - [ ] Idle timeout
 - [ ] Clean disconnect
 
 ## Milestone 3 — Users and menus
 
-- [ ] New user flow
-- [ ] Login flow
-- [ ] Password hashing
-- [ ] User stats
-- [ ] Security level
-- [ ] Configurable menus
-- [ ] Hotkey routing
+- [x] New user flow
+- [x] Login flow
+- [x] Password hashing
+- [x] User stats
+- [x] Security level
+- [x] Configurable menus
+- [x] Hotkey routing
 
 ## Milestone 4 — DecentDB persistence
 
-- [ ] Database open/init
-- [ ] Schema/version tracking
-- [ ] User repository
-- [ ] Message repository
-- [ ] Door repository
-- [ ] Audit event repository
+- [x] Database open/init
+- [x] Schema/version tracking
+- [x] User repository
+- [x] Message repository
+- [x] Door repository
+- [x] Audit event repository
 - [ ] DbWriter service
 
 ## Milestone 5 — Local messages
 
-- [ ] Message areas
-- [ ] Read message
-- [ ] Post message
-- [ ] Reply to message
-- [ ] Private mail foundation
-- [ ] Moderation primitives
+- [x] Message areas
+- [x] Read message
+- [x] Post message
+- [x] Reply to message
+- [x] Private mail foundation
+- [x] Moderation primitives
 
 ## Milestone 6 — Doors
 
-- [ ] Door definition TOML
-- [ ] Node runtime directories
-- [ ] DOOR.SYS writer
-- [ ] DORINFO1.DEF writer
-- [ ] Door test command
-- [ ] DOSBox runner
-- [ ] Timeout cleanup
-- [ ] Door run logging
+- [x] Door definition TOML
+- [x] Node runtime directories
+- [x] DOOR.SYS writer
+- [x] DORINFO1.DEF writer
+- [x] Door test command
+- [x] DOSBox runner
+- [x] Timeout cleanup
+- [x] Door run logging
 
 ## Milestone 7 — Sysop tools
 
-- [ ] CLI user management
-- [ ] CLI node view
-- [ ] CLI door test
-- [ ] CLI config check
-- [ ] Local Ratatui console prototype
+- [x] CLI user management
+- [x] CLI node view
+- [x] CLI door test
+- [x] CLI config check
+- [x] Local Ratatui console prototype
 
 ## Milestone 8 — FTN/OxideNet foundation
 
-- [ ] Network address model
-- [ ] Echomail-ready schema
-- [ ] Netmail-ready schema
-- [ ] Area mapping
-- [ ] Duplicate detection design
-- [ ] Packet import/export design
+- [x] Network address model
+- [x] Echomail-ready schema
+- [x] Netmail-ready schema
+- [x] Area mapping
+- [x] Duplicate detection design
+- [x] Packet import/export design
 
 ## Future
 

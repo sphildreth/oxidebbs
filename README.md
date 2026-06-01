@@ -16,7 +16,10 @@ The project is intentionally retro in user experience and modern in implementati
 
 ## Current status
 
-This is a starter repository scaffold. It is meant to give the project shape before implementation begins.
+This is a starter implementation with tested Rust crates for configuration,
+terminal assets, telnet negotiation, DecentDB repositories, menu routing, local
+message commands, door drop files, and local sysop tooling. The long-running
+telnet session server is still being assembled.
 
 ## Repository layout
 
@@ -50,9 +53,11 @@ This is a starter repository scaffold. It is meant to give the project shape bef
 │   ├── project/             # project documentation pages
 │   └── public/              # static files copied into the site build
 ├── config/
+│   ├── doors.example.toml
 │   └── oxidebbs.example.toml
 ├── assets/
-│   └── ansi/
+│   ├── ansi/
+│   └── screens/             # login, info, and menu screen assets
 ├── Cargo.lock
 ├── package.json
 ├── package-lock.json

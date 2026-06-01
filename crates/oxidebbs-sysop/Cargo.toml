@@ -6,3 +6,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+oxidebbs-db = { path = "../oxidebbs-db" }
+oxidebbs-door = { path = "../oxidebbs-door" }
+ratatui = { version = "0.30.0", default-features = false }
+thiserror.workspace = true

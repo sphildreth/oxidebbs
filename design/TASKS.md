@@ -25,10 +25,10 @@ This is intended for a local coding agent to work from.
 
 - [x] Add ANSI writer helper.
 - [x] Add CP437 byte/string helper.
-- [ ] Add screen asset loader.
-- [ ] Add 40-column screen asset selection.
-- [ ] Add plain text fallback renderer.
-- [ ] Add width-aware menu/status/pager layout tests.
+- [x] Add screen asset loader.
+- [x] Add 40-column screen asset selection.
+- [x] Add plain text fallback renderer.
+- [x] Add width-aware menu/status/pager layout tests.
 - [x] Add tests for CP437 round-trip cases.
 - [x] Add tests for ANSI escape generation.
 - [x] Add ANSI escape sequence parser.
@@ -36,11 +36,11 @@ This is intended for a local coding agent to work from.
 ## Phase 4 — Telnet
 
 - [x] Define `Transport` trait.
-- [ ] Add telnet parser for IAC sequences.
-- [ ] Support basic WILL/WONT/DO/DONT.
-- [ ] Add terminal type negotiation later.
-- [ ] Add NAWS/window-size support later.
-- [ ] Add session lifecycle logging.
+- [x] Add telnet parser for IAC sequences.
+- [x] Support basic WILL/WONT/DO/DONT.
+- [x] Add terminal type negotiation later.
+- [x] Add NAWS/window-size support later.
+- [x] Add session lifecycle logging.
 - [x] Add integration test with loopback transport.
 
 ## Phase 5 — DecentDB
@@ -56,50 +56,50 @@ This is intended for a local coding agent to work from.
 ## Phase 6 — Users and menus
 
 - [x] Add user model.
-- [ ] Add password hashing decision ADR.
-- [ ] Add new user flow.
-- [ ] Add login flow.
-- [ ] Add menu model.
-- [ ] Add menu command router.
-- [ ] Add basic main menu.
+- [x] Add password hashing decision ADR.
+- [x] Add new user flow.
+- [x] Add login flow.
+- [x] Add menu model.
+- [x] Add menu command router.
+- [x] Add basic main menu.
 
 ## Phase 7 — Doors
 
 - [x] Add door definition model.
-- [ ] Parse `doors.toml`.
-- [ ] Add node runtime directory handling.
-- [ ] Add DOOR.SYS generation.
-- [ ] Add DORINFO1.DEF generation.
-- [ ] Add dry-run door test.
-- [ ] Add DOSBox runner.
-- [ ] Add timeout and disconnect cleanup.
-- [ ] Record door runs in DecentDB.
+- [x] Parse `doors.toml`.
+- [x] Add node runtime directory handling.
+- [x] Add DOOR.SYS generation.
+- [x] Add DORINFO1.DEF generation.
+- [x] Add dry-run door test.
+- [x] Add DOSBox runner.
+- [x] Add timeout and disconnect cleanup.
+- [x] Record door runs in DecentDB.
 
 ## Phase 8 — Messages
 
 - [x] Add message area model.
 - [x] Add message model.
-- [ ] Add post message command.
-- [ ] Add read message command.
-- [ ] Add reply command.
-- [ ] Add private mail foundation.
-- [ ] Add local-only moderation.
+- [x] Add post message command.
+- [x] Add read message command.
+- [x] Add reply command.
+- [x] Add private mail foundation.
+- [x] Add local-only moderation.
 
 ## Phase 9 — Sysop CLI/TUI
 
-- [ ] Add admin command group.
-- [ ] List users.
-- [ ] Reset password.
-- [ ] List nodes.
-- [ ] Show recent calls.
-- [ ] Test door config.
-- [ ] Prototype Ratatui sysop console.
+- [x] Add admin command group.
+- [x] List users.
+- [x] Reset password.
+- [x] List nodes.
+- [x] Show recent calls.
+- [x] Test door config.
+- [x] Prototype Ratatui sysop console.
 
 ## Phase 10 — FTN/OxideNet design
 
-- [ ] Add ADR for FTN abstraction.
-- [ ] Define network address model.
-- [ ] Define echomail area mapping.
-- [ ] Define netmail model.
-- [ ] Define duplicate detection approach.
-- [ ] Define packet import/export boundary.
+- [x] Add ADR for FTN abstraction.
+- [x] Define network address model.
+- [x] Define echomail area mapping.
+- [x] Define netmail model.
+- [x] Define duplicate detection approach.
+- [x] Define packet import/export boundary.

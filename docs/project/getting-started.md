@@ -26,6 +26,18 @@ sudo apt-get install -y clang libclang-dev
 That script runs formatting, workspace checks, tests, and clippy with the
 committed lockfile.
 
+## Local Admin Commands
+
+The starter server binary includes a local `admin` command group:
+
+```bash
+cargo run -p oxidebbs-server -- --config config/oxidebbs.example.toml admin users
+cargo run -p oxidebbs-server -- --config config/oxidebbs.example.toml admin nodes
+cargo run -p oxidebbs-server -- --config config/oxidebbs.example.toml admin recent-calls
+```
+
+Password resets accept a new password hash, not a plaintext password.
+
 ## Documentation Site
 
 ```bash

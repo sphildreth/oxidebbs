@@ -23,6 +23,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added VitePress documentation under `docs/`, including GitHub Pages deployment
   support for `https://oxidebbs.com`.
 - Added GitHub Actions CI for Rust checks and documentation builds.
+- Added the first configurable menu model, safe key-to-action routing, login and
+  main menu config, terminal-capability screen selection, and starter
+  `assets/screens/` layout.
+- Added terminal screen asset loading, plain-text fallback rendering,
+  width-aware menu/status/pager helpers, telnet IAC negotiation parsing,
+  terminal type and NAWS events, core user/login/message flows, door drop-file
+  generation and runners, DecentDB message/session/door repositories, sysop
+  admin commands, and FTN/OxideNet domain models.
 
 ### Changed
 

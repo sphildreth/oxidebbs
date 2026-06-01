@@ -15,6 +15,7 @@ path = "./data/oxidebbs.ddb"
 
 [paths]
 ansi = "./assets/ansi"
+screens = "./assets/screens"
 doors = "./doors"
 runtime = "./runtime"
 logs = "./logs"
@@ -27,6 +28,80 @@ default_encoding = "cp437"
 clear_screen_on_connect = true
 welcome_screen = "welcome.ans"
 logoff_screen = "logoff.ans"
+
+[flow]
+login_screen = "login"
+login_menu = "login"
+post_login_screens = ["screen1", "screen2"]
+main_menu = "main"
+
+[screens.login]
+ansi = "login/login.ans"
+ansi_40 = "login/login-40.ans"
+ascii = "login/login.asc"
+text = "login/login.txt"
+
+[screens.screen1]
+ansi = "info/screen1.ans"
+ascii = "info/screen1.asc"
+text = "info/screen1.txt"
+pause = true
+
+[screens.screen2]
+ansi = "info/screen2.ans"
+ascii = "info/screen2.asc"
+text = "info/screen2.txt"
+pause = true
+
+[screens.main_menu]
+ansi = "menus/main/main.ans"
+ansi_40 = "menus/main/main-40.ans"
+ascii = "menus/main/main.asc"
+text = "menus/main/main.txt"
+pause = false
+
+[menus.main]
+screen = "main_menu"
+prompt = "Command? "
+
+[menus.login]
+screen = "login"
+prompt = "Login? "
+
+[[menus.login.items]]
+key = "L"
+label = "Logon"
+action = "login"
+
+[[menus.login.items]]
+key = "N"
+label = "New User"
+action = "new_user"
+
+[[menus.login.items]]
+key = "G"
+label = "Goodbye"
+action = "logoff"
+
+[[menus.main.items]]
+key = "D"
+label = "Doors"
+action = "doors"
+
+[[menus.main.items]]
+key = "M"
+label = "Messages"
+action = "messages"
+
+[[menus.main.items]]
+key = "N"
+label = "New User"
+action = "new_user"
+
+[[menus.main.items]]
+key = "L"
+label = "Logoff"
+action = "logoff"
 
 [doors]
 enabled = true

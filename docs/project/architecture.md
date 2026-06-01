@@ -49,3 +49,16 @@ The remote caller UI must support both 80-column and 40-column terminal
 profiles. Menus, prompts, status bars, wrapping, paging, and ANSI assets should
 fit the active terminal width without corrupting CP437 art or truncating
 commands.
+
+## Menus
+
+Menus are configured as safe key-to-action mappings. Screen assets draw the
+visual menu, while menu entries decide what a pressed key does. The current
+starter config models a login menu, optional post-login screens, and a main
+menu.
+
+The current implementation also includes pure core flows for new-user creation,
+login state updates, local message commands, private mail targeting, moderation
+state changes, and FTN/OxideNet address and packet-boundary models. Door support
+has tested drop-file generation, per-node runtime directories, dry-run planning,
+DOSBox command planning, and DecentDB run logging helpers.

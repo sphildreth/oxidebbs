@@ -5,7 +5,10 @@ use std::path::Path;
 pub use decentdb::{Db, DbConfig, DbError, QueryResult, QueryRow, Value};
 
 mod audit_repo;
+mod door_repo;
+mod message_repo;
 mod schema;
+mod session_repo;
 mod user_repo;
 
 pub const SCHEMA_VERSION: i64 = 1;
@@ -13,9 +16,21 @@ pub const SCHEMA_VERSION: i64 = 1;
 pub use audit_repo::{
     AuditEventRecord, insert_audit_event, list_audit_events, list_audit_events_for_user,
 };
+pub use door_repo::{
+    DoorDefinitionRecord, DoorRunRecord, finish_door_run, insert_door_definition, insert_door_run,
+    list_door_definitions, list_door_runs,
+};
+pub use message_repo::{
+    MessageAreaRecord, MessageRecord, find_message_area_by_key, insert_message,
+    insert_message_area, list_message_areas, list_messages_in_area, update_message_visibility,
+};
 pub use schema::schema_version as read_schema_version;
+pub use session_repo::{
+    SessionRecord, end_session, insert_session, list_active_sessions, list_recent_sessions,
+};
 pub use user_repo::{
     UserRecord, find_user_by_alias, find_user_by_id, insert_user, list_users, update_user_login,
+    update_user_password_hash,
 };
 
 pub struct OxideDb {

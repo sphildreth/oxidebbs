@@ -75,6 +75,17 @@ pub fn update_user_login(db: &Db, id: &str, login_at: &str) -> decentdb::Result<
     Ok(())
 }
 
+pub fn update_user_password_hash(db: &Db, id: &str, password_hash: &str) -> decentdb::Result<()> {
+    db.execute_with_params(
+        "UPDATE users SET password_hash = $1 WHERE id = $2",
+        &[
+            Value::Text(password_hash.to_string()),
+            Value::Text(id.to_string()),
+        ],
+    )?;
+    Ok(())
+}
+
 fn row_to_user(row: &decentdb::QueryRow) -> UserRecord {
     let values = row.values();
     UserRecord {
@@ -212,5 +223,16 @@ mod tests {
         insert_user(&db, &sample_user("eve")).expect("insert");
         let result = insert_user(&db, &sample_user("eve"));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn update_password_hash_replaces_hash() {
+        let db = test_db();
+        insert_user(&db, &sample_user("frank")).expect("insert");
+
+        update_user_password_hash(&db, "uid-frank", "$argon2id$new").expect("update hash");
+
+        let found = find_user_by_id(&db, "uid-frank").expect("find").unwrap();
+        assert_eq!(found.password_hash, "$argon2id$new");
     }
 }

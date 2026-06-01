@@ -20,6 +20,7 @@ export default defineConfig({
     nav: [
       { text: 'Guide', link: '/project/getting-started' },
       { text: 'Architecture', link: '/project/architecture' },
+      { text: 'Menus', link: '/project/menus' },
       { text: 'Versioning', link: '/project/versioning' },
       { text: 'Changelog', link: '/about/changelog' }
     ],
@@ -30,6 +31,7 @@ export default defineConfig({
           { text: 'Overview', link: '/' },
           { text: 'Getting Started', link: '/project/getting-started' },
           { text: 'Architecture', link: '/project/architecture' },
+          { text: 'Menu System', link: '/project/menus' },
           { text: 'Versioning', link: '/project/versioning' },
           { text: 'Deployment', link: '/project/deployment' }
         ]

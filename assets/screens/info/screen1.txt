@@ -1,0 +1,3 @@
+Welcome to OxideBBS.
+This starter screen is shown after login when configured.
+
