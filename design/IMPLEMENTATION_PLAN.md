@@ -77,10 +77,46 @@ Every phase is complete only when all of the following are true:
 - Do not bundle copyrighted or abandonware DOS doors.
 - Shared dependencies belong in root `[workspace.dependencies]`. Use
   `cargo add`; do not hand-edit dependency versions.
+- `serde_json` is already a workspace dependency and is the required JSON
+  implementation for CLI output and the local control protocol. Do not add a
+  second JSON crate.
 - Do not hold locks across `.await`. If shared runtime state is needed, use a
   narrow synchronous critical section and drop the guard before awaiting.
 - Prefer small, typed command/request/response structs over stringly typed
   maps inside Rust code.
+
+## Structural Risks To Address Early
+
+The current `crates/oxidebbs-server/src/sysop_cli.rs` file is large
+(`2694` lines at the time this plan was written). Future phases must not keep
+adding substantial handler logic to that monolith.
+
+Before implementing Phase 1 control-socket integration, extract command handlers
+into focused modules under:
+
+```text
+crates/oxidebbs-server/src/commands/
+```
+
+Recommended initial split:
+
+```text
+commands/status.rs
+commands/nodes.rs
+commands/doors.rs
+commands/messages.rs
+commands/users.rs
+commands/db.rs
+commands/ansi.rs
+commands/logs.rs
+commands/audit.rs
+commands/config.rs
+```
+
+`sysop_cli.rs` should retain the Clap type definitions, top-level dispatch, and
+small shared formatting helpers only. If a phase would push `sysop_cli.rs` over
+`3000` lines, stop and extract handlers first. This is a required maintenance
+step, not optional cleanup.
 
 ## Phase 0 — Current Baseline
 
@@ -116,7 +152,10 @@ The current baseline after the CLI-first sysop implementation includes:
 - `setup` can initialize a database and create an initial sysop account.
 - Node live-control commands currently record audited intent and update
   session rows where possible; they do not yet communicate with a running
-  `serve` process.
+  `serve` process. The current user-facing contract is explicit offline wording
+  such as "live transport control requires a future control socket" and
+  "recorded for delivery by a future live control channel"; Phase 1 replaces
+  those fallback messages only when a live control socket is actually reached.
 - `db import` and `db compact` are explicit command boundaries but intentionally
   blocked until restore and compaction semantics are specified.
 
@@ -149,6 +188,29 @@ Rationale:
 
 Windows support can be added later with named pipes. Do not add TCP fallback in
 this phase unless the project explicitly chooses a remote admin security model.
+
+Implementation must be platform-gated:
+
+- Put Unix socket implementation behind `#[cfg(unix)]`.
+- Provide a non-Unix stub that returns a clear "local control socket is not
+  supported on this platform yet" error.
+- The CLI offline fallback path must still work on every platform.
+- Do not fail `cargo check --workspace` on non-Unix targets because the module
+  unconditionally imports Unix-only APIs.
+
+### Required Refactor Before Control Integration
+
+Before adding socket client calls, extract at least status and node handlers out
+of `sysop_cli.rs`:
+
+```text
+crates/oxidebbs-server/src/commands/status.rs
+crates/oxidebbs-server/src/commands/nodes.rs
+```
+
+These modules should own the control-socket client fallback behavior for their
+command group. Keep `sysop_cli.rs` as parser/dispatcher glue. Do not add Phase 1
+control logic directly to the existing monolithic file.
 
 ### Module Shape
 
@@ -221,6 +283,13 @@ Implementation detail:
 - Read one line per request.
 - Write one line per response.
 - Keep the protocol stable enough for CLI tests.
+- Message text fields must not contain literal newline characters in Phase 1.
+  Normalize `\r`, `\n`, and `\r\n` to a single ASCII space before serializing
+  `NodeMessage` or `NodeBroadcast`.
+- Reject any control request line larger than `64 KiB` with a protocol error.
+- Do not implement multi-line JSON payloads in this phase. If future commands
+  need large or multiline bodies, replace newline-delimited JSON with a
+  length-prefixed frame in a separate documented protocol revision.
 
 ### Server Runtime Integration
 
@@ -275,6 +344,23 @@ Update:
 
 Document that the socket is local-only and located under `runtime/`.
 
+### Not In Scope
+
+- Remote TCP admin service.
+- Authentication or authorization beyond local filesystem permissions.
+- Windows named-pipe implementation.
+- Length-prefixed protocol framing.
+- Persistent node state tables.
+
+### If Blocked
+
+- If Unix socket binding is unreliable in the current Tokio version, stop and
+  document the exact API limitation before choosing another transport.
+- If stale socket cleanup cannot be made safe, require manual cleanup in the
+  runbook and leave automatic stale removal out of the implementation.
+- If command extraction becomes larger than expected, complete the extraction
+  and validation first, then resume control-socket work in a follow-up change.
+
 ### Phase 1 Acceptance Criteria
 
 - Running `oxidebbs-server serve` creates a local control socket.
@@ -299,7 +385,26 @@ stale nodes.
 
 ### Required Node States
 
-Use the states from `design/OxideBBS_SYSOP_INTERFACE.md`:
+The codebase already has `oxidebbs-core/src/node.rs::NodeStatus`:
+
+```rust
+pub enum NodeStatus {
+    Idle,
+    Connected,
+    LoggingIn,
+    InMenu,
+    InDoor,
+    Uploading,
+    Downloading,
+    Chatting,
+    Voting,
+    Disconnected,
+}
+```
+
+Do not ignore this type. The runtime may use a server-only enum for finer
+operational detail, but the plan must include explicit mapping to and from the
+core domain state. The server runtime state should be:
 
 ```text
 available
@@ -314,7 +419,8 @@ offline
 stale
 ```
 
-Represent these as a Rust enum in server runtime code:
+Represent these as a Rust enum in server runtime code only if the narrower
+caller-session states are needed:
 
 ```rust
 pub enum RuntimeNodeState {
@@ -332,6 +438,26 @@ pub enum RuntimeNodeState {
 ```
 
 Convert to stable snake_case strings only at CLI/API boundaries.
+
+Required mapping to existing core `NodeStatus`:
+
+| Runtime state | Core `NodeStatus` |
+| --- | --- |
+| `available` | `Idle` |
+| `connecting` | `Connected` |
+| `login` | `LoggingIn` |
+| `main_menu` | `InMenu` |
+| `reading_messages` | `InMenu` |
+| `posting_message` | `InMenu` |
+| `in_door` | `InDoor` |
+| `disconnecting` | `Disconnected` |
+| `offline` | `Disconnected` |
+| `stale` | `Disconnected` plus stale flag in runtime/control status |
+
+If this mapping proves awkward, update `NodeStatus` in `oxidebbs-core` in the
+same phase and document the public domain change in `design/SPEC.md` and
+`docs/about/changelog.md`. Do not leave two unrelated enums without tests for
+their conversion.
 
 ### Runtime Model
 
@@ -352,6 +478,16 @@ pub struct RuntimeNode {
     pub connected_at: Option<String>,
     pub last_heartbeat_at: Instant,
 }
+```
+
+`Instant` is allowed only inside the process-local runtime registry. It must not
+appear in control protocol structs or JSON output because it is not
+serializable and has no meaning across processes. Control responses must expose
+one or both of:
+
+```rust
+pub last_heartbeat_at: Option<String>;      // UTC RFC3339-ish timestamp
+pub heartbeat_age_seconds: Option<u64>;     // computed at response time
 ```
 
 Rules:
@@ -403,6 +539,23 @@ Update:
 - `design/OxideBBS_SYSOP_INTERFACE.md`
 - `docs/project/sysop-cli.md`
 - `docs/about/changelog.md`
+
+### Not In Scope
+
+- Persistent historical node-state timeline.
+- Remote node control over TCP.
+- Windows named-pipe control support.
+- Full Ratatui dashboard implementation.
+- Automatic stale-session kill unless explicitly requested by
+  `nodes reset-stale`.
+
+### If Blocked
+
+- If existing `NodeStatus` is too coarse, add conversion tests first, then
+  decide whether to extend `NodeStatus` or keep runtime-only states.
+- If heartbeat updates complicate the current session loop, implement
+  read-only live node state first and leave stale detection as a clearly
+  documented follow-up within Phase 2.
 
 ### Phase 2 Acceptance Criteria
 
@@ -472,6 +625,54 @@ Responsibilities:
 - Insert audit events.
 - Return user-facing success/failure text.
 
+### Door I/O Bridge
+
+The hard part of live doors is not drop-file generation; it is bridging telnet
+caller bytes to the door process and door output back to the caller. The current
+`oxidebbs-door::DoorRunner` API is synchronous and process-oriented:
+
+```rust
+pub trait DoorRunner {
+    fn run(&self, request: &DoorRunRequest) -> Result<DoorRunResult, DoorError>;
+}
+```
+
+That API can prepare and launch a door, but it does not expose stdin/stdout for
+interactive caller I/O. Phase 3 must either extend the door runner API or add a
+server-side interactive runner adapter.
+
+Recommended design:
+
+1. Keep `oxidebbs-door` responsible for:
+   - validating door definitions
+   - preparing node runtime directories
+   - rendering drop files
+   - building a `DoorRunPlan`
+2. Add an interactive server adapter in `oxidebbs-server`, for example
+   `door_session.rs`, that:
+   - spawns the configured process with piped stdin/stdout/stderr
+   - pauses normal menu input handling while the door is active
+   - forwards bytes from the caller `Transport` to child stdin
+   - forwards child stdout/stderr bytes to the caller `Transport`
+   - watches for caller disconnect, child exit, timeout, and sysop disconnect
+   - terminates the child on timeout or caller disconnect
+3. Keep the current dry-run path for tests and sysop troubleshooting.
+
+Transport interaction rules:
+
+- The bridge should work against the existing `Transport` trait where possible.
+- If the trait lacks the methods needed for bidirectional streaming and
+  shutdown, extend the trait narrowly and update existing telnet tests.
+- The session loop must not process menu commands while the bridge owns the
+  caller transport.
+- The node registry should report `in_door` while the bridge is active if
+  Phase 2 has landed. If Phase 2 has not landed, door launch can still proceed
+  and state reporting can be added later.
+
+Ordering note: Phase 3 can be partially implemented before Phase 2 if the door
+bridge does not depend on heartbeat-aware node state. In that case, defer only
+`in_door` state reporting to Phase 2 and document the temporary limitation.
+
 ### Tests
 
 Add tests for:
@@ -481,6 +682,9 @@ Add tests for:
 - Missing runner or unsupported drop-file validation.
 - Dry-run service path using `DryRunDoorRunner`.
 - Door run record lifecycle.
+- Interactive bridge behavior using a fake child process or test helper command
+  that echoes stdin to stdout.
+- Timeout cleanup of a fake long-running child process.
 
 Do not require DOSBox in unit tests. Use dry-run or a fake runner.
 
@@ -493,10 +697,30 @@ Update:
 - `docs/project/sysop-cli.md`
 - `docs/about/changelog.md`
 
+### Not In Scope
+
+- Bundling real door binaries.
+- Full DOSBox terminal emulation beyond byte forwarding.
+- File-transfer protocol implementation.
+- Door editor UI.
+- Multi-node exclusive-door locking beyond rejecting obviously invalid
+  definitions unless a locking design is added in the same phase.
+
+### If Blocked
+
+- If the existing `Transport` trait cannot support bidirectional bridge
+  semantics cleanly, stop and update `design/DOORS.md` with a focused transport
+  bridge design before coding further.
+- If reliable child-process I/O is not feasible cross-platform in this phase,
+  implement Unix support behind `#[cfg(unix)]`, keep dry-run available
+  everywhere, and document the platform limit.
+
 ### Phase 3 Acceptance Criteria
 
 - Caller door menu no longer returns a placeholder for enabled configured
   doors.
+- Caller bytes are bridged to the child process and child output is bridged back
+  to the caller in at least one tested interactive path.
 - Door dry-run service path is tested.
 - Door run DB records are written and finished.
 - Timeout behavior is tested without requiring a real DOS door.
@@ -541,6 +765,10 @@ Rules:
 
 ### Required Migration
 
+First task: verify DecentDB DDL support with a focused test or local probe.
+Do not assume `ALTER TABLE ADD COLUMN` works until a test demonstrates it
+against the pinned DecentDB dependency.
+
 Migration `2 -> 3`:
 
 ```sql
@@ -549,8 +777,21 @@ UPDATE system_config SET value = '3', updated_at = CURRENT_TIMESTAMP
 WHERE key = 'schema_version';
 ```
 
-If DecentDB does not support `ALTER TABLE ADD COLUMN` exactly as written,
-choose the supported DecentDB path and document it in `design/DECENTDB_SCHEMA.md`.
+If DecentDB does not support `ALTER TABLE ADD COLUMN` exactly as written, do
+not improvise silently. Stop Phase 4 implementation and document one of these
+paths:
+
+1. DecentDB-supported table rebuild:
+   - create a replacement table with the new schema
+   - copy rows with `enabled = TRUE`
+   - recreate indexes/constraints
+   - swap tables if DecentDB supports that safely
+2. Recreate-only pre-alpha policy:
+   - keep rejecting schema `2`
+   - document that `2 -> 3` is not migrated
+   - leave migration framework for future supported migrations
+
+The selected path must be documented in `design/DECENTDB_SCHEMA.md`.
 
 ### Init Flow
 
@@ -569,6 +810,8 @@ Add tests for:
 - Synthetic schema `2` DB migrates to `3`.
 - Newer schema marker is rejected.
 - Missing schema marker behavior is clear.
+- DDL capability test proving the chosen `2 -> 3` strategy works with the
+  pinned DecentDB dependency.
 
 ### Documentation
 
@@ -577,6 +820,20 @@ Update:
 - `design/DECENTDB_SCHEMA.md`
 - `design/RUNBOOK.md`
 - `docs/about/changelog.md`
+
+### Not In Scope
+
+- General-purpose migration DSL.
+- Downgrade migrations.
+- Online migration while `serve` is accepting callers.
+- Cross-database import/export.
+
+### If Blocked
+
+- If DecentDB lacks required DDL support, stop and write an ADR or schema note
+  choosing table rebuild versus recreate-only policy before continuing.
+- If table rebuild cannot preserve constraints safely, do not ship a partial
+  migration. Keep recreate-only behavior and document it.
 
 ### Phase 4 Acceptance Criteria
 
@@ -605,7 +862,17 @@ Before coding import, document the restore model:
 
 Recommended decision:
 
-- `db import --format json <path>` imports only into an empty database.
+- `db import --format json <path>` is a whole-database restore, not a merge.
+- It imports only into a schema-initialized, data-empty database.
+- The only pre-existing rows allowed are internal schema/config rows required
+  to open the database, such as `system_config.schema_version`.
+- Add `db init --empty` before enabling import if no existing command can create
+  this target state. `db init --empty` must create the current schema without
+  seeding a sysop user, message areas, doors, sessions, or audit events.
+- A database created by the starter `setup` flow is not an import target if it
+  already contains a sysop user or audit events. In that case, import must fail
+  with a message that tells the sysop to create a schema-only target with
+  `db init --empty`.
 - It preserves UUIDs.
 - It validates schema version first.
 - It loads tables in dependency order:
@@ -616,7 +883,12 @@ Recommended decision:
   5. doors
   6. door_runs
   7. audit_events
-- It fails on any existing user/message/session/door/audit rows.
+- It fails on any existing row in the exported data tables.
+- It performs all validation before writing rows.
+- If DecentDB exposes transactions that cover the needed writes, import must run
+  in one transaction. If DecentDB does not expose that support, keep import
+  unsupported unless the implementation can prove partial writes cannot occur
+  after validation succeeds.
 
 ### Compact Semantics
 
@@ -633,10 +905,14 @@ If DecentDB does not expose compaction:
 
 Add tests for:
 
+- `db init --empty` creates an import-ready target if the command is added.
 - Export/import round trip into an empty in-memory DB or temp DB.
-- Import rejects non-empty DB.
+- Import accepts a schema-only target with only allowed internal rows.
+- Import rejects a starter `setup` database that already has sysop or audit
+  rows.
 - Import rejects unsupported version.
 - Import rejects malformed JSON.
+- Import leaves the target unchanged after validation failure.
 
 ### Documentation
 
@@ -647,10 +923,30 @@ Update:
 - `docs/project/sysop-cli.md`
 - `docs/about/changelog.md`
 
+### Not In Scope
+
+- Merging users, messages, doors, or audit events into a populated database.
+- Selective table import.
+- Conflict resolution for duplicate aliases, message IDs, or door keys.
+- Cross-version data transformation beyond rejecting unsupported export schema
+  versions.
+- File-level database replacement unless DecentDB documents that as a safe
+  restore mechanism.
+
+### If Blocked
+
+- If DecentDB cannot provide transactional restore semantics and partial writes
+  cannot be ruled out, keep `db import` unsupported and document the exact
+  reason.
+- If an empty import target cannot be created without the starter sysop account,
+  add `db init --empty` before continuing with import.
+- If export JSON is missing fields required to preserve IDs or relationships,
+  update export first and treat that as part of Phase 5.
+
 ### Phase 5 Acceptance Criteria
 
-- `db import --format json` has defined, tested behavior or remains explicitly
-  unsupported with documented rationale.
+- `db import --format json` restores into a schema-only target with defined,
+  tested behavior or remains explicitly unsupported with documented rationale.
 - `db compact` has defined, tested behavior or remains explicitly unsupported
   with documented rationale.
 - `./scripts/dev-check.sh` passes.
@@ -715,12 +1011,128 @@ Document non-alphabetical order with a short comment near the enum.
 
 For stable automation:
 
-- Top-level JSON responses should be objects or arrays, never mixed text.
+- Top-level JSON responses for the commands listed in this phase must be
+  objects. Existing pre-alpha array responses should be normalized in this
+  phase and documented in the changelog.
 - Error JSON can be added later, but successful `--json` output must not include
   human-readable prefixes.
 - IDs should remain strings.
 - Booleans should remain booleans.
 - Numeric counts should remain numbers.
+
+Required successful response shapes:
+
+```json
+{
+  "board": "Example BBS",
+  "version": "0.2.0",
+  "database": "data/oxidebbs.db",
+  "telnet": "127.0.0.1:2323",
+  "nodes": { "total": 4, "active": 0 },
+  "doors": { "enabled": 1, "total": 1 },
+  "messages": { "areas": 1 }
+}
+```
+
+`users list --json`:
+
+```json
+{
+  "users": [
+    {
+      "id": "uuid",
+      "alias": "sysop",
+      "real_name": "System Operator",
+      "email": null,
+      "security_level": 100,
+      "is_sysop": true,
+      "created_at": "2026-05-31T00:00:00Z",
+      "last_login_at": null,
+      "total_calls": 0,
+      "time_bank_minutes": 0,
+      "status": "active"
+    }
+  ]
+}
+```
+
+`nodes list --json`:
+
+```json
+{
+  "nodes": [
+    {
+      "node_number": 1,
+      "state": "available",
+      "user_alias": null,
+      "session": null,
+      "last_heartbeat_at": null,
+      "heartbeat_age_seconds": null
+    }
+  ]
+}
+```
+
+When a node has an active session, `session` uses the same object shape as
+existing session JSON and `user_alias` is the resolved alias when available.
+
+`messages areas list --json`:
+
+```json
+{
+  "areas": [
+    {
+      "id": "uuid",
+      "key": "general",
+      "name": "General",
+      "description": "General discussion",
+      "kind": "local",
+      "network_id": null,
+      "read_security_level": 0,
+      "post_security_level": 10,
+      "moderated": false,
+      "enabled": true
+    }
+  ]
+}
+```
+
+`doors list --json`:
+
+```json
+{
+  "doors": [
+    {
+      "id": "uuid",
+      "key": "lord",
+      "name": "Legend of the Red Dragon",
+      "runner": "dry-run",
+      "working_dir": "doors/lord",
+      "command": "lord.exe",
+      "drop_file": "door.sys",
+      "exclusive": false,
+      "time_limit_minutes": 30,
+      "enabled": true
+    }
+  ]
+}
+```
+
+`db stats --json`:
+
+```json
+{
+  "schema_version": 3,
+  "users": 1,
+  "message_areas": 1,
+  "messages": 0,
+  "sessions": 0,
+  "active_sessions": 0,
+  "doors": 1,
+  "door_runs": 0,
+  "audit_events": 0
+}
+```
 
 ### Documentation
 
@@ -728,6 +1140,23 @@ Update:
 
 - `docs/project/sysop-cli.md`
 - `docs/about/changelog.md`
+
+### Not In Scope
+
+- Stable JSON error schema.
+- Backward compatibility with pre-Phase 6 top-level array outputs.
+- Remote admin API contract.
+- Shell completion generation.
+- Internationalized CLI output.
+
+### If Blocked
+
+- If changing top-level arrays to objects breaks too much existing test
+  coverage, keep the object contract and update tests/docs in the same phase;
+  this is still pre-alpha hardening.
+- If live node data is unavailable because Phase 1 or Phase 2 is not complete,
+  retain the same `nodes list --json` object shape with offline/session-derived
+  values and null heartbeat fields.
 
 ### Phase 6 Acceptance Criteria
 
@@ -759,6 +1188,10 @@ Create or update:
 - `design/TASKS.md`
 - `docs/about/changelog.md`
 
+`docs/project/sysop-cli.md` is referenced by earlier phases. If it does not
+exist when a phase first needs it, create it in that phase with the content
+relevant to that phase, then complete it in Phase 7.
+
 ### Required Content
 
 Docs must cover:
@@ -784,6 +1217,25 @@ Run:
 npm run docs:build
 ./scripts/dev-check.sh
 ```
+
+### Not In Scope
+
+- Marketing copy or public launch material.
+- Hosted documentation deployment changes.
+- Screenshots or video walkthroughs.
+- Remote administration documentation beyond explicitly local-only behavior and
+  the reason remote admin is not implemented.
+
+### If Blocked
+
+- If VitePress navigation does not include a new required page, update the docs
+  site navigation in the same phase rather than leaving an orphaned file.
+- If implemented behavior differs from `design/OxideBBS_SYSOP_INTERFACE.md`,
+  update that design document to match the shipped local-only behavior and call
+  out deferred work in `design/TASKS.md`.
+- If a prior phase intentionally left `db import`, `db compact`, live control,
+  or door launch unsupported, document the unsupported state as explicit product
+  behavior instead of omitting it.
 
 ### Phase 7 Acceptance Criteria
 
