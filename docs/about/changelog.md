@@ -44,6 +44,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Reworked the starter DecentDB schema to use native `UUID`, `TIMESTAMPTZ`,
   `IPADDR`, and `BOOL` columns, plus foreign keys, CHECK constraints, and
   relationship indexes.
+- Updated the server CLI to prefer setup-generated `config/oxidebbs.toml` when
+  no `--config` path is supplied, with the example config as the clean-checkout
+  fallback.
 - Normalized example door definitions under `[[doors.definitions]]` so door
   settings and door entries share one config namespace without table collisions.
 - Updated repository documentation to point at the `design/` document tree and

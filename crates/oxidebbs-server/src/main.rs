@@ -19,13 +19,8 @@ use oxidebbs_sysop::{SysopConsoleSnapshot, render_sysop_console_text};
 )]
 struct Cli {
     /// Path to the TOML configuration file
-    #[arg(
-        short,
-        long,
-        default_value = "config/oxidebbs.example.toml",
-        global = true
-    )]
-    config: PathBuf,
+    #[arg(short, long, global = true)]
+    config: Option<PathBuf>,
 
     #[command(subcommand)]
     command: Option<Command>,
@@ -87,6 +82,7 @@ enum AdminCommand {
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
+    let config_path = cli.config.unwrap_or_else(default_config_path);
     let command = cli.command.unwrap_or(Command::Serve);
 
     tracing_subscriber::fmt()
@@ -109,9 +105,9 @@ async fn main() {
             println!("directories are prepared for a starter OxideBBS installation");
         }
         Command::Check | Command::Admin { .. } | Command::Serve => {
-            let config = match OxideConfig::load(&cli.config) {
+            let config = match OxideConfig::load(&config_path) {
                 Ok(config) => {
-                    info!(path = %cli.config.display(), "configuration loaded");
+                    info!(path = %config_path.display(), "configuration loaded");
                     config
                 }
                 Err(error) => {
@@ -122,7 +118,7 @@ async fn main() {
 
             match command {
                 Command::Check => {
-                    println!("configuration OK: {}", cli.config.display());
+                    println!("configuration OK: {}", config_path.display());
                     println!("  board:          {}", config.board.name);
                     println!("  telnet bind:    {}", config.telnet.bind);
                     println!("  database path:  {}", config.database.path.display());
@@ -146,6 +142,15 @@ async fn main() {
             }
         }
     }
+}
+
+fn default_config_path() -> PathBuf {
+    let local_config = PathBuf::from("config/oxidebbs.toml");
+    if local_config.exists() {
+        return local_config;
+    }
+
+    PathBuf::from("config/oxidebbs.example.toml")
 }
 
 fn run_admin(command: AdminCommand, config: &OxideConfig) {

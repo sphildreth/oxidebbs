@@ -3,16 +3,19 @@
 ## Local development startup
 
 ```bash
-cargo run -p oxidebbs-server -- --config config/oxidebbs.example.toml
+cargo run -p oxidebbs-server -- serve
 ```
+
+The CLI uses `config/oxidebbs.toml` when it exists, otherwise it falls back to
+`config/oxidebbs.example.toml`. Pass `--config <path>` to force a file.
 
 ## Health checks
 
 Planned commands:
 
 ```bash
-oxidebbs-server check --config config/oxidebbs.example.toml
-oxidebbs-server db doctor --config config/oxidebbs.example.toml
+oxidebbs-server check
+oxidebbs-server --config config/oxidebbs.example.toml check
 oxidebbs-server doors test lord --user sysop
 ```
 

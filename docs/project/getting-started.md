@@ -42,8 +42,12 @@ guide for the prompts and generated paths.
 Start the listener:
 
 ```bash
-cargo run -p oxidebbs-server -- --config config/oxidebbs.toml serve
+cargo run -p oxidebbs-server -- serve
 ```
+
+After `setup`, the server defaults to `config/oxidebbs.toml`. In a clean
+checkout without a local config, it falls back to `config/oxidebbs.example.toml`.
+Pass `--config <path>` to force a specific file.
 
 The first server runtime accepts telnet callers, assigns node slots, records
 session/audit rows in DecentDB, renders configured login and main menu screens,
@@ -59,9 +63,9 @@ against a stale schema marker rather than silently using incompatible tables.
 The starter server binary includes a local `admin` command group:
 
 ```bash
-cargo run -p oxidebbs-server -- --config config/oxidebbs.example.toml admin users
-cargo run -p oxidebbs-server -- --config config/oxidebbs.example.toml admin nodes
-cargo run -p oxidebbs-server -- --config config/oxidebbs.example.toml admin recent-calls
+cargo run -p oxidebbs-server -- admin users
+cargo run -p oxidebbs-server -- admin nodes
+cargo run -p oxidebbs-server -- admin recent-calls
 ```
 
 Password resets accept a new password hash, not a plaintext password.

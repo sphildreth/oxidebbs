@@ -111,8 +111,11 @@ paths for data, assets, doors, runtime files, and logs.
 Start the telnet listener with:
 
 ```bash
-cargo run -p oxidebbs-server -- --config config/oxidebbs.toml serve
+cargo run -p oxidebbs-server -- serve
 ```
+
+After `setup`, the CLI uses `config/oxidebbs.toml` by default. A clean checkout
+without that file falls back to `config/oxidebbs.example.toml`.
 
 The current runtime accepts telnet callers, assigns node slots, writes session
 and audit records to DecentDB, renders configured login/main menu screens, and
