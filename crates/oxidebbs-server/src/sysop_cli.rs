@@ -59,7 +59,7 @@ pub(crate) enum CliError {
 #[derive(Parser)]
 #[command(
     name = "oxidebbs",
-    about = "OxideBBS - Rust-native BBS engine for telnet callers",
+    about = "OxideBBS - A modern BBS server implementation",
     version
 )]
 struct Cli {

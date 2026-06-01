@@ -3,7 +3,7 @@ layout: home
 
 hero:
   name: OxideBBS
-  text: Rust-native BBS engine
+  text: A modern BBS server implementation
   tagline: Telnet callers, ANSI/CP437 screens, DecentDB persistence, and isolated DOS doors.
   actions:
     - theme: brand
