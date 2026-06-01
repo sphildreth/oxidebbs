@@ -121,9 +121,33 @@ OxideBBS should eventually be able to support:
 
 OxideNet should be an opinionated network profile, not the only possible network.
 
+## Dependency direction
+
+The new crates fit into the existing workspace dependency graph as follows:
+
+```text
+oxidebbs-server
+  -> oxidebbs-ftn
+  -> oxidebbs-oxidenet
+  -> oxidebbs-binkp (future)
+
+oxidebbs-oxidenet
+  -> oxidebbs-ftn
+  -> oxidebbs-db
+
+oxidebbs-binkp
+  -> oxidebbs-ftn
+
+oxidebbs-ftn
+  -> oxidebbs-core
+  -> oxidebbs-db
+```
+
+Lower-level crates must not depend on `oxidebbs-server` or `oxidebbs-oxidenet`.
+
 ## Crate responsibilities
 
-## `oxidebbs-ftn`
+### `oxidebbs-ftn`
 
 Generic FTN-style networking primitives.
 
@@ -145,13 +169,27 @@ Responsibilities:
 - Network-message-to-local-message conversion
 - Basic validation rules
 
+This crate defines the generic interfaces and data structures for FTN-style networking.
+
+It owns:
+
+- The FTN address model and parser.
+- The network message model (echomail and netmail).
+- The area and subscription *trait interfaces* (e.g. `AreaProvider`, `SubscriptionStore`).
+- The packet import/export boundary using an internal binary packet format (not traditional FTN `.pkt`).
+- Duplicate detection logic.
+- Inbound/outbound queue abstractions.
+- Local-message-to-network-message and reverse conversion.
+
 This crate should not know anything about Blackboard BBS specifically.
 
 It should not hard-code OxideNet branding.
 
-It should provide the general FTN engine OxideNet uses.
+It provides the generic FTN engine that OxideNet (or any other FTN-style network) builds on.
 
-## `oxidebbs-binkp`
+`oxidebbs-oxidenet` provides the concrete implementations of the area and subscription interfaces defined here.
+
+### `oxidebbs-binkp`
 
 Future BinkP-compatible mail transport.
 
@@ -168,11 +206,17 @@ Responsibilities:
 - Per-node transport credentials
 - Mail queue send/receive lifecycle
 
+Transport security:
+
+- BinkP sessions must use TLS by default (via `tokio-rustls` or equivalent).
+- Plaintext BinkP should be allowed only for local testing with an explicit opt-in flag.
+- Credentials and message content must not traverse unencrypted connections in production.
+
 This can be delayed until after the FTN data model and signup workflow are designed.
 
 Early development can use local filesystem-based inbound/outbound directories for testing.
 
-## `oxidebbs-oxidenet`
+### `oxidebbs-oxidenet`
 
 The OxideNet-specific product module.
 
@@ -194,9 +238,36 @@ Responsibilities:
 - Applicant status screen
 - Member self-service commands
 
-This crate can depend on `oxidebbs-ftn`.
+This crate depends on `oxidebbs-ftn` and `oxidebbs-db`.
 
-It should not contain generic packet parsing logic that belongs in `oxidebbs-ftn`.
+It provides concrete implementations of the `AreaProvider` and `SubscriptionStore` traits defined in `oxidebbs-ftn`, specialized for OxideNet's area tags, defaults, and policy.
+
+It should not contain generic packet parsing or address-model logic that belongs in `oxidebbs-ftn`.
+
+### Packet format
+
+OxideNet uses an internal binary packet format rather than traditional FTN `.pkt` files.
+
+Rationale:
+
+- Traditional FTN packet formats are fragile, poorly documented, and full of historical edge cases.
+- An internal format can be simple, versioned, and easy to validate.
+- OxideBBS controls both ends of the exchange, so interoperability with legacy FTN software is not a v1 goal.
+- The format should be compact, checksummed, and trivially parseable in Rust.
+
+If FTN compatibility is ever needed, a converter between the internal format and `.pkt` can be built in `oxidebbs-ftn` without changing the core model.
+
+### DecentDB schema ownership
+
+All OxideNet persistent state (applications, nodes, credentials, areas, subscriptions, messages, packets, poll logs) is stored in DecentDB.
+
+Schema registration follows the existing pattern in `oxidebbs-db`:
+
+- `oxidebbs-ftn` defines the DecentDB collections for generic FTN data (network messages, packets, poll logs).
+- `oxidebbs-oxidenet` defines the collections for OxideNet-specific data (applications, nodes, credentials, area definitions, subscriptions).
+- `oxidebbs-db` provides the `OxideDb` handle and schema initialization; individual crates register their own collections at startup.
+
+No SQLite, Postgres, MySQL, Redis, MongoDB, or ORM. This is a hard constraint from `AGENTS.md`.
 
 ## Addressing model
 
@@ -242,7 +313,7 @@ Early implementation can start even simpler:
 42:1/101     Second member BBS
 ```
 
-## Address assignment rules
+### Address assignment rules
 
 Initial assignment should be manual or semi-automatic.
 
@@ -324,7 +395,7 @@ For network administrators:
 
 ## Signup flow
 
-## Phase 1: Applicant connects
+### Step 1: Applicant connects
 
 The sysop connects to Blackboard BBS over telnet.
 
@@ -337,7 +408,7 @@ They may be:
 
 They enter the OxideNet module from the BBS menu.
 
-## Phase 2: Application intro
+### Step 2: Application intro
 
 The module explains:
 
@@ -349,7 +420,7 @@ The module explains:
 - That spam/abuse/malicious systems are not allowed
 - That the network is experimental/early if applicable
 
-## Phase 3: Application form
+### Step 3: Application form
 
 Fields:
 
@@ -383,7 +454,7 @@ binkp_port = 24554
 telnet_port = 2323
 ```
 
-## Phase 4: Validation
+### Step 4: Validation
 
 The application module should validate:
 
@@ -404,7 +475,7 @@ Future validation:
 - Verify OxideBBS version/capabilities
 - Confirm inbound mailer authentication
 
-## Phase 5: Submit application
+### Step 5: Submit application
 
 Application state becomes:
 
@@ -432,7 +503,7 @@ Return to Blackboard BBS and choose:
 OxideNet -> Check Application Status
 ```
 
-## Phase 6: Review
+### Step 6: Review
 
 Network admin reviews the application from Blackboard BBS.
 
@@ -447,7 +518,7 @@ hold
 
 If more information is needed, the applicant sees the request when they check status.
 
-## Phase 7: Approval and node assignment
+### Step 7: Approval and node assignment
 
 On approval:
 
@@ -469,7 +540,7 @@ Address: 42:1/100
 Hub: Blackboard BBS, 42:1/1
 ```
 
-## Phase 8: Config package
+### Step 8: Config package
 
 The applicant receives a config package.
 
@@ -493,9 +564,17 @@ oxidebbs net join --invite OXNET-ABCD-1234-EFGH
 
 The invite token could fetch or import the generated package.
 
+Invite token requirements:
+
+- Tokens must be cryptographically random (at least 128 bits of entropy).
+- Tokens are single-use; once consumed, they are marked expired.
+- Tokens expire after 7 days if unused.
+- The hub stores only the token hash; the plaintext is shown to the applicant exactly once.
+- Rate limit: max 3 active invite tokens per application.
+
 For v1 of OxideNet, a static generated config file is enough. Token-based join can come later.
 
-## Phase 9: First poll
+### Step 9: First poll
 
 The member sysop installs/imports the config.
 
@@ -509,7 +588,7 @@ First successful poll should:
 - Record last successful poll
 - Confirm active network status
 
-## Phase 10: Activation
+### Step 10: Activation
 
 After first successful poll, node state becomes:
 
@@ -557,31 +636,31 @@ State meanings:
 
 ## Network member roles
 
-## Applicant
+### Applicant
 
 A sysop who has started or submitted an application.
 
-## Member sysop
+### Member sysop
 
 An approved sysop running a node.
 
-## Hub sysop
+### Hub sysop
 
 A sysop running a hub that routes network traffic.
 
 Initially, only Blackboard BBS is a hub.
 
-## Network admin
+### Network admin
 
 A user with permission to approve/reject applications, assign addresses, suspend nodes, manage areas, and generate nodelists.
 
-## Policy authority
+### Policy authority
 
 Initially the same as the network admin.
 
 Later, this could become a small group.
 
-## Area moderator
+### Area moderator
 
 A user responsible for one or more echomail areas.
 
@@ -589,7 +668,7 @@ A user responsible for one or more echomail areas.
 
 OxideNet should support two primary message types.
 
-## Echomail
+### Echomail
 
 Public messages distributed to all subscribed nodes for a given area.
 
@@ -601,10 +680,10 @@ OXIDE.SYSOP
 OXIDE.DOORS
 OXIDE.ANSI
 OXIDE.DECENTDB
-OXIDE.DEVELOPMENT
+OXIDE.DEV
 ```
 
-## Netmail
+### Netmail
 
 Private node-to-node mail.
 
@@ -616,7 +695,7 @@ To:   42:1/1
 Subject: Poll test
 ```
 
-## Message metadata
+### Message metadata
 
 Imported messages should preserve network metadata.
 
@@ -816,6 +895,8 @@ binkp_port = 24554
 poll_interval_minutes = 60
 
 [network.auth]
+# Plaintext password included only in the config package delivered to the member.
+# The hub stores only the argon2id hash of this value.
 session_password = "generated-secret"
 
 [network.policy]
@@ -845,9 +926,15 @@ name = "OxideNet Test"
 subscribed = true
 ```
 
+## CLI infrastructure
+
+OxideBBS currently has no CLI subcommand infrastructure. The `oxidebbs net ...` commands described below require adding `clap` derive subcommands to `oxidebbs-server`, gated behind a `net` feature flag. Hub admin commands (`oxidebbs net admin ...`) should also be accessible from the local sysop TUI in `oxidebbs-sysop`.
+
 ## CLI commands for member BBSes
 
 OxideBBS should provide local commands for managing network membership.
+
+All network-related CLI commands use the `oxidebbs net` namespace.
 
 Recommended commands:
 
@@ -877,35 +964,39 @@ oxidebbs net status oxidenet
 
 ## CLI commands for home BBS / hub
 
-Blackboard BBS needs additional commands.
+Blackboard BBS needs additional administrative commands under the `oxidebbs net admin` namespace.
+
+These commands require network-admin privileges and are run from the hub system or via the local sysop TUI (`oxidebbs-sysop`).
 
 ```bash
-oxidebbs oxidenet applications list
-oxidebbs oxidenet applications show <application-id>
-oxidebbs oxidenet applications approve <application-id>
-oxidebbs oxidenet applications reject <application-id>
-oxidebbs oxidenet applications needs-info <application-id>
+oxidebbs net admin applications list
+oxidebbs net admin applications show <application-id>
+oxidebbs net admin applications approve <application-id>
+oxidebbs net admin applications reject <application-id>
+oxidebbs net admin applications needs-info <application-id>
 
-oxidebbs oxidenet nodes list
-oxidebbs oxidenet nodes show <address>
-oxidebbs oxidenet nodes suspend <address>
-oxidebbs oxidenet nodes retire <address>
-oxidebbs oxidenet nodes rotate-password <address>
+oxidebbs net admin nodes list
+oxidebbs net admin nodes show <address>
+oxidebbs net admin nodes suspend <address>
+oxidebbs net admin nodes retire <address>
+oxidebbs net admin nodes rotate-password <address>
 
-oxidebbs oxidenet nodelist generate
-oxidebbs oxidenet nodelist publish
+oxidebbs net admin nodelist generate
+oxidebbs net admin nodelist publish
 
-oxidebbs oxidenet areas list
-oxidebbs oxidenet areas add <tag>
-oxidebbs oxidenet areas subscribe <address> <tag>
-oxidebbs oxidenet areas unsubscribe <address> <tag>
+oxidebbs net admin areas list
+oxidebbs net admin areas add <tag>
+oxidebbs net admin areas subscribe <address> <tag>
+oxidebbs net admin areas unsubscribe <address> <tag>
 
-oxidebbs oxidenet packets inbound
-oxidebbs oxidenet packets outbound
-oxidebbs oxidenet packets quarantine
+oxidebbs net admin packets inbound
+oxidebbs net admin packets outbound
+oxidebbs net admin packets quarantine
 ```
 
 ## BBS-native admin screens
+
+All BBS-native screens described in this document are rendered in CP437 encoding using the ANSI/CP437 primitives from `oxidebbs-term`. Box-drawing characters (╔═╗, ║, ╚═╝) use the CP437 code points, not Unicode.
 
 Blackboard BBS should expose OxideNet administration inside the BBS.
 
@@ -997,6 +1088,18 @@ Required controls:
 - Admin broadcast area
 - Node retirement process
 
+Initial limit defaults:
+
+| Control | Default |
+|---|---|
+| Max message body size | 64 KB |
+| Max packet size | 1 MB |
+| Max poll frequency | 1 per minute per node |
+| Max outbound queue depth | 100 packets per node |
+| Max application submissions | 3 per sysop account |
+
+These are starting points and should be configurable per-node if needed.
+
 Strongly recommended later:
 
 - Reachability checks
@@ -1074,9 +1177,42 @@ Member logs should capture:
 - Duplicate detected
 - Packet quarantined
 
+## Operational notes
+
+### Backup and restore
+
+Blackboard BBS is the single hub for v1. Loss of its DecentDB state means loss of all node records, credentials, application history, and message archives.
+
+Mitigations:
+
+- Export a full nodelist + node record snapshot daily to a versioned file.
+- Store config package archives (the `.zip` files delivered to members) in a separate directory that can be backed up independently.
+- Document a restore procedure: import DecentDB snapshot, re-verify node credential hashes, regenerate nodelist.
+- Members retain their own config packages and can re-poll after hub restore.
+
+### Clock synchronization
+
+Timestamps (`created_at`, `last_poll_at`, `seen_by`, duplicate detection hashes) are meaningful only if clocks are roughly aligned.
+
+Requirements:
+
+- Hub and member BBSes should use NTP or equivalent.
+- Duplicate detection must tolerate a clock skew window of at least ±5 minutes.
+- Poll logs should record both the node's reported time and the hub's local time for debugging drift.
+
+### Address retirement
+
+Addresses are never reused immediately after a node retires.
+
+Policy:
+
+- Retired addresses enter a tombstone state with a minimum 90-day cooldown.
+- After the cooldown, addresses may be reassigned only by explicit network admin action, never automatically.
+- The tombstone record is preserved permanently for historical reference.
+
 ## Data model sketch
 
-## `network_applications`
+### `network_applications`
 
 ```text
 id
@@ -1106,7 +1242,7 @@ reviewed_by_user_id
 assigned_address
 ```
 
-## `network_nodes`
+### `network_nodes`
 
 ```text
 id
@@ -1116,6 +1252,7 @@ zone
 net
 node
 point
+hub_address
 board_name
 sysop_alias
 contact_email
@@ -1135,7 +1272,7 @@ last_successful_poll_at
 flags
 ```
 
-## `network_credentials`
+### `network_credentials`
 
 ```text
 id
@@ -1148,9 +1285,9 @@ expires_at
 status
 ```
 
-Do not store plain-text secrets after config generation unless deliberately required. Prefer storing hashes and allowing rotation/regeneration.
+Do not store plain-text secrets in the hub database after config generation. The hub stores only argon2id hashes of session passwords. The config package delivered to the member contains the plaintext password exactly once; the member BBS imports it and the hub discards its plaintext copy. Password rotation regenerates a new secret and re-hashes it on the hub.
 
-## `network_areas`
+### `network_areas`
 
 ```text
 id
@@ -1165,18 +1302,19 @@ moderated
 created_at
 ```
 
-## `network_area_subscriptions`
+### `network_area_subscriptions`
 
 ```text
 id
 node_id
 area_id
+area_tag
 status
 subscribed_at
 unsubscribed_at
 ```
 
-## `network_messages`
+### `network_messages`
 
 ```text
 id
@@ -1200,7 +1338,9 @@ packet_id
 status
 ```
 
-## `network_packets`
+Message bodies are stored inline in DecentDB for v1. If message volume grows beyond what DecentDB handles comfortably, bodies can be moved to content-addressed file storage with only a hash/reference in the DB row. This decision can be deferred until real usage data exists.
+
+### `network_packets`
 
 ```text
 id
@@ -1217,7 +1357,7 @@ status
 error_message
 ```
 
-## `network_poll_logs`
+### `network_poll_logs`
 
 ```text
 id
@@ -1300,7 +1440,7 @@ Those can wait.
 
 ## Implementation phases
 
-## Phase 0: Design foundation
+### Phase 0: Design foundation
 
 Deliverables:
 
@@ -1311,7 +1451,7 @@ Deliverables:
 - Data model sketch
 - Config package format
 
-## Phase 1: Local FTN data model
+### Phase 1: Local FTN data model
 
 Deliverables:
 
@@ -1333,7 +1473,7 @@ invalid net
 invalid node
 ```
 
-## Phase 2: Home BBS application module
+### Phase 2: Home BBS application module
 
 Deliverables:
 
@@ -1348,7 +1488,7 @@ Deliverables:
 
 This phase can work before actual packet exchange exists.
 
-## Phase 3: Local import/export simulation
+### Phase 3: Local import/export simulation
 
 Deliverables:
 
@@ -1361,7 +1501,7 @@ Deliverables:
 
 This lets the system work before BinkP is implemented.
 
-## Phase 4: First hub/member flow
+### Phase 4: First hub/member flow
 
 Deliverables:
 
@@ -1379,7 +1519,7 @@ Goal:
 A test member can apply, be approved, import config, and exchange test messages.
 ```
 
-## Phase 5: BinkP-compatible transport
+### Phase 5: BinkP-compatible transport
 
 Deliverables:
 
@@ -1391,7 +1531,7 @@ Deliverables:
 - Retry/backoff
 - Poll logs
 
-## Phase 6: Operational hardening
+### Phase 6: Operational hardening
 
 Deliverables:
 
@@ -1403,7 +1543,7 @@ Deliverables:
 - Policy version updates
 - Backup/restore notes
 
-## Phase 7: Public experimental OxideNet
+### Phase 7: Public experimental OxideNet
 
 Deliverables:
 
@@ -1451,18 +1591,20 @@ Approval:           manual
 Topology:           hub-and-spoke
 ```
 
-## Open questions
+## Resolved design decisions
 
-1. Should OxideNet allow non-OxideBBS systems eventually?
-2. Should OxideNet support traditional FTN packet formats from day one, or start with an internal packet format?
-3. Should `42:1/100+` be the member range, or should members start at `42:1/10`?
-4. Should sysop real names be required, optional, or forbidden?
-5. Should the nodelist be public?
-6. Should telnet addresses be listed publicly?
-7. Should there be an application fee? Current recommendation: no.
-8. Should OxideNet include a private sysop-only area from day one? Current recommendation: yes.
-9. Should the first version support netmail, or only echomail? Current recommendation: include netmail foundation, but make echomail the first visible feature.
-10. Should OxideNet eventually bridge to FidoNet/fsxNet? Current recommendation: not until the native network is stable.
+These were originally open questions. Decisions have been made.
+
+1. **Should OxideNet allow non-OxideBBS systems?** — Yes, eventually, but not in v1. The `oxidebbs-ftn` crate should be generic enough to support other implementations later.
+2. **Packet format?** — Internal binary format only. Traditional FTN `.pkt` formats are fragile, poorly documented, and unnecessary when OxideBBS controls both ends. An FTN-to-internal converter can be added later if ever needed. This is resolved — see the Packet format section.
+3. **Member range?** — `42:1/100+`. The gap below 100 leaves room for infrastructure nodes and avoids bikeshedding.
+4. **Sysop real names?** — Optional. BBS culture values pseudonymity.
+5. **Should the nodelist be public?** — Yes. It is how prospective sysops discover the network.
+6. **Should telnet addresses be listed publicly?** — Opt-in. Not all sysops want their telnet endpoint published.
+7. **Application fee?** — No.
+8. **Private sysop-only area from day one?** — Yes.
+9. **Netmail in v1?** — Include the netmail data model in `oxidebbs-ftn` from the start. Make echomail the first visible feature for users.
+10. **FidoNet/fsxNet bridging?** — Not until the native network is stable. Not a v1 concern.
 
 ## Strong recommendations
 
