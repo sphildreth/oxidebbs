@@ -45,6 +45,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `OXIDECHK.RPT` creation.
 - Added `scripts/run-dosbox-headless.sh` as an optional Xvfb wrapper for sysops
   who want live DOS doors to run without a visible DOSBox window.
+- Added a phased DOSBox-to-DOSEMU2 refactor plan and ADRs documenting DOSEMU2 as
+  the intended v1 DOS door runtime, including the decision to remove DOSBox
+  before v1 instead of carrying parallel runners.
 
 ### Changed
 

@@ -166,6 +166,21 @@ This is intended for a local coding agent to work from.
 - [x] Keep normal Cargo build/test independent of Free Pascal, DOSBox, and the
   staged i8086/MS-DOS cross toolchain.
 
+## DOSBox To DOSEMU2 Refactor Planning
+
+- [x] Add `design/DOSBOX_TO_DOSEMU2_REFACTOR_PLAN.md` to define the phased
+  removal of DOSBox and replacement with DOSEMU2.
+- [x] Add ADR 0010 selecting DOSEMU2 and its COM1 PTY backend as the long-term
+  v1 DOS door runtime.
+- [x] Add ADR 0011 documenting that DOSBox should be removed before v1 instead
+  of maintained as a parallel runner.
+- [ ] Prove DOSEMU2 headless operation in a Debian 13 LXC container.
+- [ ] Replace DOSBox command planning and serial bridge code with DOSEMU2
+  command planning and COM1 PTY bridging.
+- [ ] Convert Oxide Door Check documentation and optional smoke testing to
+  DOSEMU2.
+- [ ] Remove DOSBox scripts, config defaults, and user-facing documentation.
+
 ## Implementation Plan Phase 7 — Documentation And Runbook Completion
 
 - [x] Update docs for setup/validation/startup and local control flow in
