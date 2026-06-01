@@ -270,10 +270,10 @@ selected from the best variant supported by the caller, with 40-column ANSI
 preferred for ANSI callers at 40 columns or less.
 
 Current v1 runtime behavior supports login, new user, doors, messages, logoff,
-show screen, and no-op. Submenu entries validate as config but return an
-explicit "not yet implemented" caller message; nested menu navigation is
-post-v1 work. Guest access is not enabled by default in v1: callers must create
-or use an account before reaching the main menu.
+show screen, submenu, and no-op. `submenu` actions now resolve to the configured
+target menu and remain in the resulting menu context at runtime; nested submenu
+navigation is supported. Guest access is not enabled by default in v1: callers
+must create or use an account before reaching the main menu.
 
 The runtime uses `flow.login_screen`, `flow.post_login_screens`, and
 `flow.main_menu` for caller screen routing. The `terminal.welcome_screen` and

@@ -13,9 +13,9 @@
 - [x] ANSI asset loader
 - [x] CP437 conversion helper
 - [x] Screen renderer
-- [ ] Line input
+- [x] Line input
 - [x] Pager
-- [ ] Welcome/logoff screens
+- [x] Login and post-login screen routing
 
 ## Milestone 2 — Telnet sessions
 
@@ -45,7 +45,8 @@
 - [x] Message repository
 - [x] Door repository
 - [x] Audit event repository
-- [ ] DbWriter service
+- [x] Direct repository write model documented for v1; DbWriter deferred until
+  write contention requires it
 
 ## Milestone 5 — Local messages
 
@@ -84,6 +85,17 @@
 - [x] Duplicate detection design
 - [x] Packet import/export design
 
+## V1 release-candidate hardening
+
+- [x] Make `.github/workflows/pages.yml` resilient when Pages is disabled by
+  enabling it in-workflow (`actions/configure-pages@v5` with
+  `enablement: true`) and using an optional `GITHUB_PAGES_TOKEN` fallback to
+  `github.token`.
+- [x] Reconcile roadmap/spec v1 readiness items before code-complete declaration.
+- [x] Implement configured `submenu` runtime behavior.
+- [x] Add end-to-end telnet/runtime smoke coverage.
+- [x] Add graceful shutdown and lifecycle observability coverage.
+
 ## Future
 
 - [ ] Physical serial/modem transport
@@ -91,3 +103,5 @@
 - [ ] Full FTN tosser/scanner
 - [ ] OxideNet network support
 - [ ] File transfer support, if still desired
+- [ ] Dedicated welcome/logoff screen rendering
+- [ ] DbWriter service if write contention emerges

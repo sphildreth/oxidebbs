@@ -54,6 +54,9 @@ Menu actions are safe internal actions, not shell commands. Supported starter
 actions include `login`, `new_user`, `doors`, `messages`, `logoff`, `noop`,
 `show_screen`, and `submenu`.
 
+`submenu` actions are now runtime-capable: when selected, the caller moves into
+the referenced menu and continues from that menu context.
+
 ## Asset Layout
 
 Starter caller screens live under `assets/screens/`:

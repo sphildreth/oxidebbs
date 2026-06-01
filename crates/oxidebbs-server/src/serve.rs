@@ -1,5 +1,7 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::fmt::Write as FmtWrite;
+use std::future::Future;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -8,7 +10,9 @@ use argon2::{Argon2, PasswordVerifier as Argon2PasswordVerifier};
 use rand_core::OsRng;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::time::timeout;
+#[cfg(unix)]
+use tokio::signal::unix::{SignalKind, signal};
+use tokio::time::{sleep, timeout};
 use tracing::{error, info, warn};
 
 use oxidebbs_core::auth::{
@@ -64,7 +68,18 @@ const REJECTION_MESSAGE: &str = "System is busy. Please try again later.\r\n";
 const PROMPT_TERMINATOR: &str = "\r\n";
 const MAIN_MENU_POST_LOGIN: &str = "Please choose from the menu.\r\n";
 
-pub async fn run(config: &OxideConfig) -> ServeResult<()> {
+pub async fn run(config: &OxideConfig, config_path: &Path) -> ServeResult<()> {
+    run_until_shutdown(config, config_path, wait_for_shutdown_signal()).await
+}
+
+async fn run_until_shutdown<S>(
+    config: &OxideConfig,
+    config_path: &Path,
+    shutdown_signal: S,
+) -> ServeResult<()>
+where
+    S: Future<Output = ServeResult<()>> + Send,
+{
     if !config.telnet.enabled {
         info!(bind = %config.telnet.bind, "telnet disabled; service not started");
         return Ok(());
@@ -72,6 +87,18 @@ pub async fn run(config: &OxideConfig) -> ServeResult<()> {
 
     let db =
         Arc::new(OxideDb::open_or_create(&config.database.path).map_err(ServeError::Database)?);
+    emit_audit_event(
+        db.as_ref(),
+        "config_loaded",
+        None,
+        None,
+        format!(
+            "config loaded from {} for board {}",
+            config_path.display(),
+            config.board.name
+        ),
+    );
+
     let runtime = Arc::new(ServerRuntime::new(
         config.board.name.clone(),
         config.nodes.count,
@@ -79,19 +106,27 @@ pub async fn run(config: &OxideConfig) -> ServeResult<()> {
         config.telnet.idle_timeout_seconds.saturating_add(30),
     ));
 
-    let login_menu = Arc::new(
-        config
-            .core_menu(&config.flow.login_menu)
-            .map_err(|error| ServeError::Config(error.to_string()))?,
-    );
+    let mut resolved_menus: HashMap<String, Arc<Menu>> = HashMap::new();
+    for menu_id in config.menus.keys() {
+        let menu = config
+            .core_menu(menu_id)
+            .map_err(|error| ServeError::Config(error.to_string()))?;
+        resolved_menus.insert(menu_id.clone(), Arc::new(menu));
+    }
 
-    let main_menu = Arc::new(
-        config
-            .core_menu(&config.flow.main_menu)
-            .map_err(|error| ServeError::Config(error.to_string()))?,
-    );
+    let login_menu_id = config.flow.login_menu.clone();
+    let main_menu_id = config.flow.main_menu.clone();
+    let login_menu = resolved_menus
+        .get(&login_menu_id)
+        .cloned()
+        .ok_or_else(|| ServeError::Config(format!("missing login menu {login_menu_id:?}")))?;
+    let main_menu = resolved_menus
+        .get(&main_menu_id)
+        .cloned()
+        .ok_or_else(|| ServeError::Config(format!("missing main menu {main_menu_id:?}")))?;
+    let menus = Arc::new(resolved_menus);
 
-    let _control_listener =
+    let control_listener =
         match start_control_listener(&config.paths.runtime, Arc::clone(&runtime)).await {
             Ok(handle) => Some(handle),
             Err(ControlError::Unsupported(message)) => {
@@ -106,39 +141,124 @@ pub async fn run(config: &OxideConfig) -> ServeResult<()> {
         };
 
     let listener = TcpListener::bind(&config.telnet.bind).await?;
+    emit_audit_event(
+        db.as_ref(),
+        "server_start",
+        None,
+        None,
+        format!(
+            "serving {} on {} with {} node(s)",
+            config.board.name, config.telnet.bind, config.nodes.count
+        ),
+    );
 
     info!(bind = %config.telnet.bind, "listening for telnet callers");
 
+    let mut shutdown = Box::pin(shutdown_signal);
+    let mut accept_error = None;
+
     loop {
-        let (stream, peer_addr) = listener.accept().await?;
-        let peer = CallerPeer {
-            address: peer_addr.to_string(),
-            ip: peer_addr.ip().to_string(),
-            port: i64::from(peer_addr.port()),
-        };
+        tokio::select! {
+            accept = listener.accept() => {
+                let (stream, peer_addr) = match accept {
+                    Ok(accepted) => accepted,
+                    Err(error) => {
+                        accept_error = Some(ServeError::Network(error));
+                        break;
+                    }
+                };
+                let peer = CallerPeer {
+                    address: peer_addr.to_string(),
+                    ip: peer_addr.ip().to_string(),
+                    port: i64::from(peer_addr.port()),
+                };
 
-        if let Some(allocation) = runtime.try_allocate_node() {
-            let resources = CallerResources {
-                db: Arc::clone(&db),
-                config: Arc::new(config.clone()),
-                login_menu: Arc::clone(&login_menu),
-                main_menu: Arc::clone(&main_menu),
-                runtime: Arc::clone(&runtime),
-            };
+                if let Some(allocation) = runtime.try_allocate_node() {
+                    emit_audit_event(
+                        db.as_ref(),
+                        "node_assigned",
+                        None,
+                        Some(i64::from(allocation.node_number)),
+                        format!("node {} assigned to {}", allocation.node_number, peer.address),
+                    );
+                    let resources = CallerResources {
+                        db: Arc::clone(&db),
+                        config: Arc::new(config.clone()),
+                        login_menu: Arc::clone(&login_menu),
+                        main_menu: Arc::clone(&main_menu),
+                        menus: Arc::clone(&menus),
+                        runtime: Arc::clone(&runtime),
+                    };
 
-            tokio::spawn(async move {
-                if let Err(error) = handle_caller(allocation, stream, peer, resources).await {
-                    warn!("caller session ended with error: {error}");
+                    tokio::spawn(async move {
+                        if let Err(error) = handle_caller(allocation, stream, peer, resources).await {
+                            warn!("caller session ended with error: {error}");
+                        }
+                    });
+                } else {
+                    tokio::spawn(async move {
+                        if let Err(error) = reject_connection(stream).await {
+                            warn!("failed to reject caller: {error}");
+                        }
+                    });
                 }
-            });
-        } else {
-            tokio::spawn(async move {
-                if let Err(error) = reject_connection(stream).await {
-                    warn!("failed to reject caller: {error}");
+            }
+            shutdown_result = &mut shutdown => {
+                if let Err(error) = shutdown_result {
+                    accept_error = Some(error);
                 }
-            });
+                break;
+            }
         }
     }
+
+    let active_nodes = runtime
+        .nodes_snapshot()
+        .into_iter()
+        .filter_map(|status| {
+            if status.connected_at.is_some() {
+                Some(status.node_number)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    for node_number in &active_nodes {
+        runtime.request_node_disconnect(*node_number, "server stopping".to_string());
+    }
+    if !active_nodes.is_empty() {
+        for _ in 0..20 {
+            if runtime
+                .nodes_snapshot()
+                .iter()
+                .all(|status| status.connected_at.is_none())
+            {
+                break;
+            }
+            sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    if let Some(handle) = control_listener {
+        handle.abort();
+    }
+
+    emit_audit_event(
+        db.as_ref(),
+        "server_stop",
+        None,
+        None,
+        format!(
+            "shutdown complete with {} active node(s)",
+            active_nodes.len()
+        ),
+    );
+
+    if let Some(error) = accept_error {
+        return Err(error);
+    }
+
+    Ok(())
 }
 
 async fn reject_connection(mut stream: TcpStream) -> ServeResult<()> {
@@ -153,6 +273,7 @@ struct CallerResources {
     config: Arc<OxideConfig>,
     login_menu: Arc<Menu>,
     main_menu: Arc<Menu>,
+    menus: Arc<HashMap<String, Arc<Menu>>>,
     runtime: Arc<ServerRuntime>,
 }
 
@@ -167,6 +288,7 @@ async fn handle_caller(
         config,
         login_menu,
         main_menu,
+        menus,
         runtime,
     } = resources;
     let node_number_u16 = allocation.node_number;
@@ -195,6 +317,14 @@ async fn handle_caller(
         },
     )
     .map_err(|error| {
+        emit_db_write_failed_event(
+            &db,
+            Some(node_number),
+            None,
+            "insert_session",
+            &error,
+            "failed to open caller session",
+        );
         error!("failed to insert session record: {error}");
         ServeError::Database(error)
     })?;
@@ -204,20 +334,15 @@ async fn handle_caller(
         peer.address.clone(),
         connected_at.clone(),
     );
+    let mut current_menu = Arc::clone(&login_menu);
 
-    if let Err(error) = insert_audit_event(
-        db.db(),
-        &AuditEventRecord {
-            id: generated_uuid(&db)?,
-            created_at: connected_at,
-            event_type: "caller_connected".to_string(),
-            user_id: None,
-            node_number: Some(node_number),
-            details: format!("caller connected from {}", peer.address),
-        },
-    ) {
-        warn!("failed to insert caller_connected event: {error}");
-    }
+    emit_audit_event(
+        db.as_ref(),
+        "caller_connected",
+        None,
+        Some(node_number),
+        format!("caller connected from {}", peer.address),
+    );
 
     if config.terminal.clear_screen_on_connect {
         transport
@@ -292,7 +417,7 @@ async fn handle_caller(
                 drain_line_ending_after_menu_key(&mut transport, &mut input).await?;
 
                 if !in_main_menu {
-                    match login_menu.route(&key) {
+                    match current_menu.route(&key) {
                         Some(MenuAction::Login) => {
                             let mut auth_state = AuthFlowState {
                                 db: db.as_ref(),
@@ -313,6 +438,7 @@ async fn handle_caller(
                                             Some(user.alias.clone()),
                                         );
                                     }
+                                    current_menu = Arc::clone(&main_menu);
                                     show_post_login_screens(
                                         &mut transport,
                                         &config,
@@ -330,7 +456,7 @@ async fn handle_caller(
                                     in_main_menu = true;
                                 }
                                 AuthFlowResult::Retry => {
-                                    send_menu_prompt(&mut transport, &login_menu).await?;
+                                    send_menu_prompt(&mut transport, &current_menu).await?;
                                 }
                                 AuthFlowResult::Exit => break,
                             }
@@ -355,6 +481,7 @@ async fn handle_caller(
                                             Some(user.alias.clone()),
                                         );
                                     }
+                                    current_menu = Arc::clone(&main_menu);
                                     show_post_login_screens(
                                         &mut transport,
                                         &config,
@@ -372,7 +499,7 @@ async fn handle_caller(
                                     in_main_menu = true;
                                 }
                                 AuthFlowResult::Retry => {
-                                    send_menu_prompt(&mut transport, &login_menu).await?;
+                                    send_menu_prompt(&mut transport, &current_menu).await?;
                                 }
                                 AuthFlowResult::Exit => break,
                             }
@@ -382,14 +509,27 @@ async fn handle_caller(
                             send_text(&mut transport, "Goodbye.\r\n").await?;
                             break;
                         }
+                        Some(MenuAction::Submenu { menu_id }) => {
+                            if let Some(submenu) = resolve_submenu(&menus, &menu_id) {
+                                current_menu = Arc::clone(&submenu);
+                                send_menu_prompt(&mut transport, &current_menu).await?;
+                            } else {
+                                send_text(
+                                    &mut transport,
+                                    "Configured submenu menu is missing.\r\n",
+                                )
+                                .await?;
+                                send_menu_prompt(&mut transport, &current_menu).await?;
+                            }
+                        }
                         _ => {
                             send_text(&mut transport, "Select Login, New User, or Goodbye.\r\n")
                                 .await?;
-                            send_menu_prompt(&mut transport, &login_menu).await?;
+                            send_menu_prompt(&mut transport, &current_menu).await?;
                         }
                     }
                 } else {
-                    match main_menu.route(&key) {
+                    match current_menu.route(&key) {
                         Some(MenuAction::Doors) => {
                             let mut door_state = DoorFlowState {
                                 db: db.as_ref(),
@@ -409,7 +549,7 @@ async fn handle_caller(
                             {
                                 MenuFlowResult::Continue => {
                                     runtime.mark_node_main_menu(node_number_u16);
-                                    send_menu_prompt(&mut transport, &main_menu).await?;
+                                    send_menu_prompt(&mut transport, &current_menu).await?;
                                 }
                                 MenuFlowResult::Exit => break,
                             }
@@ -433,7 +573,7 @@ async fn handle_caller(
                             {
                                 MenuFlowResult::Continue => {
                                     runtime.mark_node_main_menu(node_number_u16);
-                                    send_menu_prompt(&mut transport, &main_menu).await?;
+                                    send_menu_prompt(&mut transport, &current_menu).await?;
                                 }
                                 MenuFlowResult::Exit => {
                                     break;
@@ -443,7 +583,7 @@ async fn handle_caller(
                         Some(MenuAction::NewUser) => {
                             send_text(&mut transport, "Already signed in. Return to menu.\r\n")
                                 .await?;
-                            send_menu_prompt(&mut transport, &main_menu).await?;
+                            send_menu_prompt(&mut transport, &current_menu).await?;
                         }
                         Some(MenuAction::Logoff) => {
                             disconnect_reason = "caller_logoff".to_string();
@@ -453,22 +593,30 @@ async fn handle_caller(
                         Some(MenuAction::ShowScreen { screen }) => {
                             send_screen(&mut transport, &config, &screen.asset, &mut capabilities)
                                 .await?;
-                            send_menu_prompt(&mut transport, &main_menu).await?;
+                            send_menu_prompt(&mut transport, &current_menu).await?;
                         }
-                        Some(MenuAction::Submenu { .. }) => {
-                            send_text(&mut transport, "Submenus are not yet implemented.\r\n")
+                        Some(MenuAction::Submenu { menu_id }) => {
+                            if let Some(submenu) = resolve_submenu(&menus, &menu_id) {
+                                current_menu = Arc::clone(&submenu);
+                                send_menu_prompt(&mut transport, &current_menu).await?;
+                            } else {
+                                send_text(
+                                    &mut transport,
+                                    "Configured submenu menu is missing.\r\n",
+                                )
                                 .await?;
-                            send_menu_prompt(&mut transport, &main_menu).await?;
+                                send_menu_prompt(&mut transport, &current_menu).await?;
+                            }
                         }
                         Some(MenuAction::Login) => {
                             send_text(&mut transport, "Already signed in. Return to menu.\r\n")
                                 .await?;
-                            send_menu_prompt(&mut transport, &main_menu).await?;
+                            send_menu_prompt(&mut transport, &current_menu).await?;
                         }
                         Some(MenuAction::Noop) => {}
                         None => {
                             send_text(&mut transport, "Unknown option.\r\n").await?;
-                            send_menu_prompt(&mut transport, &main_menu).await?;
+                            send_menu_prompt(&mut transport, &current_menu).await?;
                         }
                     }
                 }
@@ -493,22 +641,24 @@ async fn handle_caller(
     let ended_at = current_timestamp(&db)?;
     if let Err(error) = end_session(db.db(), &session_id, &ended_at, &disconnect_reason) {
         warn!("failed to close session record: {error}");
+        emit_db_write_failed_event(
+            db.as_ref(),
+            Some(node_number),
+            authenticated_user.as_ref().map(|user| user.id.clone()),
+            "end_session",
+            &error,
+            "failed to close session",
+        );
     }
     runtime.mark_node_disconnected(node_number_u16);
 
-    if let Err(error) = insert_audit_event(
-        db.db(),
-        &AuditEventRecord {
-            id: generated_uuid(&db)?,
-            created_at: ended_at,
-            event_type: "caller_disconnected".to_string(),
-            user_id: authenticated_user.as_ref().map(|user| user.id.clone()),
-            node_number: Some(node_number),
-            details: format!("disconnect reason: {disconnect_reason}"),
-        },
-    ) {
-        warn!("failed to insert caller_disconnected event: {error}");
-    }
+    emit_audit_event(
+        db.as_ref(),
+        "caller_disconnected",
+        authenticated_user.as_ref().map(|user| user.id.clone()),
+        Some(node_number),
+        format!("disconnect reason: {disconnect_reason}"),
+    );
 
     info!(
         node = %node_number,
@@ -620,19 +770,13 @@ async fn run_login_flow(
         Some(record) => record,
         None => {
             let event_error = format!("login failed for alias {alias}");
-            if let Err(error) = insert_audit_event(
-                db.db(),
-                &AuditEventRecord {
-                    id: generated_uuid(db)?,
-                    created_at: login_at,
-                    event_type: "login_failure".to_string(),
-                    user_id: None,
-                    node_number: Some(node_number),
-                    details: event_error.clone(),
-                },
-            ) {
-                warn!("failed to insert login_failure event: {error}");
-            }
+            emit_audit_event(
+                db,
+                "login_failure",
+                None,
+                Some(node_number),
+                event_error.clone(),
+            );
 
             send_text(
                 transport,
@@ -653,19 +797,13 @@ async fn run_login_flow(
         Ok(success) => success.user,
         Err(error) => {
             let event_error = format!("login failed for user {}: {error}", user.alias);
-            if let Err(error) = insert_audit_event(
-                db.db(),
-                &AuditEventRecord {
-                    id: generated_uuid(db)?,
-                    created_at: login_at,
-                    event_type: "login_failure".to_string(),
-                    user_id: Some(user.id.clone()),
-                    node_number: Some(node_number),
-                    details: event_error,
-                },
-            ) {
-                warn!("failed to insert login_failure event: {error}");
-            }
+            emit_audit_event(
+                db,
+                "login_failure",
+                Some(user.id.clone()),
+                Some(node_number),
+                event_error,
+            );
 
             send_text(
                 transport,
@@ -677,6 +815,14 @@ async fn run_login_flow(
     };
 
     if let Err(error) = update_user_login(db.db(), &user.id, &login_at) {
+        emit_db_write_failed_event(
+            db,
+            Some(node_number),
+            Some(user.id.clone()),
+            "update_user_login",
+            &error,
+            "failed to update user login counters",
+        );
         warn!(
             "failed to update user login counters for {}: {error}",
             user.alias
@@ -684,25 +830,27 @@ async fn run_login_flow(
     }
 
     if let Err(error) = update_session_user(db.db(), session_id, &user.id) {
+        emit_db_write_failed_event(
+            db,
+            Some(node_number),
+            Some(user.id.clone()),
+            "update_session_user",
+            &error,
+            "failed to associate user with session",
+        );
         warn!(
             "failed to associate user {} with session {}: {error}",
             user.alias, session_id
         );
     }
 
-    if let Err(error) = insert_audit_event(
-        db.db(),
-        &AuditEventRecord {
-            id: generated_uuid(db)?,
-            created_at: login_at,
-            event_type: "login_success".to_string(),
-            user_id: Some(user.id.clone()),
-            node_number: Some(node_number),
-            details: format!("login successful for {}", user.alias),
-        },
-    ) {
-        warn!("failed to insert login_success event: {error}");
-    }
+    emit_audit_event(
+        db,
+        "login_success",
+        Some(user.id.clone()),
+        Some(node_number),
+        format!("login successful for {}", user.alias),
+    );
 
     *authenticated_user = Some(user);
     send_text(transport, "Login successful. Welcome back.\r\n").await?;
@@ -873,9 +1021,27 @@ async fn run_new_user_flow(
         time_bank_minutes: user.time_bank_minutes,
         status: user_status_to_db(&user.status),
     };
-    insert_user(db.db(), &record)?;
+    if let Err(error) = insert_user(db.db(), &record) {
+        emit_db_write_failed_event(
+            db,
+            Some(node_number),
+            Some(user.id.clone()),
+            "insert_user",
+            &error,
+            "failed to create new user record",
+        );
+        return Ok(AuthFlowResult::Retry);
+    }
 
     if let Err(error) = update_user_login(db.db(), &user.id, &created_at) {
+        emit_db_write_failed_event(
+            db,
+            Some(node_number),
+            Some(user.id.clone()),
+            "update_user_login",
+            &error,
+            "failed to update new user login counters",
+        );
         warn!(
             "failed to update new user login counters for {}: {error}",
             user.alias
@@ -886,6 +1052,14 @@ async fn run_new_user_flow(
     }
 
     if let Err(error) = update_session_user(db.db(), session_id, &user.id) {
+        emit_db_write_failed_event(
+            db,
+            Some(node_number),
+            Some(user.id.clone()),
+            "update_session_user",
+            &error,
+            "failed to associate new user with session",
+        );
         warn!(
             "failed to associate user {} with session {}: {error}",
             user.alias, session_id
@@ -894,33 +1068,20 @@ async fn run_new_user_flow(
 
     *authenticated_user = Some(user.clone());
 
-    if let Err(error) = insert_audit_event(
-        db.db(),
-        &AuditEventRecord {
-            id: generated_uuid(db)?,
-            created_at: created_at.clone(),
-            event_type: "new_user_created".to_string(),
-            user_id: Some(user.id.clone()),
-            node_number: Some(node_number),
-            details: format!("new user created for {}", user.alias),
-        },
-    ) {
-        warn!("failed to insert new_user_created event: {error}");
-    }
-
-    if let Err(error) = insert_audit_event(
-        db.db(),
-        &AuditEventRecord {
-            id: generated_uuid(db)?,
-            created_at,
-            event_type: "login_success".to_string(),
-            user_id: Some(user.id.clone()),
-            node_number: Some(node_number),
-            details: format!("new user logged in as {}", user.alias),
-        },
-    ) {
-        warn!("failed to insert new user login_success event: {error}");
-    }
+    emit_audit_event(
+        db,
+        "new_user_created",
+        Some(user.id.clone()),
+        Some(node_number),
+        format!("new user created for {}", user.alias),
+    );
+    emit_audit_event(
+        db,
+        "login_success",
+        Some(user.id.clone()),
+        Some(node_number),
+        format!("new user logged in as {}", user.alias),
+    );
 
     send_text(transport, "Account created. Welcome.\r\n").await?;
     Ok(AuthFlowResult::Success)
@@ -1193,7 +1354,19 @@ async fn run_messages_flow(
                             continue;
                         }
                     };
-                    insert_message(db.db(), &message_record_from_message(&message))?;
+                    if let Err(error) =
+                        insert_message(db.db(), &message_record_from_message(&message))
+                    {
+                        emit_db_write_failed_event(
+                            db,
+                            Some(i64::from(node_number)),
+                            Some(user.id.clone()),
+                            "insert_message",
+                            &error,
+                            "failed to save posted message",
+                        );
+                        return Err(ServeError::Database(error));
+                    }
                     send_text(transport, "Message posted.\r\n").await?;
                     runtime.mark_node_reading_messages(node_number);
                 }
@@ -1247,7 +1420,19 @@ async fn run_messages_flow(
                             continue;
                         }
                     };
-                    insert_message(db.db(), &message_record_from_message(&message))?;
+                    if let Err(error) =
+                        insert_message(db.db(), &message_record_from_message(&message))
+                    {
+                        emit_db_write_failed_event(
+                            db,
+                            Some(i64::from(node_number)),
+                            Some(user.id.clone()),
+                            "insert_message",
+                            &error,
+                            "failed to save reply",
+                        );
+                        return Err(ServeError::Database(error));
+                    }
                     send_text(transport, "Reply posted.\r\n").await?;
                     runtime.mark_node_reading_messages(node_number);
                 }
@@ -1268,6 +1453,14 @@ async fn ensure_default_message_area(
     }
 
     if let Err(error) = seed_default_message_area(db) {
+        emit_db_write_failed_event(
+            db,
+            None,
+            None,
+            "seed_default_message_area",
+            &error,
+            "failed to seed default message area",
+        );
         warn!("failed to seed default message area: {error}");
         send_text(transport, "Messages are not available right now.\r\n").await?;
     }
@@ -1828,6 +2021,10 @@ struct CallerPeer {
     port: i64,
 }
 
+fn resolve_submenu(menus: &HashMap<String, Arc<Menu>>, menu_id: &str) -> Option<Arc<Menu>> {
+    menus.get(menu_id).cloned()
+}
+
 fn generated_uuid(db: &OxideDb) -> ServeResult<String> {
     db_scalar_text(db, "SELECT UUID_TO_STRING(GEN_RANDOM_UUID())")
 }
@@ -1852,13 +2049,97 @@ fn db_scalar_text(db: &OxideDb, sql: &str) -> ServeResult<String> {
     }
 }
 
+fn emit_audit_event(
+    db: &OxideDb,
+    event_type: &str,
+    user_id: Option<String>,
+    node_number: Option<i64>,
+    details: String,
+) {
+    let event_id = match generated_uuid(db) {
+        Ok(value) => value,
+        Err(error) => {
+            warn!("failed to generate {event_type} audit event id: {error}");
+            return;
+        }
+    };
+    let created_at = match current_timestamp(db) {
+        Ok(value) => value,
+        Err(error) => {
+            warn!("failed to generate {event_type} audit timestamp: {error}");
+            return;
+        }
+    };
+    if let Err(error) = insert_audit_event(
+        db.db(),
+        &AuditEventRecord {
+            id: event_id,
+            created_at,
+            event_type: event_type.to_string(),
+            user_id,
+            node_number,
+            details,
+        },
+    ) {
+        warn!("failed to insert {event_type} audit event: {error}");
+    }
+}
+
+fn emit_db_write_failed_event(
+    db: &OxideDb,
+    node_number: Option<i64>,
+    user_id: Option<String>,
+    operation: &str,
+    error: &dyn std::fmt::Display,
+    context: &str,
+) {
+    emit_audit_event(
+        db,
+        "db_write_failed",
+        user_id,
+        node_number,
+        format!("{context} during {operation}: {error}"),
+    );
+}
+
+#[cfg(unix)]
+async fn wait_for_shutdown_signal() -> ServeResult<()> {
+    let mut terminate = signal(SignalKind::terminate()).map_err(|error| {
+        ServeError::Runtime(format!("failed to register SIGTERM handler: {error}"))
+    })?;
+
+    tokio::select! {
+        result = tokio::signal::ctrl_c() => {
+            result
+                .map_err(|error| ServeError::Runtime(format!("failed to wait for ctrl-c signal: {error}")))?;
+            Ok(())
+        }
+        _ = terminate.recv() => Ok(())
+    }
+}
+
+#[cfg(not(unix))]
+async fn wait_for_shutdown_signal() -> ServeResult<()> {
+    tokio::signal::ctrl_c().await.map_err(|error| {
+        ServeError::Runtime(format!("failed to wait for ctrl-c signal: {error}"))
+    })?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
+    use std::net::SocketAddr;
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
     use oxidebbs_telnet::{
         LoopbackTransport,
         telnet::{DO, IAC, TELOPT_SUPPRESS_GO_AHEAD},
     };
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::sync::oneshot;
 
     #[test]
     fn normalize_key_uppercases_ascii() {
@@ -1871,6 +2152,34 @@ mod tests {
         assert_eq!(normalize_key(b'\n'), None);
         assert_eq!(normalize_key(0x00), None);
         assert_eq!(normalize_key(0x1b), None);
+    }
+
+    #[test]
+    fn resolve_submenu_menu_prefers_configured_menu_entry() {
+        let mut menus = HashMap::new();
+        let submenu = Arc::new(Menu {
+            id: "submenu".to_string(),
+            title: "Submenu".to_string(),
+            description: None,
+            screen: oxidebbs_core::menu::ScreenAsset {
+                asset: "submenu".to_string(),
+            },
+            entries: Vec::new(),
+            pre_menu_screens: Vec::new(),
+        });
+        menus.insert("submenu".to_string(), Arc::clone(&submenu));
+
+        let selected =
+            resolve_submenu(&menus, "submenu").expect("configured submenu should resolve");
+
+        assert!(std::sync::Arc::ptr_eq(&selected, &submenu));
+    }
+
+    #[test]
+    fn resolve_submenu_menu_missing_menu_is_none() {
+        let menus: HashMap<String, Arc<Menu>> = HashMap::new();
+
+        assert!(resolve_submenu(&menus, "missing").is_none());
     }
 
     #[test]
@@ -1898,6 +2207,82 @@ mod tests {
         assert!(third.node_number > 0);
         drop(second);
         drop(third);
+    }
+
+    #[tokio::test]
+    async fn telnet_runtime_smoke_creates_user_logs_off_and_records_lifecycle() {
+        let base_dir = temp_dir("runtime-smoke");
+        let db_path = base_dir.join("oxidebbs.ddb");
+        let config_path = base_dir.join("oxidebbs.toml");
+        let bind_addr = free_loopback_addr();
+        let mut config = smoke_config(bind_addr, &base_dir, &db_path);
+        config.terminal.clear_screen_on_connect = false;
+
+        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+        let server_config = config.clone();
+        let server_config_path = config_path.clone();
+        let server = tokio::spawn(async move {
+            run_until_shutdown(&server_config, &server_config_path, async move {
+                let _ = shutdown_rx.await;
+                Ok(())
+            })
+            .await
+        });
+
+        let mut client = connect_with_retry(bind_addr).await;
+        read_until(&mut client, "Login? ").await;
+        client.write_all(b"N\r").await.expect("select new user");
+        read_until(&mut client, "Choose an alias: ").await;
+        client.write_all(b"SmokeUser\r").await.expect("alias");
+        read_until(&mut client, "Real name: ").await;
+        client.write_all(b"Smoke User\r").await.expect("real name");
+        read_until(&mut client, "Email (optional): ").await;
+        client.write_all(b"\r").await.expect("blank email");
+        read_until(&mut client, "Choose password: ").await;
+        client.write_all(b"secret\r").await.expect("password");
+        read_until(&mut client, "Confirm password: ").await;
+        client
+            .write_all(b"secret\r")
+            .await
+            .expect("password confirmation");
+        read_until(&mut client, "Command? ").await;
+        client.write_all(b"L\r").await.expect("logoff");
+        read_until(&mut client, "Goodbye.").await;
+        drop(client);
+
+        shutdown_tx.send(()).expect("send shutdown");
+        timeout(Duration::from_secs(5), server)
+            .await
+            .expect("server shutdown timeout")
+            .expect("server join")
+            .expect("server result");
+
+        let db = OxideDb::open_or_create(&db_path).expect("open smoke db");
+        let users = oxidebbs_db::list_users(db.db()).expect("list users");
+        assert!(users.iter().any(|user| user.alias == "SmokeUser"));
+
+        let event_types = oxidebbs_db::list_audit_events(db.db(), 100)
+            .expect("list audit")
+            .into_iter()
+            .map(|event| event.event_type)
+            .collect::<HashSet<_>>();
+        for expected in [
+            "config_loaded",
+            "server_start",
+            "node_assigned",
+            "caller_connected",
+            "new_user_created",
+            "login_success",
+            "caller_disconnected",
+            "server_stop",
+        ] {
+            assert!(
+                event_types.contains(expected),
+                "missing audit event {expected}; got {event_types:?}"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(base_dir);
     }
 
     #[tokio::test]
@@ -2066,5 +2451,131 @@ mod tests {
             message_visibility_from_db("hidden"),
             MessageVisibility::PendingModeration
         ));
+    }
+
+    fn free_loopback_addr() -> SocketAddr {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback probe");
+        let addr = listener.local_addr().expect("probe local addr");
+        drop(listener);
+        addr
+    }
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "oxidebbs-server-{name}-{}-{suffix}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).expect("create temp dir");
+        path
+    }
+
+    fn smoke_config(bind_addr: SocketAddr, base_dir: &Path, db_path: &Path) -> OxideConfig {
+        let mut config: OxideConfig = toml::from_str(
+            r#"
+[board]
+name = "Smoke BBS"
+
+[telnet]
+enabled = true
+bind = "127.0.0.1:0"
+max_connections = 1
+idle_timeout_seconds = 5
+
+[database]
+path = "oxidebbs.ddb"
+
+[paths]
+ansi = "ansi"
+screens = "screens"
+doors = "doors"
+runtime = "runtime"
+logs = "logs"
+
+[flow]
+login_screen = "login"
+login_menu = "login"
+main_menu = "main"
+
+[screens.login]
+text = "login.txt"
+
+[screens.main_menu]
+text = "main.txt"
+
+[menus.login]
+screen = "login"
+prompt = "Login? "
+
+[[menus.login.items]]
+key = "N"
+label = "New User"
+action = "new_user"
+
+[[menus.login.items]]
+key = "L"
+label = "Logoff"
+action = "logoff"
+
+[menus.main]
+screen = "main_menu"
+prompt = "Command? "
+
+[[menus.main.items]]
+key = "L"
+label = "Logoff"
+action = "logoff"
+"#,
+        )
+        .expect("parse smoke config");
+        config.telnet.bind = bind_addr.to_string();
+        config.database.path = db_path.to_path_buf();
+        config.paths.ansi = base_dir.join("ansi");
+        config.paths.screens = base_dir.join("screens");
+        config.paths.doors = base_dir.join("doors");
+        config.paths.runtime = base_dir.join("runtime");
+        config.paths.logs = base_dir.join("logs");
+        config
+    }
+
+    async fn connect_with_retry(addr: SocketAddr) -> TcpStream {
+        let mut last_error = None;
+        for _ in 0..50 {
+            match TcpStream::connect(addr).await {
+                Ok(stream) => return stream,
+                Err(error) => {
+                    last_error = Some(error);
+                    sleep(Duration::from_millis(20)).await;
+                }
+            }
+        }
+        panic!("failed to connect to smoke server at {addr}: {last_error:?}");
+    }
+
+    async fn read_until(client: &mut TcpStream, needle: &str) -> String {
+        let mut output = Vec::new();
+        timeout(Duration::from_secs(5), async {
+            loop {
+                let mut byte = [0u8; 1];
+                let read = client.read(&mut byte).await.expect("read smoke output");
+                assert!(read > 0, "server closed before {needle:?}");
+                output.push(byte[0]);
+                if String::from_utf8_lossy(&output).contains(needle) {
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "timed out waiting for {needle:?}; output was {:?}",
+                String::from_utf8_lossy(&output)
+            )
+        });
+        String::from_utf8_lossy(&output).to_string()
     }
 }

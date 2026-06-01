@@ -50,6 +50,6 @@ pub async fn run_serve(args: ServeArgs, ctx: &AppContext) -> CliResult<()> {
         "OxideBBS \"{}\" - telnet {} with {} node(s)",
         config.board.name, config.telnet.bind, config.nodes.count
     );
-    serve::run(&config).await?;
+    serve::run(&config, &ctx.config_path).await?;
     Ok(())
 }

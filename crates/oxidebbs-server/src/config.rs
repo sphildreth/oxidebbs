@@ -770,6 +770,62 @@ time_limit_minutes = 30
     }
 
     #[test]
+    fn supports_submenu_action_routing() {
+        let toml = r#"
+[board]
+name = "Test"
+
+[flow]
+login_screen = "login"
+login_menu = "main"
+main_menu = "main"
+
+[screens.login]
+text = "login.txt"
+
+[screens.main_menu]
+text = "main.txt"
+
+[screens.submenu]
+text = "submenu.txt"
+
+[menus.main]
+screen = "main_menu"
+
+[[menus.main.items]]
+key = "S"
+label = "Submenu"
+action = "submenu"
+target = "submenu"
+
+[[menus.main.items]]
+key = "L"
+label = "Logoff"
+action = "logoff"
+
+[menus.submenu]
+screen = "submenu"
+
+[[menus.submenu.items]]
+key = "L"
+label = "Logoff"
+action = "logoff"
+"#;
+        let config: OxideConfig = toml::from_str(toml).expect("parse");
+
+        assert!(config.validate().is_ok());
+        let menu = config
+            .core_menu("main")
+            .expect("convert main menu with submenu");
+        assert_eq!(
+            menu.route("S"),
+            Some(oxidebbs_core::menu::MenuAction::Submenu {
+                menu_id: "submenu".to_string()
+            })
+        );
+    }
+
+    #[test]
     fn rejects_duplicate_menu_keys() {
         let toml = r#"
 [board]

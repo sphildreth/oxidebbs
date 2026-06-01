@@ -32,6 +32,11 @@ jobs:
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
+        with:
+          enablement: true
+          # Use an explicit admin token if configured for first-time bootstrap; fallback to github.token for
+          # already-provisioned repos.
+          token: ${{ secrets.GITHUB_PAGES_TOKEN || github.token }}
 
       - name: Install dependencies
         run: npm ci

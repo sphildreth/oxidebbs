@@ -13,10 +13,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   enabled-door listing, key/number selection, selected-door validation, drop-file
   generation, `door_started`/`door_finished`/`door_timed_out` audit events, and
   `door_runs` lifecycle updates.
+- Added runtime submenu menu navigation for configured `submenu` menu entries so
+  callers can move into nested menus without placeholder fallback text.
 - Added a server-side interactive door bridge that forwards caller bytes to the
   child process, forwards child stdout/stderr to the caller, enforces timeouts,
   handles sysop disconnects, cleans node runtime directories, and reports live
   nodes as `in_door` while active.
+- Added graceful server lifecycle handling in `oxidebbs-server::run`: startup and
+  shutdown signals now stop listener acceptance and request active caller disconnects
+  before completing shutdown.
+- Added an end-to-end telnet runtime smoke test covering new-user creation,
+  logoff, shutdown, and lifecycle audit records.
 - Added `db import --format json <path>` as a full, schema-validated restore into
   schema-only DecentDB targets, with transactional insertion and FK-aware load
   ordering.
@@ -51,6 +58,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Hardened CLI automation by normalizing `--json` output for:
   `status`, `users list`, `nodes list`, `messages areas list`, `doors list`, and
   `db stats` into stable top-level objects.
+- Emitted lifecycle observability events to `audit_log` for server start/stop,
+  startup config load, node assignment, and database-write failures.
+- Updated the GitHub Pages workflow to self-enable Pages during deployment
+  bootstrap and support an optional `GITHUB_PAGES_TOKEN` for first-run setup.
 - Added phase-6 hardening checks for top-level help ordering, non-interactive
   setup `--data` override behavior, config check on
   `config/oxidebbs.example.toml`, unsupported `db import` formats, and

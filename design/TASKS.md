@@ -153,3 +153,27 @@ This is intended for a local coding agent to work from.
 - [x] Update `design/SPEC.md` with local-only control-surface constraints.
 - [x] Update changelog with phase-7 documentation completion and operational
   behavior notes in `docs/about/changelog.md`.
+
+## V1 Release-Candidate Hardening
+
+- [x] Fix `.github/workflows/pages.yml` to self-enable Pages when disabled using
+  `actions/configure-pages@v5` with `enablement: true`; verify this in the
+  target run `https://github.com/sphildreth/oxidebbs/actions/runs/26764478252`
+  by eliminating the `enablement: false` bootstrap failure.
+  - Configure an optional `GITHUB_PAGES_TOKEN` secret (PAT with repo/pages/admin
+    scope) for first-run enablement on repositories with no existing Pages site.
+  - Fall back to `github.token` for already provisioned repos.
+
+- [x] Implement V1 runtime hardening for graceful shutdown and lifecycle
+  observability:
+  - Add startup/shutdown signal handling in `oxidebbs-server::serve`.
+  - Emit `config_loaded`, `server_start`, `server_stop`, `node_assigned`,
+    `db_write_failed` audit events where feasible.
+  - Ensure active node tasks receive disconnect requests before shutdown exits.
+- [x] Implement configured `submenu` runtime behavior and remove the visible
+  caller placeholder.
+- [x] Add end-to-end telnet/runtime smoke coverage for connect, new-user
+  creation, logoff, shutdown, and lifecycle audit records.
+- [x] Reconcile roadmap/spec v1 readiness items: line input is implemented,
+  direct repository writes are documented as the v1 write model, and dedicated
+  welcome/logoff screen rendering is deferred beyond v1.
