@@ -287,7 +287,8 @@ The server exposes CLI-first local sysop command groups:
 - `setup`, `check`, `serve`, and `status`
 - `users` for user listing, creation, status changes, security levels, password
   resets, sysop promotion, audits, and safe delete-as-disable behavior
-- `nodes` for session listing plus audited disconnect/message/broadcast intents
+- `nodes` for session listing plus live `disconnect`, `message`, and `broadcast`
+  against a local control socket when the server is running
 - `messages` for local area administration and message moderation
 - `doors` for configured door inspection, checks, dry-run testing, drop-file
   generation, run history, and runtime cleanup
@@ -296,10 +297,17 @@ The server exposes CLI-first local sysop command groups:
   JSON export
 - `logs`, `audit`, and `config` for local troubleshooting
 
-Live node disconnect/message/broadcast delivery is recorded as audit intent
-until a local server control socket and heartbeat model exist. `db import` and
-`db compact` are explicit command boundaries but remain blocked until DecentDB
-restore and compaction semantics are specified.
+When a live control socket is unavailable, node disconnect/message/broadcast
+commands preserve the previous audit intent behavior and report that live delivery
+was not available. `db import` and `db compact` are explicit command boundaries
+but remain blocked until DecentDB restore and compaction semantics are specified.
+
+The local control socket is Unix-domain only in this phase and lives at
+`runtime/oxidebbs-control.sock`. The protocol uses one newline-delimited JSON
+request and one newline-delimited JSON response per connection. Live node
+disconnect, message, and broadcast requests enqueue runtime commands consumed by
+active caller tasks; disconnects use normal session cleanup, and messages are
+rendered through the caller telnet transport.
 
 Remote callers must never see Ratatui output; Ratatui remains local sysop/admin
 UI only.

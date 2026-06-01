@@ -18,7 +18,7 @@ Status values:
 | --- | --- | --- | --- |
 | Phase 0 — Current Baseline | COMPLETE | CLI-first sysop interface, schema v3, docs, and release metadata are present. | `oxidebbs-server` exposes top-level sysop command groups. |
 | Phase 0.5 — Structural Extraction Gate | COMPLETE | Reduce server monolith risk before adding live control behavior. | Command handler modules, `sysop_cli.rs` under 1000 lines, validated no-behavior-change refactor. |
-| Phase 1 — Local Server Control Plane | TODO | Let sysop CLI commands control a running local server process. | Local control socket, command protocol, node command integration. |
+| Phase 1 — Local Server Control Plane | COMPLETE | Let sysop CLI commands control a running local server process. | Local control socket, command protocol, node command integration. |
 | Phase 2 — Live Node Heartbeats And State | TODO | Make node status authoritative while the server is running. | Node registry, heartbeat timestamps, stale detection, status output. |
 | Phase 3 — Live Door Launch Integration | TODO | Replace caller-facing door placeholder with controlled door execution. | Door menu launch path, run records, drop files, timeout cleanup. |
 | Phase 4 — DecentDB Schema Migrations | TODO | Upgrade compatible pre-alpha databases instead of requiring recreation. | Migration runner and schema `2 -> 3` migration. |
@@ -241,7 +241,7 @@ or behavior.
 
 ## Phase 1 — Local Server Control Plane
 
-Status: `TODO`
+Status: `COMPLETE`
 
 ### Objective
 
@@ -506,6 +506,26 @@ Document that the socket is local-only and located under `runtime/`.
   through the socket.
 - Offline fallback messages are explicit and truthful.
 - `./scripts/dev-check.sh` passes.
+
+### Completion Notes
+
+- Implemented `crates/oxidebbs-server/src/control.rs` with newline-delimited
+  JSON request/response types, explicit dotted request names, a `64 KiB`
+  request-line limit, newline normalization for message text, and Unix-domain
+  socket transport at `runtime/oxidebbs-control.sock`.
+- `serve` binds the control socket before accepting telnet callers on Unix. A
+  stale socket file is removed only when no process accepts a connection on it;
+  an active socket fails startup instead of silently disabling live control.
+- Live `status`, `nodes list`, and `nodes show` read process uptime and node
+  snapshots from `Arc<ServerRuntime>`.
+- Live `nodes disconnect`, `nodes message`, and `nodes broadcast` enqueue
+  runtime commands for active caller tasks. Disconnects flow through normal
+  session cleanup, while messages and broadcasts are displayed by the active
+  caller loop.
+- If the socket is absent or unsupported, CLI commands preserve the DecentDB
+  fallback behavior and state that the live server was not reachable.
+- Non-Unix builds keep a clear unsupported control-socket stub and retain
+  offline CLI fallback behavior; Windows named-pipe support remains future work.
 
 ## Phase 2 — Live Node Heartbeats And State
 

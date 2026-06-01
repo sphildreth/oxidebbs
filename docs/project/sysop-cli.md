@@ -36,9 +36,12 @@ requires `--sysop-password`.
 definitions, and runtime paths. Door checks warn when local DOS binaries or
 runners are not installed.
 
-`nodes disconnect`, `nodes message`, `nodes broadcast`, `nodes enable`, and
-`nodes disable` record sysop intent in audit rows. Live transport control is
-deferred until the server has a local control socket and node heartbeat model.
+`status`, `nodes list`, and `nodes show` prefer live runtime state from the
+local server control socket at `runtime/oxidebbs-control.sock`. `nodes
+disconnect`, `nodes message`, and `nodes broadcast` use the same socket to queue
+commands for active caller sessions; when the socket is unreachable they still
+record explicit sysop intent in audit rows. `nodes enable` and `nodes disable`
+remain audited command boundaries until persistent node state is modeled.
 
 `doors test --dry-run` creates drop files without launching DOSBox. Without
 `--dry-run`, the configured runner is invoked locally.

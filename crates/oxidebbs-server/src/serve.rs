@@ -34,6 +34,7 @@ use oxidebbs_term::{
 };
 
 use crate::config::OxideConfig;
+use crate::control::{ControlError, RuntimeNodeCommands, ServerRuntime, start_control_listener};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ServeError {
@@ -68,6 +69,10 @@ pub async fn run(config: &OxideConfig) -> ServeResult<()> {
 
     let db =
         Arc::new(OxideDb::open_or_create(&config.database.path).map_err(ServeError::Database)?);
+    let runtime = Arc::new(ServerRuntime::new(
+        config.board.name.clone(),
+        config.nodes.count,
+    ));
 
     let login_menu = Arc::new(
         config
@@ -85,6 +90,20 @@ pub async fn run(config: &OxideConfig) -> ServeResult<()> {
         config.nodes.count,
         config.telnet.max_connections,
     ));
+    let _control_listener =
+        match start_control_listener(&config.paths.runtime, Arc::clone(&runtime)).await {
+            Ok(handle) => Some(handle),
+            Err(ControlError::Unsupported(message)) => {
+                warn!("control listener unavailable: {message}");
+                None
+            }
+            Err(error) => {
+                return Err(ServeError::Runtime(format!(
+                    "failed to start control listener: {error}"
+                )));
+            }
+        };
+
     let listener = TcpListener::bind(&config.telnet.bind).await?;
 
     info!(bind = %config.telnet.bind, "listening for telnet callers");
@@ -98,15 +117,16 @@ pub async fn run(config: &OxideConfig) -> ServeResult<()> {
         };
 
         if let Some(allocation) = node_slots.try_allocate() {
-            let db = Arc::clone(&db);
-            let config = Arc::new(config.clone());
-            let login_menu = Arc::clone(&login_menu);
-            let main_menu = Arc::clone(&main_menu);
+            let resources = CallerResources {
+                db: Arc::clone(&db),
+                config: Arc::new(config.clone()),
+                login_menu: Arc::clone(&login_menu),
+                main_menu: Arc::clone(&main_menu),
+                runtime: Arc::clone(&runtime),
+            };
 
             tokio::spawn(async move {
-                if let Err(error) =
-                    handle_caller(allocation, stream, peer, db, config, login_menu, main_menu).await
-                {
+                if let Err(error) = handle_caller(allocation, stream, peer, resources).await {
                     warn!("caller session ended with error: {error}");
                 }
             });
@@ -127,16 +147,29 @@ async fn reject_connection(mut stream: TcpStream) -> ServeResult<()> {
     Ok(())
 }
 
-async fn handle_caller(
-    allocation: NodeAllocation,
-    stream: TcpStream,
-    peer: CallerPeer,
+struct CallerResources {
     db: Arc<OxideDb>,
     config: Arc<OxideConfig>,
     login_menu: Arc<Menu>,
     main_menu: Arc<Menu>,
+    runtime: Arc<ServerRuntime>,
+}
+
+async fn handle_caller(
+    allocation: NodeAllocation,
+    stream: TcpStream,
+    peer: CallerPeer,
+    resources: CallerResources,
 ) -> ServeResult<()> {
-    let node_number = i64::from(allocation.node_number);
+    let CallerResources {
+        db,
+        config,
+        login_menu,
+        main_menu,
+        runtime,
+    } = resources;
+    let node_number_u16 = allocation.node_number;
+    let node_number = i64::from(node_number_u16);
     let session_id = generated_uuid(&db)?;
     let connected_at = current_timestamp(&db)?;
     let mut transport = TcpTransport::new(stream);
@@ -164,6 +197,12 @@ async fn handle_caller(
         error!("failed to insert session record: {error}");
         ServeError::Database(error)
     })?;
+    runtime.mark_node_connected(
+        node_number_u16,
+        session_id.clone(),
+        peer.address.clone(),
+        connected_at.clone(),
+    );
 
     if let Err(error) = insert_audit_event(
         db.db(),
@@ -192,7 +231,36 @@ async fn handle_caller(
     let mut disconnect_reason = "caller_disconnected".to_string();
 
     loop {
-        let event = next_event(&mut transport, &mut input, idle_timeout).await;
+        if process_runtime_commands(
+            &mut transport,
+            runtime.take_node_commands(node_number_u16),
+            &mut disconnect_reason,
+        )
+        .await?
+        {
+            break;
+        }
+
+        let wait = tokio::select! {
+            commands = runtime.wait_for_node_commands(node_number_u16) => {
+                CallerWait::Runtime(commands)
+            }
+            event = next_event(&mut transport, &mut input, idle_timeout) => {
+                CallerWait::Input(event)
+            }
+        };
+
+        let event = match wait {
+            CallerWait::Runtime(commands) => {
+                if process_runtime_commands(&mut transport, commands, &mut disconnect_reason)
+                    .await?
+                {
+                    break;
+                }
+                continue;
+            }
+            CallerWait::Input(event) => event,
+        };
         let event = match event {
             Ok(CallerInput::Event(event)) => event,
             Ok(CallerInput::Disconnected) => {
@@ -211,6 +279,7 @@ async fn handle_caller(
                 return Err(error);
             }
         };
+        runtime.heartbeat_node(node_number_u16);
 
         match event {
             TelnetEvent::Data(raw_key) => {
@@ -235,6 +304,13 @@ async fn handle_caller(
                                 .await?
                             {
                                 AuthFlowResult::Success => {
+                                    if let Some(user) = authenticated_user.as_ref() {
+                                        runtime.set_node_user(
+                                            node_number_u16,
+                                            Some(user.id.clone()),
+                                            Some(user.alias.clone()),
+                                        );
+                                    }
                                     show_post_login_screens(
                                         &mut transport,
                                         &config,
@@ -269,6 +345,13 @@ async fn handle_caller(
                                 .await?
                             {
                                 AuthFlowResult::Success => {
+                                    if let Some(user) = authenticated_user.as_ref() {
+                                        runtime.set_node_user(
+                                            node_number_u16,
+                                            Some(user.id.clone()),
+                                            Some(user.alias.clone()),
+                                        );
+                                    }
                                     show_post_login_screens(
                                         &mut transport,
                                         &config,
@@ -379,6 +462,7 @@ async fn handle_caller(
     if let Err(error) = end_session(db.db(), &session_id, &ended_at, &disconnect_reason) {
         warn!("failed to close session record: {error}");
     }
+    runtime.mark_node_disconnected(node_number_u16);
 
     if let Err(error) = insert_audit_event(
         db.db(),
@@ -1485,6 +1569,24 @@ async fn send_text(transport: &mut TcpTransport, message: &str) -> ServeResult<(
     Ok(())
 }
 
+async fn process_runtime_commands(
+    transport: &mut TcpTransport,
+    commands: RuntimeNodeCommands,
+    disconnect_reason: &mut String,
+) -> ServeResult<bool> {
+    for message in commands.messages {
+        send_text(transport, &format!("\r\n{message}\r\n")).await?;
+    }
+
+    if let Some(reason) = commands.disconnect_reason {
+        *disconnect_reason = reason;
+        send_text(transport, "\r\nDisconnected by sysop.\r\n").await?;
+        return Ok(true);
+    }
+
+    Ok(false)
+}
+
 fn encode_text(text: &str) -> Vec<u8> {
     match encode_cp437(text) {
         Ok(bytes) => bytes,
@@ -1560,6 +1662,11 @@ enum CallerInput {
     Event(TelnetEvent),
     Disconnected,
     IdleTimeout,
+}
+
+enum CallerWait {
+    Input(ServeResult<CallerInput>),
+    Runtime(RuntimeNodeCommands),
 }
 
 #[derive(Default)]

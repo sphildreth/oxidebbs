@@ -1,5 +1,6 @@
 mod commands;
 mod config;
+mod control;
 mod serve;
 mod setup;
 mod sysop_cli;
