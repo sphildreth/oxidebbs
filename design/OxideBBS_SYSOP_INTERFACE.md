@@ -288,6 +288,22 @@ offline
 stale
 ```
 
+### Local control channel (v1)
+
+The node commands are backed by a local Unix control socket at:
+
+```text
+<runtime>/oxidebbs-control.sock
+```
+
+`nodes list`, `nodes show`, `nodes watch`, `nodes disconnect`, `nodes message`,
+`nodes broadcast`, and `nodes reset-stale` attempt live runtime state first.
+When the socket is unavailable they fall back to DecentDB session rows (for status)
+or audit-recorded intent for actions that require delivery.
+
+`nodes reset-stale` marks stale live nodes as disconnecting and requests runtime
+cleanup only when control is connected.
+
 ### Notes
 
 `nodes watch` can be simple in v1: refresh every few seconds and print a table.

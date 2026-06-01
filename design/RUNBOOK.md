@@ -6,6 +6,28 @@
 cargo run -p oxidebbs-server -- serve
 ```
 
+## Operator flow
+
+1. bootstrap once:
+
+```bash
+cargo run -p oxidebbs-server -- setup
+cargo run -p oxidebbs-server -- check
+```
+
+2. start service:
+
+```bash
+cargo run -p oxidebbs-server -- serve
+```
+
+3. confirm runtime:
+
+```bash
+cargo run -p oxidebbs-server -- status
+cargo run -p oxidebbs-server -- nodes list
+```
+
 `oxidebbs-server setup` and `db init` create schema `3`. When an existing
 DecentDB uses supported older schema version `2`, startup runs the upgrade
 before serving callers. The `2 -> 3` migration rebuilds the message-area and
@@ -34,6 +56,14 @@ The socket is local-only. On Unix, startup removes a stale
 another server is still accepting connections on that socket, `serve` reports a
 startup error instead of falling back to offline control behavior.
 
+If cleanup ever remains necessary, stop the managed service or development
+process first, then remove only the socket file:
+
+```bash
+systemctl stop oxidebbs
+rm -f runtime/oxidebbs-control.sock
+```
+
 ## Health checks
 
 Useful commands:
@@ -45,6 +75,15 @@ oxidebbs-server db doctor
 oxidebbs-server --config config/oxidebbs.example.toml check
 oxidebbs-server doors check example
 oxidebbs-server doors test example --user sysop --dry-run
+oxidebbs-server nodes show 1
+oxidebbs-server nodes watch
+```
+
+Useful local-only status checks:
+
+```bash
+oxidebbs-server nodes reset-stale
+oxidebbs-server status --json
 ```
 
 ## Live door launch
@@ -65,6 +104,26 @@ records `door_timed_out`. `nodes disconnect <node>` also terminates an active
 door bridge and then lets the caller session follow normal disconnect cleanup.
 OxideBBS never bundles door binaries; sysops provide their own licensed door
 files under the configured door working directory.
+
+When a caller session is running a door, the node status is `in_door`. Disconnect
+that node from the control socket to terminate the bridge cleanly and trigger
+normal session cleanup.
+
+## Node operations
+
+- `nodes list` shows live node runtime state (`available`, `connecting`, `login`,
+  `main_menu`, `reading_messages`, `posting_message`, `in_door`,
+  `disconnecting`, `offline`, `stale`).
+- `nodes show <n>` prints detail and heartbeat age.
+- `nodes message <n> "text"` and `nodes broadcast "text"` write direct text to live
+  caller sessions.
+- `nodes disconnect <n>` asks live runtime to disconnect through the normal
+  session path.
+- `nodes reset-stale` requests disconnect of stale nodes and marks them
+  `disconnecting` before cleanup.
+
+If the control socket is unreachable for these node commands, the CLI records audit
+intent and returns explicit warning text.
 
 ## Logs
 
@@ -112,5 +171,7 @@ not expose a safe compaction API contract.
 - DOSBox/DOSEMU command exists
 - Node runtime directories are writable
 - Control socket directory exists/writable (`runtime/` by default), and stale
-  `runtime/oxidebbs-control.sock` files are removed automatically on the next
-  startup when no server is listening on them
+  `runtime/oxidebbs-control.sock` files are removed automatically on startup when
+  no server is listening
+- `nodes reset-stale` finds stale entries
+- `nodes watch` reports heartbeat age and `stale` state where applicable

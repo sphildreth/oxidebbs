@@ -1,98 +1,132 @@
 # Getting Started
 
-OxideBBS is currently a starter Rust workspace. The first useful milestone is a
-telnet caller who can connect, create or log into an account, view ANSI menus,
-read and post local messages, launch one configured DOS door, and disconnect
-cleanly.
+OxideBBS is a local Rust BBS server with:
 
-## Requirements
+- Telnet caller runtime
+- ANSI/CP437 rendering
+- DecentDB persistence
+- DOS door launch support
+- CLI-first sysop operations
+
+## Prerequisites
 
 - Rust stable with `rustfmt` and `clippy`
-- Node.js 20 or newer for the documentation site
-- Native build dependencies needed by the pinned DecentDB Rust dependency
-
-On Debian or Ubuntu CI images, the docs workflow installs:
+- Node.js 20 or newer (documentation site only)
+- Native DecentDB headers:
 
 ```bash
 sudo apt-get install -y clang libclang-dev
 ```
 
-## Rust Checks
+From repository root, the normal validation command is:
 
 ```bash
 ./scripts/dev-check.sh
 ```
 
-That script runs formatting, workspace checks, tests, and clippy with the
-committed lockfile.
-
-## Create a Board Config
-
-Use the setup wizard to create a local board config:
+## 1) Create a board
 
 ```bash
 cargo run -p oxidebbs-server -- setup
 ```
 
-The default output is `config/oxidebbs.toml`. See the [Setup Wizard](./setup)
-guide for the prompts and generated paths.
+`setup` creates `config/oxidebbs.toml`, initializes `data/oxidebbs.ddb`,
+creates the initial sysop account, and prepares runtime/asset directories.
 
-## Run the Telnet Server
+For unattended setup, pass required values:
 
-Start the listener:
+```bash
+cargo run -p oxidebbs-server -- setup \
+  --board-name "My BBS" \
+  --sysop-alias sysop \
+  --sysop-password "change-this" \
+  --nodes 4
+```
+
+## 2) Validate config and runtime paths
+
+```bash
+cargo run -p oxidebbs-server -- check
+cargo run -p oxidebbs-server -- config check
+```
+
+Validation checks:
+
+- socket address parsing
+- config paths and screen assets
+- door definitions and runner availability
+- drop-file format and timeout constraints
+- runtime directory writability
+
+`check` errors on missing/invalid configuration and reports warnings for optional
+but missing directories or assets.
+
+## 3) Start serving
 
 ```bash
 cargo run -p oxidebbs-server -- serve
 ```
 
-After `setup`, the server defaults to `config/oxidebbs.toml`. In a clean
-checkout without a local config, it falls back to `config/oxidebbs.example.toml`.
-Pass `--config <path>` to force a specific file.
+`serve` binds telnet, accepts caller sessions, persists session/audit rows, and
+starts the local Unix control socket:
 
-The first server runtime accepts telnet callers, assigns node slots, records
-session/audit rows in DecentDB, renders configured login and main menu screens,
-and routes menu hotkeys. Callers can create an account, log in with an Argon2id
-password hash, read/post local messages, and launch enabled configured doors.
-Live door sessions bridge caller bytes to the configured runner, record
-`door_runs`, enforce timeouts, and return normal exits or timeouts to the main
-menu.
+```text
+runtime/oxidebbs-control.sock
+```
 
-The pre-alpha schema is versioned. Supported older development databases at
-`data/oxidebbs.ddb` are migrated before startup; unsupported stale, missing, or
-future schema markers are refused rather than silently using incompatible
-tables.
+If that socket path is already active, startup fails to avoid clobbering an
+already-running server.
 
-## Local Admin Commands
-
-The starter server binary now exposes CLI-first sysop command groups:
+## 4) Confirm runtime
 
 ```bash
-cargo run -p oxidebbs-server -- users list
+cargo run -p oxidebbs-server -- status
 cargo run -p oxidebbs-server -- nodes list
-cargo run -p oxidebbs-server -- audit recent
-cargo run -p oxidebbs-server -- db doctor
+cargo run -p oxidebbs-server -- nodes watch
 ```
 
-Use `--json` on commands that support machine-readable output. See the
-[Sysop CLI](./sysop-cli) guide for the full command surface and current
-live-control limits.
+While running, node status comes from live runtime registry and includes heartbeat
+age. If the socket is unreachable, status/list/watch read through active session
+rows from DecentDB.
 
-## Documentation Site
+## 5) Use local sysop controls
 
 ```bash
-npm ci
-npm run docs:dev
+cargo run -p oxidebbs-server -- nodes message 1 "Maintenance in 10 minutes."
+cargo run -p oxidebbs-server -- nodes disconnect 1
+cargo run -p oxidebbs-server -- nodes broadcast "Server restart at 00:00 UTC."
+cargo run -p oxidebbs-server -- nodes reset-stale
 ```
 
-The VitePress development server serves the `docs/` source directory locally.
-Production builds are generated in `docs/.vitepress/dist`.
+When the control socket is unavailable, these commands still record explicit
+sysop intent in audit rows and return explicit messaging explaining the delivery
+gap.
 
-## Current Layout
+## 6) Doors and data safety checks
 
-- `crates/oxidebbs-server`: daemon entrypoint
-- `crates/oxidebbs-core`: domain, sessions, menus, users
-- `crates/oxidebbs-term`: ANSI/CP437 helpers
-- `crates/oxidebbs-telnet`: telnet transport
-- `crates/oxidebbs-db`: DecentDB repository layer
-- `crates/oxidebbs-door`: drop files and door runners
-- `crates/oxidebbs-sysop`: local sysop tooling
+```bash
+cargo run -p oxidebbs-server -- doors check example
+cargo run -p oxidebbs-server -- doors test example --user sysop --dry-run
+```
+
+Caller `Doors` menu launch uses live door execution in the caller path and records
+`door_runs` rows with timeout and byte counters.
+
+## 7) Backup, export, and restore
+
+```bash
+cargo run -p oxidebbs-server -- db backup backups/oxidebbs.ddb
+cargo run -p oxidebbs-server -- db export --format json > backups/oxidebbs.json
+cargo run -p oxidebbs-server -- db import --format json backups/oxidebbs.json
+```
+
+`db import --format json` is a full restore into schema-only targets only. It is
+transactional and validates IDs, relationships, and schema compatibility.
+
+`db compact` is explicitly unsupported in this release because DecentDB has no
+safe compaction API contract.
+
+## 8) Local-only boundary
+
+There is no remote web or TCP admin interface in this phase. All operational
+control is local to the host running `oxidebbs-server`.

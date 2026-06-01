@@ -24,7 +24,7 @@ Status values:
 | Phase 4 — DecentDB Schema Migrations | COMPLETE | Upgrade compatible pre-alpha databases instead of requiring recreation. | Migration runner and schema `2 -> 3` migration. |
 | Phase 5 — DecentDB Restore And Compact Semantics | COMPLETE | Make `db import` and `db compact` real, safe commands. | Restore design, import command, compaction command or documented unsupported state. |
 | Phase 6 — Sysop CLI Hardening | COMPLETE | Make CLI output, error behavior, and smoke coverage production-friendly. | CLI integration tests, stable JSON contracts, help ordering tests. |
-| Phase 7 — Documentation And Runbook Completion | TODO | Bring operator docs to parity with implemented runtime behavior. | Updated docs site, runbook, changelog, and design docs. |
+| Phase 7 — Documentation And Runbook Completion | COMPLETE | Bring operator docs to parity with implemented runtime behavior. | Updated docs site, runbook, changelog, and design docs. |
 
 ## Definition Of Done
 
@@ -1477,7 +1477,7 @@ Update:
 
 ## Phase 7 — Documentation And Runbook Completion
 
-Status: `TODO`
+Status: `COMPLETE`
 
 ### Objective
 
@@ -1555,23 +1555,27 @@ npm run docs:build
 - Changelog includes every user-visible behavior change.
 - `./scripts/dev-check.sh` passes.
 
+### Phase 7 Completion Notes
+
+- Completed required documentation updates in:
+  - `docs/project/sysop-cli.md`
+  - `docs/project/deployment.md`
+  - `docs/project/getting-started.md`
+  - `docs/project/setup.md`
+  - `design/RUNBOOK.md`
+  - `design/SPEC.md`
+  - `design/OxideBBS_SYSOP_INTERFACE.md`
+  - `design/DECENTDB_SCHEMA.md`
+  - `design/TASKS.md`
+  - `docs/about/changelog.md`
+- Added coverage for setup, config validation, serve startup, control socket use
+  and stale-socket recovery, node status/disconnect/message/broadcast behavior,
+  door test/live launch notes, database backup/export/import/compact semantics,
+  schema migration, and local-only operations.
+
 ## Recommended Immediate Next Step
 
-Start with **Phase 1 — Local Server Control Plane**.
-
-The next implementation sequence is:
-
-1. Keep new live-control client behavior in `commands/status.rs` and
-   `commands/nodes.rs`.
-2. Add the local-only control socket and protocol under
-   `crates/oxidebbs-server/src/control.rs`.
-3. Preserve the existing offline fallback messages when no live control socket
-   is reachable.
-4. Run `./scripts/dev-check.sh` before proceeding to Phase 2.
-
-This ordering matters because the CLI already presents live node-control
-commands, and Phase 1 needs to add control-socket client behavior to several of
-those extracted handlers.
+All implementation phases documented in this file are complete as written.
 
 ## Implementation Notes For Coding Agents
 

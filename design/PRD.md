@@ -48,7 +48,8 @@ A sysop who wants FTN/FidoNet-style shared echomail and netmail using OxideBBS a
 - Telnet listener
 - Multi-node sessions
 - Login and new-user flow
-- Guest access policy
+- Guest access policy: no guest access by default in v1; callers create or use
+  an account before reaching the main menu.
 - Idle timeout
 - Clean disconnect handling
 - Session audit logging
@@ -57,7 +58,8 @@ A sysop who wants FTN/FidoNet-style shared echomail and netmail using OxideBBS a
 
 - ANSI color output
 - CP437-aware byte-oriented rendering
-- Configurable welcome/logon/logoff screens
+- Configurable login and post-login screens; dedicated terminal welcome/logoff
+  fields are present as config metadata, while v1 logoff returns a text goodbye.
 - Menu system with hotkeys
 - Basic line input
 - Paging for long text

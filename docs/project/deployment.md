@@ -1,28 +1,117 @@
-# Documentation Deployment
+# Deployment and Operations
 
-The public documentation site is built with VitePress from the `docs/`
-directory and deployed to GitHub Pages.
+OxideBBS runs as a local binary (`oxidebbs-server`) plus a local CLI. Remote
+admin access is intentionally not supported in this release.
 
-## Local Build
+## Runtime deployment workflow
+
+1. Generate config and scaffold:
+
+```bash
+cargo run -p oxidebbs-server -- --data /srv/oxidebbs/data/oxidebbs.ddb setup \
+  --output /etc/oxidebbs/oxidebbs.toml \
+  --board-name "My BBS" \
+  --sysop-alias sysop \
+  --sysop-password "change-this"
+```
+
+2. Validate before first boot:
+
+```bash
+cargo run -p oxidebbs-server -- --config /etc/oxidebbs/oxidebbs.toml check
+```
+
+3. Start serving:
+
+```bash
+cargo run -p oxidebbs-server -- --config /etc/oxidebbs/oxidebbs.toml serve
+```
+
+4. Verify health:
+
+```bash
+cargo run -p oxidebbs-server -- --config /etc/oxidebbs/oxidebbs.toml status
+cargo run -p oxidebbs-server -- --config /etc/oxidebbs/oxidebbs.toml nodes list
+```
+
+## Native build prerequisites
+
+When compiling in fresh Debian/Ubuntu environments:
+
+```bash
+sudo apt-get install -y clang libclang-dev
+```
+
+## Local control socket in deployment
+
+`serve` starts a Unix control socket at:
+
+```text
+<runtime path>/oxidebbs-control.sock
+```
+
+This socket enables:
+
+- live `status` and `nodes` queries
+- live node messaging/disconnect/broadcast/reset-stale
+- stale node detection visibility
+
+If the socket path already exists and is active, startup fails instead of silently
+falling back to offline behavior.
+
+If no process is listening, startup removes a stale socket file automatically.
+
+For unexpected runtime-path permission or ownership issues, recover with:
+
+```bash
+systemctl stop oxidebbs
+rm -f /srv/oxidebbs/runtime/oxidebbs-control.sock
+install -d -o oxidebbs -g oxidebbs /srv/oxidebbs/runtime
+systemctl start oxidebbs
+```
+
+## Stale node and operations checks
+
+- `nodes list` shows stale states from heartbeat age and marks stale nodes as
+  `stale`.
+- `nodes reset-stale` asks the live runtime to disconnect stale nodes through the
+  local control socket.
+- `status` reports uptime from the live listener when available; otherwise marks
+  it unavailable.
+
+## Service layout examples
+
+A systemd service should call the built binary with explicit config and writable
+paths:
+
+```ini
+[Unit]
+Description=OxideBBS telnet server
+After=network-online.target
+
+[Service]
+Type=simple
+User=oxidebbs
+Group=oxidebbs
+WorkingDirectory=/srv/oxidebbs
+Environment=RUST_LOG=oxidebbs=info
+ExecStart=/usr/local/bin/oxidebbs-server --config /etc/oxidebbs/oxidebbs.toml serve
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+## Documentation site deployment
+
+The documentation site is independent of the runtime. Build and publish with VitePress
+using existing GitHub workflow configuration:
 
 ```bash
 npm ci
 npm run docs:build
-npm run docs:preview
+npm run docs:dev
 ```
 
-The production output is `docs/.vitepress/dist`.
-
-## GitHub Pages
-
-The deployment workflow is `.github/workflows/pages.yml`. It builds the
-VitePress site and uploads `docs/.vitepress/dist` to GitHub Pages.
-
-Repository settings must use:
-
-- Pages source: GitHub Actions
-- Custom domain: `oxidebbs.com`
-
-DNS for `oxidebbs.com` must point to GitHub Pages. For an apex domain, use the
-records recommended by GitHub Pages for apex domains. For a `www` subdomain, use
-a CNAME pointing at the repository's GitHub Pages host.
+The built output is `docs/.vitepress/dist` and is published by
+`.github/workflows/pages.yml`.

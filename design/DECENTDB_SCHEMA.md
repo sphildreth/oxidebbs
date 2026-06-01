@@ -21,6 +21,15 @@ compatible pre-alpha databases and keeps development upgrades safe:
   OxideBBS reports a clear error.
 - newer schema versions are rejected until this software understands them.
 
+Open and startup flow:
+
+- `db init` and `serve` use the same schema opener and will attempt migration
+  only from known previous versions.
+- migration is blocked on missing or malformed existing schema markers, forcing
+  explicit operator intervention.
+- schema `2 -> 3` migration does a table-rebuild for DecentDB compatibility and
+  records the new marker only after successful validation of rebuilt tables.
+
 ## Restore and Compaction Semantics
 
 - `db import --format json <path>` is a full, whole-database restore. It expects a

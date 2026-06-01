@@ -161,7 +161,7 @@ Do not introduce SQLite, PostgreSQL, MySQL, Redis, or an ORM.
 
 Use a deliberate write model to avoid chaotic concurrent writes from many sessions.
 
-Preferred pattern:
+Longer term, the preferred pattern is:
 
 ```text
 Session tasks
@@ -173,7 +173,12 @@ single DbWriter service
 DecentDB transaction
 ```
 
-Reads may be direct where safe, but writes should initially be centralized.
+The current v1 implementation uses direct repository writes through the shared
+DecentDB wrapper and keeps multi-row restore operations inside explicit
+transactions. This is acceptable for the current local telnet scope because the
+repository layer owns the SQL boundary and the CI suite exercises the active
+write paths. A single `DbWriter` service remains the next scaling step if
+write contention or transaction serialization becomes a practical issue.
 
 ## 8. Door runner design
 
@@ -264,6 +269,17 @@ are single ASCII characters and route case-insensitively. Screen assets are
 selected from the best variant supported by the caller, with 40-column ANSI
 preferred for ANSI callers at 40 columns or less.
 
+Current v1 runtime behavior supports login, new user, doors, messages, logoff,
+show screen, and no-op. Submenu entries validate as config but return an
+explicit "not yet implemented" caller message; nested menu navigation is
+post-v1 work. Guest access is not enabled by default in v1: callers must create
+or use an account before reaching the main menu.
+
+The runtime uses `flow.login_screen`, `flow.post_login_screens`, and
+`flow.main_menu` for caller screen routing. The `terminal.welcome_screen` and
+`terminal.logoff_screen` fields remain configuration metadata for future
+dedicated welcome/logoff rendering; logoff currently sends a plain goodbye line.
+
 ## 10. Users and authentication
 
 New-user and login flows are modeled in `oxidebbs-core`. User registration
@@ -304,6 +320,9 @@ The server exposes CLI-first local sysop command groups:
   export, and JSON import restore
 - `logs`, `audit`, and `config` for local troubleshooting
 
+All sysop control is local in v1. There is no remote admin API or remote
+interactive interface in this phase.
+
 When a live control socket is unavailable, node disconnect/message/broadcast
 commands preserve the previous audit intent behavior and report that live delivery
 was not available. `db import --format json <path>` is now a full restore into a
@@ -317,6 +336,11 @@ request and one newline-delimited JSON response per connection. Live node
 disconnect, message, and broadcast requests enqueue runtime commands consumed by
 active caller tasks; disconnects use normal session cleanup, and messages are
 rendered through the caller telnet transport.
+
+The socket path is configurable through the config runtime directory and is always
+local filesystem access. Stale socket recovery removes `oxidebbs-control.sock`
+when no process is listening; active sockets block startup and return an explicit
+start-time error.
 
 While the server is running, node state is process-local and authoritative from
 the runtime registry. Live node responses use stable snake_case states:

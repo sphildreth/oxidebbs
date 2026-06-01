@@ -35,6 +35,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added a local Unix-domain control socket at `runtime/oxidebbs-control.sock`
   for live `status`, `nodes list`, `nodes show`, `nodes disconnect`,
   `nodes message`, and `nodes broadcast` operations from `oxidebbs-server`.
+- Completed Phase 7 documentation/runbook coverage for setup flow, config
+  validation, local control socket startup/recovery, node status/messaging, door
+  dry-run/live launch behavior, backup/export/import/compact semantics, and
+  schema migration workflow.
 - `status` and `nodes` now prefer live runtime state from the running server and
   fall back to offline DecentDB-derived data when the control socket is
   unavailable.

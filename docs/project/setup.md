@@ -44,6 +44,17 @@ The wizard asks for:
 
 Press Enter at a prompt to accept the value shown in brackets.
 
+Setup writes the TOML config, creates required directories, initializes a
+schema `3` DecentDB database, creates the initial sysop account, and creates the
+default `general` local message area. The generated sysop account is real data,
+so a setup-created database is not an empty restore target for `db import`.
+
+After setup, `serve` can use the generated file directly:
+
+```bash
+cargo run -p oxidebbs-server -- --config config/oxidebbs.toml serve
+```
+
 ## Created Paths
 
 Setup creates the starter directories used by the generated config:
@@ -75,6 +86,9 @@ cargo run -p oxidebbs-server -- setup \
   --nodes 4
 ```
 
+Non-interactive setup requires `--sysop-password`. Optional flags can override
+the board name, sysop alias, telnet port, node count, and sample ANSI creation.
+
 ## After Setup
 
 Validate the generated config:
@@ -83,12 +97,25 @@ Validate the generated config:
 cargo run -p oxidebbs-server -- --config config/oxidebbs.toml check
 ```
 
+The same validation is also available as:
+
+```bash
+cargo run -p oxidebbs-server -- --config config/oxidebbs.toml config check
+```
+
 Then inspect local sysop commands:
 
 ```bash
 cargo run -p oxidebbs-server -- --config config/oxidebbs.toml users list
 cargo run -p oxidebbs-server -- --config config/oxidebbs.toml nodes list
+cargo run -p oxidebbs-server -- --config config/oxidebbs.toml db stats
 ```
 
 The setup command may include a sample door definition, but it does not install
-or bundle any DOS door binaries.
+or bundle any DOS door binaries. Provide licensed door files in the configured
+door working directory and validate them before exposing the door to callers:
+
+```bash
+cargo run -p oxidebbs-server -- --config config/oxidebbs.toml doors check example
+cargo run -p oxidebbs-server -- --config config/oxidebbs.toml doors test example --user sysop --dry-run
+```

@@ -139,3 +139,17 @@ This is intended for a local coding agent to work from.
 - [x] Define netmail model.
 - [x] Define duplicate detection approach.
 - [x] Define packet import/export boundary.
+
+## Implementation Plan Phase 7 — Documentation And Runbook Completion
+
+- [x] Update docs for setup/validation/startup and local control flow in
+  `docs/project/setup.md`, `docs/project/getting-started.md`, and
+  `docs/project/deployment.md`.
+- [x] Update sysop command documentation for local control socket, node control,
+  door dry-run/live behavior in `docs/project/sysop-cli.md` and
+  `design/OxideBBS_SYSOP_INTERFACE.md`.
+- [x] Update operational runbook and schema semantics in `design/RUNBOOK.md` and
+  `design/DECENTDB_SCHEMA.md`.
+- [x] Update `design/SPEC.md` with local-only control-surface constraints.
+- [x] Update changelog with phase-7 documentation completion and operational
+  behavior notes in `docs/about/changelog.md`.
