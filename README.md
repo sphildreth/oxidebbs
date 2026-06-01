@@ -121,8 +121,10 @@ without that file falls back to `config/oxidebbs.example.toml`.
 The current runtime accepts telnet callers, assigns node slots, writes session
 and audit records to DecentDB, renders configured login/main menu screens, and
 routes starter menu keys. User registration, login authentication, and local
-message reading/posting are wired into DecentDB-backed sessions; real door
-launching still uses a placeholder response.
+message reading/posting are wired into DecentDB-backed sessions. The caller
+`Doors` menu lists enabled configured doors, validates the selection, launches
+the configured runner, bridges caller/process bytes, records `door_runs`, and
+returns normal exits or timeouts to the main menu.
 
 During pre-alpha, delete or recreate old development `.ddb` files after schema
 version changes; OxideBBS refuses to run against stale schema markers.

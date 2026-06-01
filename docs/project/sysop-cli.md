@@ -51,7 +51,12 @@ and `nodes disable` remain audited command boundaries until persistent node
 state is modeled.
 
 `doors test --dry-run` creates drop files without launching DOSBox. Without
-`--dry-run`, the configured runner is invoked locally.
+`--dry-run`, the configured runner is invoked locally. The live caller `Doors`
+menu uses the same configured door state, validates the selected door, records
+door run history, and returns normal exits or timeouts to the main menu. During
+an active door, live node status reports `in_door`; `nodes disconnect <node>`
+terminates the bridge and then disconnects the caller through normal session
+cleanup.
 
 `db export --format json` is read-only. `db import` and `db compact` are present
 as explicit command boundaries, but remain blocked until restore and compaction

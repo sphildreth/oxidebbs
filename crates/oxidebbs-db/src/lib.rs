@@ -17,9 +17,9 @@ pub use audit_repo::{
     AuditEventRecord, insert_audit_event, list_audit_events, list_audit_events_for_user,
 };
 pub use door_repo::{
-    DoorDefinitionRecord, DoorRunRecord, find_door_by_key, find_door_run_by_id, finish_door_run,
-    insert_door_definition, insert_door_run, list_door_definitions, list_door_runs,
-    update_door_enabled,
+    DoorDefinitionRecord, DoorRunFinish, DoorRunRecord, find_door_by_key, find_door_run_by_id,
+    finish_door_run, insert_door_definition, insert_door_run, list_door_definitions,
+    list_door_runs, update_door_enabled,
 };
 pub use message_repo::{
     MessageAreaRecord, MessageRecord, find_message_area_by_key, find_message_by_id, insert_message,

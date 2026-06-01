@@ -52,8 +52,10 @@ Pass `--config <path>` to force a specific file.
 The first server runtime accepts telnet callers, assigns node slots, records
 session/audit rows in DecentDB, renders configured login and main menu screens,
 and routes menu hotkeys. Callers can create an account, log in with an Argon2id
-password hash, and read/post local messages; door launching still responds with
-a placeholder while the runner is wired into live sessions.
+password hash, read/post local messages, and launch enabled configured doors.
+Live door sessions bridge caller bytes to the configured runner, record
+`door_runs`, enforce timeouts, and return normal exits or timeouts to the main
+menu.
 
 The pre-alpha schema is versioned. If you have an older development database at
 `data/oxidebbs.ddb`, recreate it after schema changes; the server refuses to run

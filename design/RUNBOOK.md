@@ -37,6 +37,25 @@ oxidebbs-server doors check example
 oxidebbs-server doors test example --user sysop --dry-run
 ```
 
+## Live door launch
+
+The caller `Doors` menu lists enabled configured doors and launches the selected
+door through the server-side bridge. Before launch, verify:
+
+- the door working directory exists
+- the configured runner executable, usually `dosbox`, exists on `PATH` or at
+  the configured path
+- the drop-file format is `DOOR.SYS` or `DORINFO1.DEF`
+- the runtime directory is writable
+- the time limit is greater than zero
+
+During a live door, `nodes list` reports the caller as `in_door`. Normal child
+exit and timeout return the caller to the main menu; timeout kills the child and
+records `door_timed_out`. `nodes disconnect <node>` also terminates an active
+door bridge and then lets the caller session follow normal disconnect cleanup.
+OxideBBS never bundles door binaries; sysops provide their own licensed door
+files under the configured door working directory.
+
 ## Logs
 
 Use structured logging.

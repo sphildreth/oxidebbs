@@ -195,8 +195,10 @@ Drop files to support early:
 
 The initial implementation includes `DOOR.SYS` and `DORINFO1.DEF` generation,
 per-node runtime directory helpers, dry-run execution, DOSBox command planning,
-timeout handling, and DecentDB door-run records. Additional drop-file formats
-remain compatible with this boundary.
+live caller launch from the configured `Doors` menu, byte bridging between the
+caller transport and child process, timeout/sysop-disconnect cleanup, DecentDB
+door-run records with byte counters, and `in_door` live node state. Additional
+drop-file formats remain compatible with this boundary.
 
 ## 9. Configuration
 

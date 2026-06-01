@@ -29,6 +29,16 @@ pub struct DoorRunRecord {
     pub bytes_out: i64,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct DoorRunFinish {
+    pub ended_at: String,
+    pub exit_code: Option<i64>,
+    pub timed_out: bool,
+    pub disconnect_forced: bool,
+    pub bytes_in: i64,
+    pub bytes_out: i64,
+}
+
 pub fn insert_door_definition(db: &Db, door: &DoorDefinitionRecord) -> decentdb::Result<()> {
     db.execute_with_params(
         "INSERT INTO doors (id, key, name, runner, working_dir, command, drop_file, exclusive, time_limit_minutes, enabled)
@@ -95,21 +105,16 @@ pub fn insert_door_run(db: &Db, run: &DoorRunRecord) -> decentdb::Result<()> {
     Ok(())
 }
 
-pub fn finish_door_run(
-    db: &Db,
-    id: &str,
-    ended_at: &str,
-    exit_code: Option<i64>,
-    timed_out: bool,
-    disconnect_forced: bool,
-) -> decentdb::Result<()> {
+pub fn finish_door_run(db: &Db, id: &str, finish: &DoorRunFinish) -> decentdb::Result<()> {
     db.execute_with_params(
-        "UPDATE door_runs SET ended_at = $1, exit_code = $2, timed_out = $3, disconnect_forced = $4 WHERE id = UUID_PARSE($5)",
+        "UPDATE door_runs SET ended_at = $1, exit_code = $2, timed_out = $3, disconnect_forced = $4, bytes_in = $5, bytes_out = $6 WHERE id = UUID_PARSE($7)",
         &[
-            Value::Text(ended_at.to_string()),
-            exit_code.map(Value::Int64).unwrap_or(Value::Null),
-            Value::Bool(timed_out),
-            Value::Bool(disconnect_forced),
+            Value::Text(finish.ended_at.clone()),
+            finish.exit_code.map(Value::Int64).unwrap_or(Value::Null),
+            Value::Bool(finish.timed_out),
+            Value::Bool(finish.disconnect_forced),
+            Value::Int64(finish.bytes_in),
+            Value::Int64(finish.bytes_out),
             Value::Text(id.to_string()),
         ],
     )?;
@@ -292,10 +297,14 @@ mod tests {
         finish_door_run(
             &db,
             RUN_1,
-            "2026-01-01T00:05:00.000000Z",
-            Some(0),
-            false,
-            false,
+            &DoorRunFinish {
+                ended_at: "2026-01-01T00:05:00.000000Z".to_string(),
+                exit_code: Some(0),
+                timed_out: false,
+                disconnect_forced: false,
+                bytes_in: 12,
+                bytes_out: 34,
+            },
         )
         .expect("finish run");
 
@@ -305,6 +314,8 @@ mod tests {
             Some("2026-01-01T00:05:00.000000Z")
         );
         assert_eq!(runs[0].exit_code, Some(0));
+        assert_eq!(runs[0].bytes_in, 12);
+        assert_eq!(runs[0].bytes_out, 34);
     }
 
     #[test]

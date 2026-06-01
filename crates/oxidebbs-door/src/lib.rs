@@ -213,7 +213,7 @@ pub fn prepare_door_run(request: &DoorRunRequest) -> Result<DoorRunPlan, DoorErr
 pub fn dosbox_plan(request: &DoorRunRequest, drop_file_path: PathBuf) -> DoorRunPlan {
     let working_dir = PathBuf::from(&request.door.working_dir);
     DoorRunPlan {
-        program: "dosbox".to_string(),
+        program: request.door.runner.clone(),
         args: vec![
             "-c".to_string(),
             format!("mount c {}", working_dir.display()),
@@ -423,5 +423,21 @@ command = "LORD.EXE"
         assert_eq!(plan.program, "dosbox");
         assert!(plan.args.iter().any(|arg| arg.contains("mount c")));
         assert_eq!(plan.timeout, Duration::from_secs(60));
+    }
+
+    #[test]
+    fn dosbox_plan_uses_configured_runner_program() {
+        let mut door = door("DOOR.SYS");
+        door.runner = "/opt/dosbox-staging/dosbox".to_string();
+        let request = DoorRunRequest {
+            door,
+            caller: caller(),
+            node_number: 1,
+            runtime_dir: PathBuf::from("./runtime/node-001"),
+        };
+
+        let plan = dosbox_plan(&request, PathBuf::from("./runtime/node-001/DOOR.SYS"));
+
+        assert_eq!(plan.program, "/opt/dosbox-staging/dosbox");
     }
 }

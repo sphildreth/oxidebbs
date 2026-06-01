@@ -333,6 +333,10 @@ impl ServerRuntime {
         self.set_node_state(node_number, RuntimeNodeState::PostingMessage);
     }
 
+    pub fn mark_node_in_door(&self, node_number: u16) {
+        self.set_node_state(node_number, RuntimeNodeState::InDoor);
+    }
+
     pub fn mark_node_disconnecting(&self, node_number: u16) {
         self.set_node_state(node_number, RuntimeNodeState::Disconnecting);
     }

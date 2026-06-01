@@ -1,6 +1,7 @@
 mod commands;
 mod config;
 mod control;
+mod door_session;
 mod serve;
 mod setup;
 mod sysop_cli;

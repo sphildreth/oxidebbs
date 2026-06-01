@@ -115,6 +115,10 @@ This is intended for a local coding agent to work from.
 - [x] Add live server control socket for node disconnect/message/broadcast delivery.
 - [x] Add authoritative live node states, heartbeat ages, stale detection, and
   live stale-node reset.
+- [x] Wire the caller `Doors` menu to enabled door selection and live
+  child-process bridging.
+- [x] Record live door launch lifecycle, byte counts, timeout cleanup, and
+  `in_door` node state.
 - [ ] Specify DecentDB restore and compaction semantics before enabling `db import` and `db compact`.
 
 ## Phase 10 — FTN/OxideNet design

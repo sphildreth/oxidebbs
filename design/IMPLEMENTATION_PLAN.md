@@ -20,7 +20,7 @@ Status values:
 | Phase 0.5 — Structural Extraction Gate | COMPLETE | Reduce server monolith risk before adding live control behavior. | Command handler modules, `sysop_cli.rs` under 1000 lines, validated no-behavior-change refactor. |
 | Phase 1 — Local Server Control Plane | COMPLETE | Let sysop CLI commands control a running local server process. | Local control socket, command protocol, node command integration. |
 | Phase 2 — Live Node Heartbeats And State | COMPLETE | Make node status authoritative while the server is running. | Node registry, heartbeat timestamps, stale detection, status output. |
-| Phase 3 — Live Door Launch Integration | TODO | Replace caller-facing door placeholder with controlled door execution. | Door menu launch path, run records, drop files, timeout cleanup. |
+| Phase 3 — Live Door Launch Integration | COMPLETE | Replace caller-facing door placeholder with controlled door execution. | Door menu launch path, run records, drop files, timeout cleanup. |
 | Phase 4 — DecentDB Schema Migrations | TODO | Upgrade compatible pre-alpha databases instead of requiring recreation. | Migration runner and schema `2 -> 3` migration. |
 | Phase 5 — DecentDB Restore And Compact Semantics | TODO | Make `db import` and `db compact` real, safe commands. | Restore design, import command, compaction command or documented unsupported state. |
 | Phase 6 — Sysop CLI Hardening | TODO | Make CLI output, error behavior, and smoke coverage production-friendly. | CLI integration tests, stable JSON contracts, help ordering tests. |
@@ -757,7 +757,7 @@ Update:
 
 ## Phase 3 — Live Door Launch Integration
 
-Status: `TODO`
+Status: `COMPLETE`
 
 ### Objective
 
@@ -954,6 +954,23 @@ Update:
 - Door run DB records are written and finished.
 - Timeout behavior is tested without requiring a real DOS door.
 - `./scripts/dev-check.sh` passes.
+
+### Completion Notes
+
+- Added a server-side `door_session.rs` adapter with `DoorService`, caller door
+  selection rendering/parsing, selected-door validation, run record lifecycle,
+  audit events, runtime cleanup, and a child-process byte bridge.
+- Kept the existing `Transport` trait unchanged. The bridge temporarily borrows
+  the caller transport, pauses normal menu/line parsing, forwards caller bytes
+  to child stdin, and forwards child stdout/stderr bytes back to the caller.
+- Live door execution marks the node `in_door`, watches for child exit, caller
+  disconnect, timeout, and sysop disconnect, then returns normal completions and
+  timeouts to the main menu.
+- Updated `door_runs` finalization to persist byte counts, and updated
+  `oxidebbs-door` command planning to use the configured runner executable.
+- Added tests for door menu selection, disabled/missing/invalid validation,
+  `DryRunDoorRunner` service lifecycle, finished door run records, interactive
+  bridge echo behavior, and timeout cleanup without requiring DOSBox.
 
 ## Phase 4 — DecentDB Schema Migrations
 

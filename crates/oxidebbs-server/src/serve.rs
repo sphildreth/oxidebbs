@@ -36,6 +36,9 @@ use crate::config::OxideConfig;
 use crate::control::{
     ControlError, NodeAllocation, RuntimeNodeCommands, ServerRuntime, start_control_listener,
 };
+use crate::door_session::{
+    DoorExecutionSummary, DoorSelection, DoorService, render_door_menu, select_door,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ServeError {
@@ -55,12 +58,11 @@ pub enum ServeError {
     Runtime(String),
 }
 
-type ServeResult<T> = Result<T, ServeError>;
+pub(crate) type ServeResult<T> = Result<T, ServeError>;
 
 const REJECTION_MESSAGE: &str = "System is busy. Please try again later.\r\n";
 const PROMPT_TERMINATOR: &str = "\r\n";
 const MAIN_MENU_POST_LOGIN: &str = "Please choose from the menu.\r\n";
-const DOORS_PLACEHOLDER: &str = "Doors feature placeholder: not implemented yet.\r\n";
 
 pub async fn run(config: &OxideConfig) -> ServeResult<()> {
     if !config.telnet.enabled {
@@ -389,8 +391,28 @@ async fn handle_caller(
                 } else {
                     match main_menu.route(&key) {
                         Some(MenuAction::Doors) => {
-                            send_text(&mut transport, DOORS_PLACEHOLDER).await?;
-                            send_menu_prompt(&mut transport, &main_menu).await?;
+                            let mut door_state = DoorFlowState {
+                                db: db.as_ref(),
+                                config: config.as_ref(),
+                                idle_timeout,
+                                disconnect_reason: &mut disconnect_reason,
+                                runtime: runtime.as_ref(),
+                                node_number: node_number_u16,
+                            };
+                            match run_doors_flow(
+                                authenticated_user.as_ref(),
+                                &mut transport,
+                                &mut input,
+                                &mut door_state,
+                            )
+                            .await?
+                            {
+                                MenuFlowResult::Continue => {
+                                    runtime.mark_node_main_menu(node_number_u16);
+                                    send_menu_prompt(&mut transport, &main_menu).await?;
+                                }
+                                MenuFlowResult::Exit => break,
+                            }
                         }
                         Some(MenuAction::Messages) => {
                             runtime.mark_node_reading_messages(node_number_u16);
@@ -536,6 +558,15 @@ struct AuthFlowState<'a> {
 
 struct MessageFlowState<'a> {
     db: &'a OxideDb,
+    idle_timeout: Duration,
+    disconnect_reason: &'a mut String,
+    runtime: &'a ServerRuntime,
+    node_number: u16,
+}
+
+struct DoorFlowState<'a> {
+    db: &'a OxideDb,
+    config: &'a OxideConfig,
     idle_timeout: Duration,
     disconnect_reason: &'a mut String,
     runtime: &'a ServerRuntime,
@@ -893,6 +924,96 @@ async fn run_new_user_flow(
 
     send_text(transport, "Account created. Welcome.\r\n").await?;
     Ok(AuthFlowResult::Success)
+}
+
+async fn run_doors_flow(
+    authenticated_user: Option<&User>,
+    transport: &mut TcpTransport,
+    input: &mut InputSession,
+    state: &mut DoorFlowState<'_>,
+) -> ServeResult<MenuFlowResult> {
+    let Some(user) = authenticated_user else {
+        send_text(transport, "You must be signed in to use doors.\r\n").await?;
+        return Ok(MenuFlowResult::Continue);
+    };
+
+    let service = DoorService::new(state.db, state.config);
+    let doors = service.list_enabled_doors()?;
+    if doors.is_empty() {
+        send_text(transport, "No doors are available.\r\n").await?;
+        return Ok(MenuFlowResult::Continue);
+    }
+
+    loop {
+        send_text(transport, &render_door_menu(&doors)).await?;
+        let selected = match prompt_for_line(
+            transport,
+            input,
+            state.idle_timeout,
+            true,
+            false,
+            "Door key or number (blank to return): ",
+        )
+        .await?
+        {
+            PromptLineResult::Value(value) => value,
+            PromptLineResult::Disconnected => {
+                *state.disconnect_reason = "caller_dropped_during_door_menu".to_string();
+                return Ok(MenuFlowResult::Exit);
+            }
+            PromptLineResult::IdleTimeout => {
+                *state.disconnect_reason = "idle_timeout".to_string();
+                send_text(transport, "Idle timeout. Goodbye.\r\n").await?;
+                return Ok(MenuFlowResult::Exit);
+            }
+        };
+
+        let door = match select_door(&doors, &selected) {
+            DoorSelection::Return => return Ok(MenuFlowResult::Continue),
+            DoorSelection::Door(door) => door,
+            DoorSelection::Invalid => {
+                send_text(transport, "Unknown door.\r\n").await?;
+                continue;
+            }
+        };
+
+        if let Err(message) = service.validate_door(door, state.node_number) {
+            send_text(transport, &format!("{message}\r\n")).await?;
+            continue;
+        }
+
+        send_text(transport, &format!("\r\nLaunching {}...\r\n", door.name)).await?;
+        let summary = service
+            .execute_interactive(transport, state.runtime, user, state.node_number, door)
+            .await?;
+
+        if summary.caller_disconnected {
+            *state.disconnect_reason = "caller_dropped_during_door".to_string();
+            return Ok(MenuFlowResult::Exit);
+        }
+        if let Some(reason) = summary.disconnect_reason.as_ref() {
+            *state.disconnect_reason = reason.clone();
+            return Ok(MenuFlowResult::Exit);
+        }
+
+        state.runtime.mark_node_main_menu(state.node_number);
+        send_text(transport, &door_summary_text(&summary)).await?;
+        return Ok(MenuFlowResult::Continue);
+    }
+}
+
+fn door_summary_text(summary: &DoorExecutionSummary) -> String {
+    if let Some(error) = summary.launch_error.as_ref() {
+        return format!("Unable to launch {}: {error}\r\n", summary.door_name);
+    }
+    if summary.timed_out {
+        return format!("{} timed out and was closed.\r\n", summary.door_name);
+    }
+
+    format!(
+        "{} finished. Exit code: {:?}.\r\n",
+        summary.door_name, summary.exit_code
+    )
 }
 
 async fn run_messages_flow(

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added live caller door launching from the configured `Doors` menu, including
+  enabled-door listing, key/number selection, selected-door validation, drop-file
+  generation, `door_started`/`door_finished`/`door_timed_out` audit events, and
+  `door_runs` lifecycle updates.
+- Added a server-side interactive door bridge that forwards caller bytes to the
+  child process, forwards child stdout/stderr to the caller, enforces timeouts,
+  handles sysop disconnects, cleans node runtime directories, and reports live
+  nodes as `in_door` while active.
+
 ### Changed
 
 - Extracted sysop CLI command handlers into `oxidebbs-server::commands`
@@ -22,6 +33,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   through the running server and consumed by active caller sessions.
 - Added authoritative live node runtime states, heartbeat ages, stale detection,
   and live `nodes reset-stale` handling through the control socket.
+- Door run finalization now persists byte counters, and door command planning
+  uses the configured runner executable instead of hard-coding `dosbox`.
 
 ### Removed
 
