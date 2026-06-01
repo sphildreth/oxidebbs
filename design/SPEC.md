@@ -190,6 +190,13 @@ remain compatible with this boundary.
 
 Configuration should be TOML.
 
+The server binary should provide an interactive `setup` command that can create
+a starter config before any config file exists. The command should prompt for
+board identity, sysop identity, timezone, telnet bind, node count, database
+path, and whether to include a placeholder door definition. It must create the
+starter directories and refuse to overwrite an existing config unless explicitly
+forced.
+
 Example top-level sections:
 
 ```toml

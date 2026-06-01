@@ -19,6 +19,7 @@ export default defineConfig({
     siteTitle: 'OxideBBS',
     nav: [
       { text: 'Guide', link: '/project/getting-started' },
+      { text: 'Setup', link: '/project/setup' },
       { text: 'Architecture', link: '/project/architecture' },
       { text: 'Menus', link: '/project/menus' },
       { text: 'Versioning', link: '/project/versioning' },
@@ -30,6 +31,7 @@ export default defineConfig({
         items: [
           { text: 'Overview', link: '/' },
           { text: 'Getting Started', link: '/project/getting-started' },
+          { text: 'Setup Wizard', link: '/project/setup' },
           { text: 'Architecture', link: '/project/architecture' },
           { text: 'Menu System', link: '/project/menus' },
           { text: 'Versioning', link: '/project/versioning' },

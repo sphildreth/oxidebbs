@@ -26,6 +26,17 @@ sudo apt-get install -y clang libclang-dev
 That script runs formatting, workspace checks, tests, and clippy with the
 committed lockfile.
 
+## Create a Board Config
+
+Use the setup wizard to create a local board config:
+
+```bash
+cargo run -p oxidebbs-server -- setup
+```
+
+The default output is `config/oxidebbs.toml`. See the [Setup Wizard](./setup)
+guide for the prompts and generated paths.
+
 ## Local Admin Commands
 
 The starter server binary includes a local `admin` command group:

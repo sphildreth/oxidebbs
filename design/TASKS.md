@@ -20,6 +20,7 @@ This is intended for a local coding agent to work from.
 - [x] Validate node count.
 - [x] Validate telnet bind address.
 - [x] Add `oxidebbs-server --config config/oxidebbs.example.toml check`.
+- [x] Add interactive setup command for new systems.
 
 ## Phase 3 — Terminal
 

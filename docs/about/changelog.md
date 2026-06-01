@@ -31,6 +31,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   terminal type and NAWS events, core user/login/message flows, door drop-file
   generation and runners, DecentDB message/session/door repositories, sysop
   admin commands, and FTN/OxideNet domain models.
+- Added an interactive `oxidebbs-server setup` command that writes a starter
+  board config, prepares local directories, and can include a placeholder door
+  definition without bundling door binaries.
 
 ### Changed
 

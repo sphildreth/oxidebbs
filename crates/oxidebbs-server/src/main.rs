@@ -1,4 +1,5 @@
 mod config;
+mod setup;
 
 use std::path::PathBuf;
 
@@ -37,6 +38,17 @@ enum Command {
     /// Validate the configuration file and exit
     Check,
 
+    /// Create a starter configuration file interactively
+    Setup {
+        /// Output configuration file path
+        #[arg(short, long, default_value = "config/oxidebbs.toml")]
+        output: PathBuf,
+
+        /// Overwrite an existing output file
+        #[arg(long)]
+        force: bool,
+    },
+
     /// Run local sysop/admin commands
     Admin {
         #[command(subcommand)]
@@ -73,6 +85,7 @@ enum AdminCommand {
 
 fn main() {
     let cli = Cli::parse();
+    let command = cli.command.unwrap_or(Command::Serve);
 
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -81,36 +94,52 @@ fn main() {
         )
         .init();
 
-    let config = match OxideConfig::load(&cli.config) {
-        Ok(config) => {
-            info!(path = %cli.config.display(), "configuration loaded");
-            config
-        }
-        Err(error) => {
-            eprintln!("error: {error}");
-            std::process::exit(1);
-        }
-    };
-
-    match cli.command.unwrap_or(Command::Serve) {
-        Command::Check => {
-            println!("configuration OK: {}", cli.config.display());
-            println!("  board:          {}", config.board.name);
-            println!("  telnet bind:    {}", config.telnet.bind);
-            println!("  database path:  {}", config.database.path.display());
-            println!("  nodes:          {}", config.nodes.count);
-            println!("  doors defined:  {}", config.doors.definitions.len());
-        }
-        Command::Admin { command } => run_admin(command, &config),
-        Command::Serve => {
-            info!(board = %config.board.name, "starting OxideBBS");
-            info!(bind = %config.telnet.bind, "telnet listener");
-            info!(nodes = config.nodes.count, "node slots");
+    match command {
+        Command::Setup { output, force } => {
+            if let Err(error) = setup::run_setup(&output, force) {
+                eprintln!("error: {error}");
+                std::process::exit(1);
+            }
             println!(
-                "OxideBBS \"{}\" — telnet {} with {} node(s)",
-                config.board.name, config.telnet.bind, config.nodes.count
+                "setup complete: wrote configuration to {}",
+                output.display()
             );
-            println!("Server startup is not yet implemented. Config loading works.");
+            println!("directories are prepared for a starter OxideBBS installation");
+        }
+        Command::Check | Command::Admin { .. } | Command::Serve => {
+            let config = match OxideConfig::load(&cli.config) {
+                Ok(config) => {
+                    info!(path = %cli.config.display(), "configuration loaded");
+                    config
+                }
+                Err(error) => {
+                    eprintln!("error: {error}");
+                    std::process::exit(1);
+                }
+            };
+
+            match command {
+                Command::Check => {
+                    println!("configuration OK: {}", cli.config.display());
+                    println!("  board:          {}", config.board.name);
+                    println!("  telnet bind:    {}", config.telnet.bind);
+                    println!("  database path:  {}", config.database.path.display());
+                    println!("  nodes:          {}", config.nodes.count);
+                    println!("  doors defined:  {}", config.doors.definitions.len());
+                }
+                Command::Admin { command } => run_admin(command, &config),
+                Command::Serve => {
+                    info!(board = %config.board.name, "starting OxideBBS");
+                    info!(bind = %config.telnet.bind, "telnet listener");
+                    info!(nodes = config.nodes.count, "node slots");
+                    println!(
+                        "OxideBBS \"{}\" — telnet {} with {} node(s)",
+                        config.board.name, config.telnet.bind, config.nodes.count
+                    );
+                    println!("Server startup is not yet implemented. Config loading works.");
+                }
+                Command::Setup { .. } => unreachable!("setup handled above"),
+            }
         }
     }
 }

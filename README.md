@@ -95,6 +95,17 @@ cargo test --workspace --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
 ```
 
+## Setup wizard
+
+Create a starter local board config with:
+
+```bash
+cargo run -p oxidebbs-server -- setup
+```
+
+The wizard writes `config/oxidebbs.toml` by default and creates the starter
+paths for data, assets, doors, runtime files, and logs.
+
 ## Documentation site
 
 The documentation site is built with VitePress from `docs/` and deployed to
