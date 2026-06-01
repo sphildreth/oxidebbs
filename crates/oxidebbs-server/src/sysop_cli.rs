@@ -102,40 +102,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Start the BBS server
-    Serve(ServeArgs),
-
-    /// Create a starter board installation
-    Setup(SetupArgs),
-
-    /// Validate the configuration file and runtime paths
-    Check,
-
-    /// Show board status
-    Status,
-
-    /// Manage users
-    Users {
+    /// Backwards-compatible aliases for the original admin command group
+    Admin {
         #[command(subcommand)]
-        command: UsersCommand,
-    },
-
-    /// Inspect and control node/session state
-    Nodes {
-        #[command(subcommand)]
-        command: NodesCommand,
-    },
-
-    /// Manage local message areas and messages
-    Messages {
-        #[command(subcommand)]
-        command: MessagesCommand,
-    },
-
-    /// Inspect and test DOS door definitions
-    Doors {
-        #[command(subcommand)]
-        command: DoorsCommand,
+        command: AdminCommand,
     },
 
     /// Inspect ANSI/CP437 screen assets
@@ -144,10 +114,31 @@ enum Command {
         command: AnsiCommand,
     },
 
+    /// Read audit events
+    Audit {
+        #[command(subcommand)]
+        command: AuditCommand,
+    },
+
+    /// Validate the configuration file and runtime paths
+    Check,
+
+    /// Inspect or edit configuration values
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
+
     /// Inspect and maintain DecentDB storage
     Db {
         #[command(subcommand)]
         command: DbCommand,
+    },
+
+    /// Inspect and test DOS door definitions
+    Doors {
+        #[command(subcommand)]
+        command: DoorsCommand,
     },
 
     /// Read local log files
@@ -156,25 +147,34 @@ enum Command {
         command: LogsCommand,
     },
 
-    /// Read audit events
-    Audit {
+    /// Manage local message areas and messages
+    Messages {
         #[command(subcommand)]
-        command: AuditCommand,
+        command: MessagesCommand,
     },
 
-    /// Inspect or edit configuration values
-    Config {
+    /// Inspect and control node/session state
+    Nodes {
         #[command(subcommand)]
-        command: ConfigCommand,
+        command: NodesCommand,
     },
+
+    /// Start the BBS server
+    Serve(ServeArgs),
+
+    /// Create a starter board installation
+    Setup(SetupArgs),
+
+    /// Show board status
+    Status,
 
     /// Render a local sysop console preview
     Sysop,
 
-    /// Backwards-compatible aliases for the original admin command group
-    Admin {
+    /// Manage users
+    Users {
         #[command(subcommand)]
-        command: AdminCommand,
+        command: UsersCommand,
     },
 }
 
