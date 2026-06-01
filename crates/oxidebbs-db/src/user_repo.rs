@@ -95,6 +95,38 @@ pub fn update_user_password_hash(db: &Db, id: &str, password_hash: &str) -> dece
     Ok(())
 }
 
+pub fn update_user_security_level(db: &Db, id: &str, security_level: i64) -> decentdb::Result<()> {
+    db.execute_with_params(
+        "UPDATE users SET security_level = $1 WHERE id = UUID_PARSE($2)",
+        &[Value::Int64(security_level), Value::Text(id.to_string())],
+    )?;
+    Ok(())
+}
+
+pub fn update_user_status(db: &Db, id: &str, status: &str) -> decentdb::Result<()> {
+    db.execute_with_params(
+        "UPDATE users SET status = $1 WHERE id = UUID_PARSE($2)",
+        &[Value::Text(status.to_string()), Value::Text(id.to_string())],
+    )?;
+    Ok(())
+}
+
+pub fn update_user_is_sysop(db: &Db, id: &str, is_sysop: bool) -> decentdb::Result<()> {
+    db.execute_with_params(
+        "UPDATE users SET is_sysop = $1 WHERE id = UUID_PARSE($2)",
+        &[Value::Bool(is_sysop), Value::Text(id.to_string())],
+    )?;
+    Ok(())
+}
+
+pub fn update_user_alias(db: &Db, id: &str, alias: &str) -> decentdb::Result<()> {
+    db.execute_with_params(
+        "UPDATE users SET alias = $1 WHERE id = UUID_PARSE($2)",
+        &[Value::Text(alias.to_string()), Value::Text(id.to_string())],
+    )?;
+    Ok(())
+}
+
 fn row_to_user(row: &decentdb::QueryRow) -> UserRecord {
     let values = row.values();
     UserRecord {
@@ -264,6 +296,62 @@ mod tests {
 
         let found = find_user_by_id(&db, &user.id).expect("find").unwrap();
         assert_eq!(found.password_hash, "$argon2id$new");
+    }
+
+    #[test]
+    fn update_security_level_changes_value() {
+        let db = test_db();
+        let user = sample_user("security");
+        insert_user(&db, &user).expect("insert");
+
+        update_user_security_level(&db, &user.id, 255).expect("update");
+
+        let found = find_user_by_id(&db, &user.id).expect("find").unwrap();
+        assert_eq!(found.security_level, 255);
+    }
+
+    #[test]
+    fn update_status_changes_value() {
+        let db = test_db();
+        let user = sample_user("status");
+        insert_user(&db, &user).expect("insert");
+
+        update_user_status(&db, &user.id, "disabled").expect("update");
+
+        let found = find_user_by_id(&db, &user.id).expect("find").unwrap();
+        assert_eq!(found.status, "disabled");
+    }
+
+    #[test]
+    fn update_is_sysop_changes_value() {
+        let db = test_db();
+        let mut user = sample_user("sysop");
+        user.is_sysop = false;
+        insert_user(&db, &user).expect("insert");
+
+        update_user_is_sysop(&db, &user.id, true).expect("update");
+
+        let found = find_user_by_id(&db, &user.id).expect("find").unwrap();
+        assert!(found.is_sysop);
+    }
+
+    #[test]
+    fn update_alias_changes_lookup_key() {
+        let db = test_db();
+        let user = sample_user("oldalias");
+        insert_user(&db, &user).expect("insert");
+
+        update_user_alias(&db, &user.id, "newalias").expect("rename");
+
+        assert!(
+            find_user_by_alias_ci(&db, "oldalias")
+                .expect("find old")
+                .is_none()
+        );
+        let found = find_user_by_alias_ci(&db, "newalias")
+            .expect("find new")
+            .expect("user exists");
+        assert_eq!(found.id, user.id);
     }
 
     #[test]

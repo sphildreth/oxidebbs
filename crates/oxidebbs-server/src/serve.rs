@@ -1268,6 +1268,7 @@ fn seed_default_message_area(db: &OxideDb) -> ServeResult<()> {
         read_security_level: 0,
         post_security_level: 10,
         moderated: false,
+        enabled: true,
     };
     insert_message_area(db.db(), &area)?;
     Ok(())

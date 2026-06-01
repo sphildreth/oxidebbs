@@ -185,7 +185,7 @@ Example output:
 ```text
 OxideBBS Status
 Board:        Blackboard BBS
-Version:      0.1.0
+Version:      0.2.0
 Database:     ./data/oxidebbs.ddb
 Telnet:       0.0.0.0:2323
 Nodes:        4 total, 1 active

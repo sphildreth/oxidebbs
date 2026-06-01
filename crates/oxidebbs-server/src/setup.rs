@@ -7,6 +7,7 @@ use serde::Serialize;
 const DEFAULT_BOARD_NAME: &str = "OxideBBS";
 const DEFAULT_TAGLINE: &str = "Built for sysops. Driven by code.";
 const DEFAULT_SYSOP_NAME: &str = "Sysop";
+const DEFAULT_SYSOP_ALIAS: &str = "sysop";
 const DEFAULT_TIMEZONE: &str = "America/Chicago";
 const DEFAULT_TELNET_BIND: &str = "0.0.0.0:2323";
 const DEFAULT_NODE_COUNT: u16 = 4;
@@ -23,11 +24,14 @@ pub struct SetupAnswers {
     pub board_name: String,
     pub tagline: String,
     pub sysop_name: String,
+    pub sysop_alias: String,
+    pub sysop_password: String,
     pub timezone: String,
     pub telnet_bind: String,
     pub node_count: u16,
     pub database_path: PathBuf,
     pub include_example_door: bool,
+    pub include_sample_ansi: bool,
 }
 
 impl Default for SetupAnswers {
@@ -36,11 +40,14 @@ impl Default for SetupAnswers {
             board_name: DEFAULT_BOARD_NAME.to_string(),
             tagline: DEFAULT_TAGLINE.to_string(),
             sysop_name: DEFAULT_SYSOP_NAME.to_string(),
+            sysop_alias: DEFAULT_SYSOP_ALIAS.to_string(),
+            sysop_password: String::new(),
             timezone: DEFAULT_TIMEZONE.to_string(),
             telnet_bind: DEFAULT_TELNET_BIND.to_string(),
             node_count: DEFAULT_NODE_COUNT,
             database_path: PathBuf::from(DEFAULT_DATABASE_PATH),
             include_example_door: true,
+            include_sample_ansi: true,
         }
     }
 }
@@ -149,6 +156,7 @@ struct GeneratedDoorDefinitionConfig {
     drop_file: String,
     exclusive: bool,
     time_limit_minutes: u32,
+    enabled: bool,
 }
 
 #[derive(Serialize)]
@@ -268,6 +276,7 @@ pub fn build_setup_toml(answers: &SetupAnswers) -> io::Result<String> {
                 drop_file: "DOOR.SYS".to_string(),
                 exclusive: false,
                 time_limit_minutes: 30,
+                enabled: true,
             }],
         }
     } else {
@@ -346,14 +355,21 @@ pub fn setup_required_directories(output_path: &Path, answers: &SetupAnswers) ->
     dirs.into_iter().collect()
 }
 
-pub fn run_setup(output_path: &Path, force: bool) -> io::Result<()> {
+pub fn interactive_setup_answers() -> io::Result<SetupAnswers> {
     let stdin = io::stdin();
     let mut stdin = stdin.lock();
     let stdout = io::stdout();
     let mut stdout = stdout.lock();
 
-    let answers = interactive_answers(&mut stdin, &mut stdout)?;
-    let output = build_setup_toml(&answers)?;
+    interactive_answers(&mut stdin, &mut stdout)
+}
+
+pub fn run_setup_with_answers(
+    output_path: &Path,
+    force: bool,
+    answers: &SetupAnswers,
+) -> io::Result<()> {
+    let output = build_setup_toml(answers)?;
     if output_path.exists() && !force {
         return Err(io::Error::new(
             io::ErrorKind::AlreadyExists,
@@ -361,7 +377,7 @@ pub fn run_setup(output_path: &Path, force: bool) -> io::Result<()> {
         ));
     }
 
-    for dir in setup_required_directories(output_path, &answers) {
+    for dir in setup_required_directories(output_path, answers) {
         std::fs::create_dir_all(dir)?;
     }
 
@@ -380,6 +396,14 @@ fn interactive_answers<R: BufRead, W: Write>(
     let board_name = prompt_line(reader, writer, "Board name", DEFAULT_BOARD_NAME)?;
     let tagline = prompt_line(reader, writer, "Board tagline", DEFAULT_TAGLINE)?;
     let sysop_name = prompt_line(reader, writer, "Sysop name", DEFAULT_SYSOP_NAME)?;
+    let sysop_alias = prompt_line(reader, writer, "Sysop alias", DEFAULT_SYSOP_ALIAS)?;
+    let sysop_password = loop {
+        let password = prompt_line(reader, writer, "Sysop password", "")?;
+        if !password.trim().is_empty() {
+            break password;
+        }
+        writeln!(writer, "Sysop password is required")?;
+    };
     let timezone = prompt_line(reader, writer, "Timezone", DEFAULT_TIMEZONE)?;
     let telnet_bind = prompt_line(reader, writer, "Telnet bind", DEFAULT_TELNET_BIND)?;
     let node_count = prompt_u16(reader, writer, "Node count", DEFAULT_NODE_COUNT)?;
@@ -391,16 +415,20 @@ fn interactive_answers<R: BufRead, W: Write>(
     )?);
     let include_example_door =
         prompt_yes_no(reader, writer, "Include example door definition", true)?;
+    let include_sample_ansi = prompt_yes_no(reader, writer, "Create sample ANSI screens", true)?;
 
     Ok(SetupAnswers {
         board_name,
         tagline,
         sysop_name,
+        sysop_alias,
+        sysop_password,
         timezone,
         telnet_bind,
         node_count,
         database_path,
         include_example_door,
+        include_sample_ansi,
     })
 }
 

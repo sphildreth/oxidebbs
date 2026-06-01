@@ -53,6 +53,7 @@ pub fn init_schema(db: &Db) -> decentdb::Result<()> {
             read_security_level INT NOT NULL DEFAULT 0 CHECK (read_security_level >= 0 AND read_security_level <= 255),
             post_security_level INT NOT NULL DEFAULT 10 CHECK (post_security_level >= 0 AND post_security_level <= 255),
             moderated BOOL NOT NULL DEFAULT FALSE,
+            enabled BOOL NOT NULL DEFAULT TRUE,
             CHECK (kind = 'local' OR kind = 'echomail' OR kind = 'netmail')
         );
 
@@ -211,7 +212,7 @@ mod tests {
         let db = Db::open_or_create(":memory:", DbConfig::default()).expect("open DecentDB");
         init_schema(&db).expect("first init");
         init_schema(&db).expect("second init");
-        assert_eq!(schema_version(&db).expect("read schema version"), 2);
+        assert_eq!(schema_version(&db).expect("read schema version"), 3);
     }
 
     #[test]

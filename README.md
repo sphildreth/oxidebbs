@@ -18,8 +18,9 @@ The project is intentionally retro in user experience and modern in implementati
 
 This is a starter implementation with tested Rust crates for configuration,
 terminal assets, telnet negotiation, DecentDB repositories, menu routing, local
-message commands, door drop files, local sysop tooling, and a first telnet
-`serve` runtime that accepts callers and routes the configured starter menus.
+message commands, door drop files, a CLI-first sysop interface, and a first
+telnet `serve` runtime that accepts callers and routes the configured starter
+menus.
 
 ## Repository layout
 
@@ -125,6 +126,23 @@ launching still uses a placeholder response.
 
 During pre-alpha, delete or recreate old development `.ddb` files after schema
 version changes; OxideBBS refuses to run against stale schema markers.
+
+## Sysop CLI
+
+Common local administration uses top-level command groups:
+
+```bash
+cargo run -p oxidebbs-server -- check
+cargo run -p oxidebbs-server -- status
+cargo run -p oxidebbs-server -- users list
+cargo run -p oxidebbs-server -- nodes list
+cargo run -p oxidebbs-server -- messages areas list
+cargo run -p oxidebbs-server -- doors list
+cargo run -p oxidebbs-server -- ansi list
+cargo run -p oxidebbs-server -- db doctor
+```
+
+The original `admin` command group remains as a compatibility alias.
 
 ## Documentation site
 

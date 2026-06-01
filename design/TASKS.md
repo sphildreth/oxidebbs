@@ -94,12 +94,24 @@ This is intended for a local coding agent to work from.
 ## Phase 9 — Sysop CLI/TUI
 
 - [x] Add admin command group.
+- [x] Add top-level CLI-first sysop command groups.
+- [x] Add global config, data-path, JSON, no-color, and verbosity options.
+- [x] Add setup, check, serve dry-run, and status commands.
 - [x] List users.
+- [x] Show/add/rename/disable/promote/demote users.
 - [x] Reset password.
 - [x] List nodes.
+- [x] Show node state and record audited node control intents.
+- [x] Add message area and moderation commands.
+- [x] Add door list/show/check/test/dropfile/run-history commands.
+- [x] Add ANSI screen list/show/validate/preview/convert/inspect commands.
+- [x] Add DecentDB init/doctor/stats/backup/verify/export commands.
+- [x] Add logs, audit, and config inspection commands.
 - [x] Show recent calls.
 - [x] Test door config.
 - [x] Prototype Ratatui sysop console.
+- [ ] Add live server control socket for node disconnect/message/broadcast delivery.
+- [ ] Specify DecentDB restore and compaction semantics before enabling `db import` and `db compact`.
 
 ## Phase 10 — FTN/OxideNet design
 

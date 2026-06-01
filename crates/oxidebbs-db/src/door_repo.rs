@@ -57,6 +57,23 @@ pub fn list_door_definitions(db: &Db) -> decentdb::Result<Vec<DoorDefinitionReco
     Ok(result.rows().iter().map(row_to_door).collect())
 }
 
+pub fn find_door_by_key(db: &Db, key: &str) -> decentdb::Result<Option<DoorDefinitionRecord>> {
+    let result = db.execute_with_params(
+        "SELECT UUID_TO_STRING(id), key, name, runner, working_dir, command, drop_file, exclusive, time_limit_minutes, enabled
+         FROM doors WHERE key = $1",
+        &[Value::Text(key.to_string())],
+    )?;
+    Ok(result.rows().first().map(row_to_door))
+}
+
+pub fn update_door_enabled(db: &Db, id: &str, enabled: bool) -> decentdb::Result<()> {
+    db.execute_with_params(
+        "UPDATE doors SET enabled = $1 WHERE id = UUID_PARSE($2)",
+        &[Value::Bool(enabled), Value::Text(id.to_string())],
+    )?;
+    Ok(())
+}
+
 pub fn insert_door_run(db: &Db, run: &DoorRunRecord) -> decentdb::Result<()> {
     db.execute_with_params(
         "INSERT INTO door_runs (id, door_id, user_id, node_number, started_at, ended_at, exit_code, timed_out, disconnect_forced, bytes_in, bytes_out)
@@ -106,6 +123,15 @@ pub fn list_door_runs(db: &Db, limit: i64) -> decentdb::Result<Vec<DoorRunRecord
         &[Value::Int64(limit)],
     )?;
     Ok(result.rows().iter().map(row_to_run).collect())
+}
+
+pub fn find_door_run_by_id(db: &Db, id: &str) -> decentdb::Result<Option<DoorRunRecord>> {
+    let result = db.execute_with_params(
+        "SELECT UUID_TO_STRING(id), UUID_TO_STRING(door_id), UUID_TO_STRING(user_id), node_number, CAST(started_at AS TEXT), CAST(ended_at AS TEXT), exit_code, timed_out, disconnect_forced, bytes_in, bytes_out
+         FROM door_runs WHERE id = UUID_PARSE($1)",
+        &[Value::Text(id.to_string())],
+    )?;
+    Ok(result.rows().first().map(row_to_run))
 }
 
 fn row_to_door(row: &decentdb::QueryRow) -> DoorDefinitionRecord {
@@ -279,6 +305,38 @@ mod tests {
             Some("2026-01-01T00:05:00.000000Z")
         );
         assert_eq!(runs[0].exit_code, Some(0));
+    }
+
+    #[test]
+    fn finds_door_run_by_id() {
+        let db = test_db();
+        insert_test_user(&db);
+        insert_door_definition(&db, &sample_door()).expect("insert door");
+        insert_door_run(&db, &sample_run()).expect("insert run");
+
+        let found = find_door_run_by_id(&db, RUN_1).expect("find");
+
+        assert_eq!(found, Some(sample_run()));
+    }
+
+    #[test]
+    fn finds_door_by_key() {
+        let db = test_db();
+        insert_door_definition(&db, &sample_door()).expect("insert door");
+
+        let found = find_door_by_key(&db, "lord").expect("find");
+
+        assert_eq!(found, Some(sample_door()));
+    }
+
+    #[test]
+    fn updates_door_enabled() {
+        let db = test_db();
+        insert_door_definition(&db, &sample_door()).expect("insert door");
+        update_door_enabled(&db, DOOR_LORD, false).expect("update");
+
+        let found = find_door_by_key(&db, "lord").expect("find").unwrap();
+        assert!(!found.enabled);
     }
 
     #[test]

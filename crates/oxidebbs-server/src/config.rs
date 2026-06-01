@@ -226,6 +226,8 @@ pub struct DoorDefConfig {
     pub exclusive: bool,
     #[serde(default = "default_door_time_limit")]
     pub time_limit_minutes: u32,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

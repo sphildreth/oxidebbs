@@ -61,15 +61,18 @@ against a stale schema marker rather than silently using incompatible tables.
 
 ## Local Admin Commands
 
-The starter server binary includes a local `admin` command group:
+The starter server binary now exposes CLI-first sysop command groups:
 
 ```bash
-cargo run -p oxidebbs-server -- admin users
-cargo run -p oxidebbs-server -- admin nodes
-cargo run -p oxidebbs-server -- admin recent-calls
+cargo run -p oxidebbs-server -- users list
+cargo run -p oxidebbs-server -- nodes list
+cargo run -p oxidebbs-server -- audit recent
+cargo run -p oxidebbs-server -- db doctor
 ```
 
-Password resets accept a new password hash, not a plaintext password.
+Use `--json` on commands that support machine-readable output. The original
+`admin` group remains as a compatibility alias. See the [Sysop CLI](./sysop-cli)
+guide for the full command surface and current live-control limits.
 
 ## Documentation Site
 

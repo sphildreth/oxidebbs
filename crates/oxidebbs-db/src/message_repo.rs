@@ -11,6 +11,7 @@ pub struct MessageAreaRecord {
     pub read_security_level: i64,
     pub post_security_level: i64,
     pub moderated: bool,
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -29,8 +30,8 @@ pub struct MessageRecord {
 
 pub fn insert_message_area(db: &Db, area: &MessageAreaRecord) -> decentdb::Result<()> {
     db.execute_with_params(
-        "INSERT INTO message_areas (id, key, name, description, kind, network_id, read_security_level, post_security_level, moderated)
-         VALUES (UUID_PARSE($1), $2, $3, $4, $5, $6, $7, $8, $9)",
+        "INSERT INTO message_areas (id, key, name, description, kind, network_id, read_security_level, post_security_level, moderated, enabled)
+         VALUES (UUID_PARSE($1), $2, $3, $4, $5, $6, $7, $8, $9, $10)",
         &[
             Value::Text(area.id.clone()),
             Value::Text(area.key.clone()),
@@ -41,6 +42,7 @@ pub fn insert_message_area(db: &Db, area: &MessageAreaRecord) -> decentdb::Resul
             Value::Int64(area.read_security_level),
             Value::Int64(area.post_security_level),
             Value::Bool(area.moderated),
+            Value::Bool(area.enabled),
         ],
     )?;
     Ok(())
@@ -48,7 +50,7 @@ pub fn insert_message_area(db: &Db, area: &MessageAreaRecord) -> decentdb::Resul
 
 pub fn list_message_areas(db: &Db) -> decentdb::Result<Vec<MessageAreaRecord>> {
     let result = db.execute(
-        "SELECT UUID_TO_STRING(id), key, name, description, kind, network_id, read_security_level, post_security_level, moderated
+        "SELECT UUID_TO_STRING(id), key, name, description, kind, network_id, read_security_level, post_security_level, moderated, enabled
          FROM message_areas ORDER BY key",
     )?;
     Ok(result.rows().iter().map(row_to_area).collect())
@@ -56,7 +58,7 @@ pub fn list_message_areas(db: &Db) -> decentdb::Result<Vec<MessageAreaRecord>> {
 
 pub fn find_message_area_by_key(db: &Db, key: &str) -> decentdb::Result<Option<MessageAreaRecord>> {
     let result = db.execute_with_params(
-        "SELECT UUID_TO_STRING(id), key, name, description, kind, network_id, read_security_level, post_security_level, moderated
+        "SELECT UUID_TO_STRING(id), key, name, description, kind, network_id, read_security_level, post_security_level, moderated, enabled
          FROM message_areas WHERE key = $1",
         &[Value::Text(key.to_string())],
     )?;
@@ -96,6 +98,55 @@ pub fn list_messages_in_area(db: &Db, area_id: &str) -> decentdb::Result<Vec<Mes
     Ok(result.rows().iter().map(row_to_message).collect())
 }
 
+pub fn list_messages(db: &Db) -> decentdb::Result<Vec<MessageRecord>> {
+    let result = db.execute(
+        "SELECT UUID_TO_STRING(id), UUID_TO_STRING(area_id), UUID_TO_STRING(author_user_id), UUID_TO_STRING(to_user_id), subject, body, CAST(created_at AS TEXT), UUID_TO_STRING(reply_to_id), network_message_id, visibility
+         FROM messages ORDER BY created_at DESC",
+    )?;
+    Ok(result.rows().iter().map(row_to_message).collect())
+}
+
+pub fn find_message_by_id(db: &Db, message_id: &str) -> decentdb::Result<Option<MessageRecord>> {
+    let result = db.execute_with_params(
+        "SELECT UUID_TO_STRING(id), UUID_TO_STRING(area_id), UUID_TO_STRING(author_user_id), UUID_TO_STRING(to_user_id), subject, body, CAST(created_at AS TEXT), UUID_TO_STRING(reply_to_id), network_message_id, visibility
+         FROM messages WHERE id = UUID_PARSE($1)",
+        &[Value::Text(message_id.to_string())],
+    )?;
+    Ok(result.rows().first().map(row_to_message))
+}
+
+pub fn update_message_area_levels(
+    db: &Db,
+    message_area_id: &str,
+    read_security_level: i64,
+    post_security_level: i64,
+) -> decentdb::Result<()> {
+    db.execute_with_params(
+        "UPDATE message_areas SET read_security_level = $1, post_security_level = $2 WHERE id = UUID_PARSE($3)",
+        &[
+            Value::Int64(read_security_level),
+            Value::Int64(post_security_level),
+            Value::Text(message_area_id.to_string()),
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn move_message_to_area(
+    db: &Db,
+    message_id: &str,
+    message_area_id: &str,
+) -> decentdb::Result<()> {
+    db.execute_with_params(
+        "UPDATE messages SET area_id = UUID_PARSE($1) WHERE id = UUID_PARSE($2)",
+        &[
+            Value::Text(message_area_id.to_string()),
+            Value::Text(message_id.to_string()),
+        ],
+    )?;
+    Ok(())
+}
+
 pub fn update_message_visibility(
     db: &Db,
     message_id: &str,
@@ -106,6 +157,21 @@ pub fn update_message_visibility(
         &[
             Value::Text(visibility.to_string()),
             Value::Text(message_id.to_string()),
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn update_message_area_enabled(
+    db: &Db,
+    message_area_id: &str,
+    enabled: bool,
+) -> decentdb::Result<()> {
+    db.execute_with_params(
+        "UPDATE message_areas SET enabled = $1 WHERE id = UUID_PARSE($2)",
+        &[
+            Value::Bool(enabled),
+            Value::Text(message_area_id.to_string()),
         ],
     )?;
     Ok(())
@@ -123,6 +189,7 @@ fn row_to_area(row: &decentdb::QueryRow) -> MessageAreaRecord {
         read_security_level: int_value(&values[6]),
         post_security_level: int_value(&values[7]),
         moderated: bool_value(&values[8]),
+        enabled: bool_value(&values[9]),
     }
 }
 
@@ -222,6 +289,7 @@ mod tests {
             read_security_level: 0,
             post_security_level: 10,
             moderated: false,
+            enabled: true,
         }
     }
 
@@ -265,6 +333,19 @@ mod tests {
     }
 
     #[test]
+    fn lists_all_messages() {
+        let db = test_db();
+        insert_test_user(&db);
+        insert_message_area(&db, &sample_area("general")).expect("insert area");
+        insert_message(&db, &sample_message(MSG_1, AREA_GENERAL)).expect("insert message");
+
+        let messages = list_messages(&db).expect("list");
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].id, MSG_1);
+    }
+
+    #[test]
     fn updates_message_visibility() {
         let db = test_db();
         insert_test_user(&db);
@@ -275,6 +356,67 @@ mod tests {
 
         let messages = list_messages_in_area(&db, AREA_GENERAL).expect("list");
         assert_eq!(messages[0].visibility, "deleted");
+    }
+
+    #[test]
+    fn updates_message_area_enabled() {
+        let db = test_db();
+        let area = sample_area("general");
+        insert_message_area(&db, &area).expect("insert area");
+
+        update_message_area_enabled(&db, &area.id, false).expect("update");
+
+        let found = find_message_area_by_key(&db, "general").expect("find");
+        assert_eq!(found.as_ref().map(|area| area.enabled), Some(false));
+    }
+
+    #[test]
+    fn updates_message_area_levels() {
+        let db = test_db();
+        let area = sample_area("general");
+        insert_message_area(&db, &area).expect("insert area");
+
+        update_message_area_levels(&db, &area.id, 30, 40).expect("set levels");
+
+        let found = find_message_area_by_key(&db, "general")
+            .expect("find")
+            .expect("area exists");
+        assert_eq!(found.read_security_level, 30);
+        assert_eq!(found.post_security_level, 40);
+    }
+
+    #[test]
+    fn finds_message_by_id() {
+        let db = test_db();
+        insert_test_user(&db);
+        insert_message_area(&db, &sample_area("general")).expect("insert area");
+        insert_message(&db, &sample_message(MSG_1, AREA_GENERAL)).expect("insert message");
+
+        let found = find_message_by_id(&db, MSG_1).expect("find");
+
+        assert_eq!(found.as_ref().map(|m| &m.id), Some(&MSG_1.to_string()));
+        assert_eq!(
+            found.as_ref().map(|m| &m.subject),
+            Some(&"Subject".to_string())
+        );
+    }
+
+    #[test]
+    fn moves_message_between_areas() {
+        let db = test_db();
+        insert_test_user(&db);
+        insert_message_area(&db, &sample_area("general")).expect("insert general");
+        let target = sample_area("random");
+        let target_id = target.id.clone();
+        insert_message_area(&db, &target).expect("insert random");
+        insert_message(&db, &sample_message(MSG_1, AREA_GENERAL)).expect("insert message");
+
+        move_message_to_area(&db, MSG_1, &target_id).expect("move");
+
+        let moved = find_message_by_id(&db, MSG_1)
+            .expect("find")
+            .expect("message exists");
+        assert_eq!(moved.area_id, target_id);
     }
 
     #[test]

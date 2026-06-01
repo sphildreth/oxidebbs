@@ -86,6 +86,18 @@ pub fn list_active_sessions(db: &Db) -> decentdb::Result<Vec<SessionRecord>> {
     Ok(result.rows().iter().map(row_to_session).collect())
 }
 
+pub fn find_active_session_by_node(
+    db: &Db,
+    node_number: i64,
+) -> decentdb::Result<Option<SessionRecord>> {
+    let result = db.execute_with_params(
+        "SELECT UUID_TO_STRING(id), node_number, UUID_TO_STRING(user_id), transport, remote_address, CAST(remote_ip AS TEXT), remote_port, CAST(started_at AS TEXT), CAST(ended_at AS TEXT), disconnect_reason
+         FROM sessions WHERE node_number = $1 AND ended_at IS NULL",
+        &[Value::Int64(node_number)],
+    )?;
+    Ok(result.rows().first().map(row_to_session))
+}
+
 pub fn list_recent_sessions(db: &Db, limit: i64) -> decentdb::Result<Vec<SessionRecord>> {
     let result = db.execute_with_params(
         "SELECT UUID_TO_STRING(id), node_number, UUID_TO_STRING(user_id), transport, remote_address, CAST(remote_ip AS TEXT), remote_port, CAST(started_at AS TEXT), CAST(ended_at AS TEXT), disconnect_reason
@@ -225,6 +237,21 @@ mod tests {
         let recent = list_recent_sessions(&db, 1).expect("list recent");
 
         assert_eq!(recent.len(), 1);
+    }
+
+    #[test]
+    fn finds_active_session_by_node() {
+        let db = test_db();
+        insert_session(&db, &sample_session(SESSION_1, 1)).expect("insert");
+        insert_session(&db, &sample_session(SESSION_2, 2)).expect("insert");
+        end_session(&db, SESSION_2, "2026-01-01T01:00:00.000000Z", "user_logoff").expect("end");
+
+        let found = find_active_session_by_node(&db, 2).expect("find");
+        assert_eq!(found, None);
+
+        let found = find_active_session_by_node(&db, 1).expect("find");
+        let session = found.expect("session exists");
+        assert_eq!(session.id, SESSION_1);
     }
 
     #[test]

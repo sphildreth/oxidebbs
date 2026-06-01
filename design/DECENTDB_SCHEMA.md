@@ -4,9 +4,9 @@ OxideBBS uses DecentDB as the only system database. The schema should lean into
 DecentDB's PostgreSQL-like type system instead of treating it as a SQLite-style
 string store.
 
-Current schema version: `2`
+Current schema version: `3`
 
-Schema version `2` is still pre-alpha. The initializer refuses to open a
+Schema version `3` is still pre-alpha. The initializer refuses to open a
 database with an older OxideBBS schema marker instead of silently running against
 stale tables. Until migrations exist, recreate development databases when the
 schema version changes.
@@ -88,6 +88,7 @@ network_id TEXT
 read_security_level INT NOT NULL DEFAULT 0
 post_security_level INT NOT NULL DEFAULT 10
 moderated BOOL NOT NULL DEFAULT FALSE
+enabled BOOL NOT NULL DEFAULT TRUE
 ```
 
 Constraints:

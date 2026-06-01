@@ -11,27 +11,31 @@ mod schema;
 mod session_repo;
 mod user_repo;
 
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 
 pub use audit_repo::{
     AuditEventRecord, insert_audit_event, list_audit_events, list_audit_events_for_user,
 };
 pub use door_repo::{
-    DoorDefinitionRecord, DoorRunRecord, finish_door_run, insert_door_definition, insert_door_run,
-    list_door_definitions, list_door_runs,
+    DoorDefinitionRecord, DoorRunRecord, find_door_by_key, find_door_run_by_id, finish_door_run,
+    insert_door_definition, insert_door_run, list_door_definitions, list_door_runs,
+    update_door_enabled,
 };
 pub use message_repo::{
-    MessageAreaRecord, MessageRecord, find_message_area_by_key, insert_message,
-    insert_message_area, list_message_areas, list_messages_in_area, update_message_visibility,
+    MessageAreaRecord, MessageRecord, find_message_area_by_key, find_message_by_id, insert_message,
+    insert_message_area, list_message_areas, list_messages, list_messages_in_area,
+    move_message_to_area, update_message_area_enabled, update_message_area_levels,
+    update_message_visibility,
 };
 pub use schema::schema_version as read_schema_version;
 pub use session_repo::{
-    SessionRecord, end_session, insert_session, list_active_sessions, list_recent_sessions,
-    update_session_user,
+    SessionRecord, end_session, find_active_session_by_node, insert_session, list_active_sessions,
+    list_recent_sessions, update_session_user,
 };
 pub use user_repo::{
     UserRecord, find_user_by_alias, find_user_by_alias_ci, find_user_by_id, insert_user,
-    list_users, update_user_login, update_user_password_hash,
+    list_users, update_user_alias, update_user_is_sysop, update_user_login,
+    update_user_password_hash, update_user_security_level, update_user_status,
 };
 
 pub struct OxideDb {
@@ -77,7 +81,7 @@ mod tests {
     fn opens_memory_database_and_initializes_schema_marker() {
         let db = OxideDb::open_memory().expect("open in-memory DecentDB");
 
-        assert_eq!(db.schema_version().expect("read schema version"), 2);
+        assert_eq!(db.schema_version().expect("read schema version"), 3);
     }
 
     #[test]
@@ -87,6 +91,6 @@ mod tests {
         schema::init_schema(&db).expect("first schema init");
         schema::init_schema(&db).expect("second schema init");
 
-        assert_eq!(schema::schema_version(&db).expect("read schema version"), 2);
+        assert_eq!(schema::schema_version(&db).expect("read schema version"), 3);
     }
 }

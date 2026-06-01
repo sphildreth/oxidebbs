@@ -21,16 +21,26 @@ Use `--output` to choose another config path:
 cargo run -p oxidebbs-server -- setup --output config/my-bbs.toml
 ```
 
+Use the global `--data` option when setup should initialize a database path
+other than the generated config default:
+
+```bash
+cargo run -p oxidebbs-server -- --data /srv/oxidebbs/oxidebbs.ddb setup
+```
+
 The wizard asks for:
 
 - board name
 - tagline
 - sysop name
+- sysop alias
+- sysop password
 - timezone
 - telnet bind address
 - node count
 - database path
 - whether to include the placeholder example door definition
+- whether to create sample ANSI screen directories
 
 Press Enter at a prompt to accept the value shown in brackets.
 
@@ -55,6 +65,16 @@ provided:
 cargo run -p oxidebbs-server -- setup --force
 ```
 
+For unattended setup, provide the required values as flags:
+
+```bash
+cargo run -p oxidebbs-server -- setup \
+  --board-name "My BBS" \
+  --sysop-alias sysop \
+  --sysop-password "change-this" \
+  --nodes 4
+```
+
 ## After Setup
 
 Validate the generated config:
@@ -66,8 +86,8 @@ cargo run -p oxidebbs-server -- --config config/oxidebbs.toml check
 Then inspect local admin commands:
 
 ```bash
-cargo run -p oxidebbs-server -- --config config/oxidebbs.toml admin users
-cargo run -p oxidebbs-server -- --config config/oxidebbs.toml admin nodes
+cargo run -p oxidebbs-server -- --config config/oxidebbs.toml users list
+cargo run -p oxidebbs-server -- --config config/oxidebbs.toml nodes list
 ```
 
 The setup command may include a sample door definition, but it does not install

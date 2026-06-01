@@ -989,7 +989,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "oxidebbs-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "thiserror 2.0.18",
@@ -997,14 +997,14 @@ dependencies = [
 
 [[package]]
 name = "oxidebbs-db"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "decentdb",
 ]
 
 [[package]]
 name = "oxidebbs-door"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "oxidebbs-core",
  "serde",
@@ -1014,7 +1014,7 @@ dependencies = [
 
 [[package]]
 name = "oxidebbs-server"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "argon2",
  "clap",
@@ -1026,6 +1026,7 @@ dependencies = [
  "oxidebbs-term",
  "rand_core",
  "serde",
+ "serde_json",
  "thiserror 2.0.18",
  "tokio",
  "toml",
@@ -1035,7 +1036,7 @@ dependencies = [
 
 [[package]]
 name = "oxidebbs-sysop"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "oxidebbs-db",
  "oxidebbs-door",
@@ -1045,7 +1046,7 @@ dependencies = [
 
 [[package]]
 name = "oxidebbs-telnet"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "thiserror 2.0.18",
  "tokio",
@@ -1053,7 +1054,7 @@ dependencies = [
 
 [[package]]
 name = "oxidebbs-term"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "parking_lot"

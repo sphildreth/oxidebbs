@@ -282,14 +282,27 @@ authenticated callers.
 
 ## 12. Sysop tooling
 
-The server exposes an `admin` command group for local sysop operations:
+The server exposes CLI-first local sysop command groups:
 
-- list users
-- reset a password hash
-- list active node sessions
-- show recent audit events
-- validate a `doors.toml` file
-- render a text preview of the local Ratatui sysop console
+- `setup`, `check`, `serve`, and `status`
+- `users` for user listing, creation, status changes, security levels, password
+  resets, sysop promotion, audits, and safe delete-as-disable behavior
+- `nodes` for session listing plus audited disconnect/message/broadcast intents
+- `messages` for local area administration and message moderation
+- `doors` for configured door inspection, checks, dry-run testing, drop-file
+  generation, run history, and runtime cleanup
+- `ansi` for screen listing, validation, preview, conversion, and inspection
+- `db` for DecentDB initialization, doctor/stats, backup, verify, and read-only
+  JSON export
+- `logs`, `audit`, and `config` for local troubleshooting
+
+The legacy `admin` command group remains as an alias for the original local
+commands.
+
+Live node disconnect/message/broadcast delivery is recorded as audit intent
+until a local server control socket and heartbeat model exist. `db import` and
+`db compact` are explicit command boundaries but remain blocked until DecentDB
+restore and compaction semantics are specified.
 
 Remote callers must never see Ratatui output; Ratatui remains local sysop/admin
 UI only.

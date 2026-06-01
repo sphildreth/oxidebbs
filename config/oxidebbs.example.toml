@@ -116,6 +116,7 @@ command = "EXAMPLE.EXE"
 drop_file = "DORINFO1.DEF"
 exclusive = false
 time_limit_minutes = 30
+enabled = true
 
 [ftn]
 enabled = false

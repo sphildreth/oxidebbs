@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+No unreleased changes yet.
+
+## [0.2.0] - 2026-06-01
+
+### Added
+
+- Added top-level CLI-first sysop command groups for setup, check, status,
+  users, nodes, messages, doors, ANSI screens, DecentDB maintenance, logs,
+  audit, config, and the local sysop console preview.
+- Added global `--data`, `--json`, `--no-color`, and repeatable `--verbose`
+  options alongside the existing `--config` option.
+- Added non-interactive setup flags, DecentDB initialization during setup,
+  initial sysop account creation, and default local message-area seeding.
+- Added DecentDB repository helpers for sysop user updates, message area
+  enabled/level changes, message lookup/move/search support, door enabled
+  state, door run lookup, and active-session lookup by node.
+- Added a Sysop CLI documentation page covering command groups and current
+  operational limits.
+
+### Changed
+
+- Bumped all OxideBBS Rust crate versions to `0.2.0`.
+- Bumped the pre-alpha DecentDB schema marker to `3`.
+- Added an `enabled` flag to message areas and per-door config definitions.
+- Updated setup, getting-started, runbook, schema, and specification
+  documentation for the CLI-first sysop interface.
+
+### Compatibility Notes
+
+- Existing development databases with schema marker `2` must be recreated
+  before running `0.2.0`.
+- Live node disconnect/message/broadcast commands currently record audited
+  sysop intent and update ended session rows where possible; live delivery waits
+  for a future local server control socket.
+- `db import` and `db compact` remain blocked until DecentDB restore and
+  compaction semantics are specified.
+
+## [0.1.0] - 2026-05-31
+
 ### Added
 
 - Added the initial Rust workspace scaffold with focused crates for server,
