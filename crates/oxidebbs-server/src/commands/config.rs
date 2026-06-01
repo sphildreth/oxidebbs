@@ -168,7 +168,7 @@ pub(crate) fn validate_runtime(
     for screen_name in config.screens.keys() {
         issues.extend(validate_screen_assets(config, screen_name));
     }
-    for door in &config.doors.definitions {
+    for door in config.doors.definitions.iter().filter(|door| door.enabled) {
         issues.extend(check_configured_door(door, config));
     }
     issues
@@ -216,17 +216,30 @@ fn check_configured_door(
             working_dir.display()
         )));
     }
-    let command_name = door
-        .command
-        .split_whitespace()
-        .next()
-        .unwrap_or(door.command.as_str());
-    if !working_dir.join(command_name).exists() {
-        issues.push(CheckIssue::warning(format!(
-            "door command {} was not found under {}",
-            command_name,
-            working_dir.display()
-        )));
+    match first_command_token(&door.command) {
+        Some(command_name) if is_quoted_dos_command(command_name) => {
+            issues.push(CheckIssue::error(
+                "quoted DOS commands are not supported yet; use DOS 8.3 paths",
+            ));
+        }
+        Some(command_name) => {
+            let command_path = if command_name.contains(':')
+                || command_name.contains('\\')
+                || command_name.contains('/')
+            {
+                std::path::PathBuf::from(command_name)
+            } else {
+                working_dir.join(command_name)
+            };
+            if !command_path.exists() {
+                issues.push(CheckIssue::warning(format!(
+                    "door command {} was not found under {}",
+                    command_name,
+                    working_dir.display()
+                )));
+            }
+        }
+        None => issues.push(CheckIssue::error("door command is empty")),
     }
     if !command_exists(&door.runner) {
         issues.push(CheckIssue::warning(format!(
@@ -264,6 +277,14 @@ fn command_exists(command: &str) -> bool {
         return false;
     };
     std::env::split_paths(&paths).any(|dir| dir.join(command).is_file())
+}
+
+fn first_command_token(command: &str) -> Option<&str> {
+    command.trim().split_ascii_whitespace().next()
+}
+
+fn is_quoted_dos_command(command: &str) -> bool {
+    command.starts_with('"') || command.starts_with('\'')
 }
 
 fn screen_assets(screen: &crate::config::ScreenConfig) -> Vec<&str> {
@@ -412,5 +433,50 @@ mod tests {
         let first = issues.first().expect("issue exists");
         assert!(first.message.contains("telnet.bind"));
         let _ = std::fs::remove_dir_all(runtime);
+    }
+
+    #[test]
+    fn door_check_uses_first_command_token_and_rejects_quoted_commands() {
+        let (mut config, _config_path) = load_example_config_for_repo();
+        let runtime = temp_path("door-command-runtime");
+        let working_dir = temp_path("door-command-working");
+        std::fs::create_dir_all(&working_dir).expect("working dir");
+        std::fs::write(working_dir.join("LORD.EXE"), b"").expect("door exe");
+        config.paths.runtime = runtime.clone();
+        config.doors.definitions[0].working_dir = working_dir.to_string_lossy().to_string();
+        config.doors.definitions[0].runner = std::env::current_exe()
+            .expect("current exe")
+            .to_string_lossy()
+            .to_string();
+        config.doors.definitions[0].command = "LORD.EXE /N1".to_string();
+
+        let door = config.doors.definitions[0].clone();
+        let issues = check_configured_door(&door, &config);
+        assert!(
+            !issues
+                .iter()
+                .any(|issue| issue.message.contains("door command"))
+        );
+
+        let mut door = config.doors.definitions[0].clone();
+        door.command = "\"LORD.EXE\"".to_string();
+        let issues = check_configured_door(&door, &config);
+        assert!(issues.iter().any(|issue| {
+            issue.level == "error"
+                && issue.message.contains("quoted DOS commands")
+                && issue.message.contains("DOS 8.3 paths")
+        }));
+
+        let mut door = config.doors.definitions[0].clone();
+        door.command = "   ".to_string();
+        let issues = check_configured_door(&door, &config);
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.level == "error" && issue.message.contains("command is empty"))
+        );
+
+        let _ = std::fs::remove_dir_all(runtime);
+        let _ = std::fs::remove_dir_all(working_dir);
     }
 }

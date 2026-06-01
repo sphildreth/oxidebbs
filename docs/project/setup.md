@@ -112,10 +112,44 @@ cargo run -p oxidebbs-server -- --config config/oxidebbs.toml db stats
 ```
 
 The setup command may include a sample door definition, but it does not install
-or bundle any DOS door binaries. Provide licensed door files in the configured
-door working directory and validate them before exposing the door to callers:
+or bundle any DOS game door binaries. The example definition currently points to
+the bundled Oxide-owned test door (`oxide-check` → `OXIDECHK.EXE`) and is intended
+for launch-path validation.
+
+To avoid third-party licensing issues, OxideBBS ships no abandonware/shareware
+DOOR packages and does not bundle third-party doors.
+
+Sysops validating doors should use commands like:
 
 ```bash
-cargo run -p oxidebbs-server -- --config config/oxidebbs.toml doors check example
-cargo run -p oxidebbs-server -- --config config/oxidebbs.toml doors test example --user sysop --dry-run
+cargo run -p oxidebbs-server -- --config config/oxidebbs.toml doors check oxide-check
+cargo run -p oxidebbs-server -- --config config/oxidebbs.toml doors dropfile oxide-check --user sysop --node 1 --format DORINFO1.DEF
+cargo run -p oxidebbs-server -- --config config/oxidebbs.toml doors test oxide-check --user sysop --dry-run
 ```
+
+Dry-run verifies drop-file generation without requiring DOSBox.
+
+Before first live test:
+
+1. Install DOSBox.
+2. Enable `oxide-check` in the config if it is disabled.
+3. Run:
+
+```bash
+cargo run -p oxidebbs-server -- --config config/oxidebbs.toml check
+```
+
+4. Run live smoke test after starting `serve` and connecting as a caller:
+
+```bash
+cargo run -p oxidebbs-server -- --config config/oxidebbs.toml serve
+```
+
+From a BBS caller session: navigate to the Doors menu and launch the test door.
+
+Notes:
+
+- Maintainership-only rebuild of `OXIDECHK.EXE` requires Free Pascal and the
+  staged `i8086-msdos` toolchain.
+- Normal sysop validation and dry-run operation does **not** require Free Pascal or
+  `i8086-msdos`.

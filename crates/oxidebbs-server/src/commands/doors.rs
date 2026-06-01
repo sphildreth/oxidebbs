@@ -143,6 +143,14 @@ fn command_exists(command: &str) -> bool {
     std::env::split_paths(&paths).any(|dir| dir.join(command).is_file())
 }
 
+fn first_command_token(command: &str) -> Option<&str> {
+    command.trim().split_ascii_whitespace().next()
+}
+
+fn is_quoted_dos_command(command: &str) -> bool {
+    command.starts_with('"') || command.starts_with('\'')
+}
+
 pub fn run_doors(command: DoorsCommand, ctx: &AppContext) -> CliResult<()> {
     let db = open_database(&ctx.config)?;
     sync_configured_doors(&db, &ctx.config)?;
@@ -446,17 +454,30 @@ fn check_door(door: &DoorDefinitionRecord, config: &crate::config::OxideConfig) 
             working_dir.display()
         )));
     }
-    let command_name = door
-        .command
-        .split_whitespace()
-        .next()
-        .unwrap_or(door.command.as_str());
-    if !working_dir.join(command_name).exists() {
-        issues.push(CheckIssue::warning(format!(
-            "door command {} was not found under {}",
-            command_name,
-            working_dir.display()
-        )));
+    match first_command_token(&door.command) {
+        Some(command_name) if is_quoted_dos_command(command_name) => {
+            issues.push(CheckIssue::error(
+                "quoted DOS commands are not supported yet; use DOS 8.3 paths",
+            ));
+        }
+        Some(command_name) => {
+            let command_path = if command_name.contains(':')
+                || command_name.contains('\\')
+                || command_name.contains('/')
+            {
+                std::path::PathBuf::from(command_name)
+            } else {
+                working_dir.join(command_name)
+            };
+            if !command_path.exists() {
+                issues.push(CheckIssue::warning(format!(
+                    "door command {} was not found under {}",
+                    command_name,
+                    working_dir.display()
+                )));
+            }
+        }
+        None => issues.push(CheckIssue::error("door command is empty")),
     }
     if !command_exists(&door.runner) {
         issues.push(CheckIssue::warning(format!(
@@ -608,5 +629,62 @@ mod tests {
         );
         assert_eq!(door.get("enabled"), Some(&JsonValue::Bool(true)));
         assert_eq!(door.get("time_limit_minutes"), Some(&JsonValue::from(30)));
+    }
+
+    #[test]
+    fn check_door_uses_first_command_token_and_rejects_quoted_commands() {
+        let temp = std::env::temp_dir().join(format!(
+            "oxidebbs-door-command-check-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&temp);
+        fs::create_dir_all(&temp).expect("temp");
+        fs::write(temp.join("LORD.EXE"), b"").expect("door exe");
+
+        let mut door = DoorDefinitionRecord {
+            id: "00000000-0000-4000-8000-000000000001".to_string(),
+            key: "lord".to_string(),
+            name: "Legend of the Red Dragon".to_string(),
+            runner: std::env::current_exe()
+                .expect("current exe")
+                .to_string_lossy()
+                .to_string(),
+            working_dir: temp.to_string_lossy().to_string(),
+            command: "LORD.EXE /N1".to_string(),
+            drop_file: "door.sys".to_string(),
+            exclusive: false,
+            time_limit_minutes: 30,
+            enabled: true,
+        };
+        let mut config: crate::config::OxideConfig =
+            toml::from_str("[board]\nname = \"Test\"\n").expect("config");
+        config.paths.runtime = temp.join("runtime");
+
+        let check = check_door(&door, &config);
+        assert!(
+            !check
+                .issues
+                .iter()
+                .any(|issue| issue.message.contains("door command"))
+        );
+
+        door.command = "\"LORD.EXE\"".to_string();
+        let check = check_door(&door, &config);
+        assert!(check.issues.iter().any(|issue| {
+            issue.level == "error"
+                && issue.message.contains("quoted DOS commands")
+                && issue.message.contains("DOS 8.3 paths")
+        }));
+
+        door.command = "   ".to_string();
+        let check = check_door(&door, &config);
+        assert!(
+            check
+                .issues
+                .iter()
+                .any(|issue| issue.level == "error" && issue.message.contains("command is empty"))
+        );
+
+        let _ = fs::remove_dir_all(temp);
     }
 }

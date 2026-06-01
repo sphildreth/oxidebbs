@@ -61,6 +61,24 @@ Validation checks:
 `check` errors on missing/invalid configuration and reports warnings for optional
 but missing directories or assets.
 
+Install DOSBox before live door testing:
+
+```bash
+sudo apt-get install -y dosbox
+```
+
+Validate the bundled test door without DOSBox:
+
+```bash
+cargo run -p oxidebbs-server -- --config config/oxidebbs.example.toml doors check oxide-check
+cargo run -p oxidebbs-server -- --config config/oxidebbs.example.toml doors dropfile oxide-check --user sysop --node 1 --format DORINFO1.DEF
+cargo run -p oxidebbs-server -- --config config/oxidebbs.example.toml doors test oxide-check --user sysop --dry-run
+```
+
+Free Pascal (`i8086-msdos`) is only needed when maintaining
+`tools/doors/oxide-door-check/src/oxidechk.pas`. `check`, `dropfile`, and
+`--dry-run` validation do not need it.
+
 ## 3) Start serving
 
 ```bash
@@ -105,12 +123,14 @@ gap.
 ## 6) Doors and data safety checks
 
 ```bash
-cargo run -p oxidebbs-server -- doors check example
-cargo run -p oxidebbs-server -- doors test example --user sysop --dry-run
+cargo run -p oxidebbs-server -- doors check oxide-check
+cargo run -p oxidebbs-server -- doors test oxide-check --user sysop --dry-run
 ```
 
 Caller `Doors` menu launch uses live door execution in the caller path and records
-`door_runs` rows with timeout and byte counters.
+`door_runs` rows with timeout and byte counters. With DOSBox installed and
+`oxide-check` enabled, run the door from the caller `Doors` menu to complete an
+end-to-end live test.
 
 ## 7) Backup, export, and restore
 

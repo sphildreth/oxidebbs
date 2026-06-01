@@ -1,10 +1,10 @@
 [[definitions]]
-key = "lord"
-name = "Legend of the Red Dragon"
+key = "oxide-check"
+name = "Oxide Door Check"
 runner = "dosbox"
-working_dir = "./doors/lord"
-command = "LORD.EXE"
-drop_file = "DOOR.SYS"
+working_dir = "./tools/doors/oxide-door-check/dist"
+command = "OXIDECHK.EXE"
+drop_file = "DORINFO1.DEF"
 exclusive = false
-time_limit_minutes = 30
+time_limit_minutes = 5
 enabled = true

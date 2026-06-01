@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added Oxide-owned DOS test door documentation and example configuration:
+  `oxide-check` (`OXIDECHK.EXE`) in `config/doors.example.toml` and
+  disabled by default in `config/oxidebbs.example.toml` to avoid requiring DOSBox
+  for untouched setups.
 - Added live caller door launching from the configured `Doors` menu, including
   enabled-door listing, key/number selection, selected-door validation, drop-file
   generation, `door_started`/`door_finished`/`door_timed_out` audit events, and
@@ -29,6 +33,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ordering.
 - Documented and enforced `db compact` explicit unsupported behavior in this
   release because DecentDB exposes no safe production compaction API.
+- Added a documentation-first Oxide Door Check validation flow (`doors check`,
+  `doors dropfile`, and `doors test --dry-run`) and live testing guidance via DOSBox
+  for the caller `Doors` menu path.
 
 ### Changed
 
@@ -66,6 +73,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   setup `--data` override behavior, config check on
   `config/oxidebbs.example.toml`, unsupported `db import` formats, and
   unsupported `db compact` behavior.
+- Documented that the bundled test door fixture is a Free Pascal `i8086-msdos`
+  `OXIDECHK.EXE` project fixture verified by `tools/doors/oxide-door-check/SHA256SUMS`,
+  and that maintainers must bootstrap/build scripts only when changing
+  `oxidechk.pas`.
 
 ### Removed
 

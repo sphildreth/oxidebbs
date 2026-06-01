@@ -268,15 +268,15 @@ pub fn build_setup_toml(answers: &SetupAnswers) -> io::Result<String> {
             enabled: true,
             default_runner: DEFAULT_DOSBOX.to_string(),
             definitions: vec![GeneratedDoorDefinitionConfig {
-                key: "lord".to_string(),
-                name: "Legend of the Red Dragon".to_string(),
+                key: "oxide-check".to_string(),
+                name: "Oxide Door Check".to_string(),
                 runner: DEFAULT_DOSBOX.to_string(),
-                working_dir: "./doors/lord".to_string(),
-                command: "LORD.EXE".to_string(),
-                drop_file: "DOOR.SYS".to_string(),
+                working_dir: "./tools/doors/oxide-door-check/dist".to_string(),
+                command: "OXIDECHK.EXE".to_string(),
+                drop_file: "DORINFO1.DEF".to_string(),
                 exclusive: false,
-                time_limit_minutes: 30,
-                enabled: true,
+                time_limit_minutes: 5,
+                enabled: false,
             }],
         }
     } else {
@@ -510,6 +510,9 @@ mod tests {
         assert_eq!(parsed.board.name, "OxideBBS");
         assert!(parsed.doors.enabled);
         assert_eq!(parsed.doors.definitions.len(), 1);
+        assert_eq!(parsed.doors.definitions[0].key, "oxide-check");
+        assert_eq!(parsed.doors.definitions[0].command, "OXIDECHK.EXE");
+        assert!(!parsed.doors.definitions[0].enabled);
     }
 
     #[test]

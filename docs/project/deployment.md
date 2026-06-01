@@ -27,12 +27,36 @@ cargo run -p oxidebbs-server -- --config /etc/oxidebbs/oxidebbs.toml check
 cargo run -p oxidebbs-server -- --config /etc/oxidebbs/oxidebbs.toml serve
 ```
 
-4. Verify health:
+4. Install DOSBox on hosts that will launch DOS doors:
+
+```bash
+sudo apt-get install -y dosbox
+```
+
+5. Validate and dry-run the bundled test door:
+
+```bash
+cargo run -p oxidebbs-server -- --config /etc/oxidebbs/oxidebbs.toml doors check oxide-check
+cargo run -p oxidebbs-server -- --config /etc/oxidebbs/oxidebbs.toml doors dropfile oxide-check --user sysop --node 1 --format DORINFO1.DEF
+cargo run -p oxidebbs-server -- --config /etc/oxidebbs/oxidebbs.toml doors test oxide-check --user sysop --dry-run
+```
+
+6. To run a live smoke test:
+
+1. Keep DOSBox installed.
+2. Enable `oxide-check` in the active config (it is intentionally disabled by
+   default in `oxidebbs.example.toml`).
+3. Start the server and launch `oxide-check` from the caller `Doors` menu.
+
+7. Verify health:
 
 ```bash
 cargo run -p oxidebbs-server -- --config /etc/oxidebbs/oxidebbs.toml status
 cargo run -p oxidebbs-server -- --config /etc/oxidebbs/oxidebbs.toml nodes list
 ```
+
+Live launch requires DOSBox and will fail with a clear external-runner error if
+missing.
 
 ## Native build prerequisites
 

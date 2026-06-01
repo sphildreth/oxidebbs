@@ -19,15 +19,27 @@ OxideBBS should make old DOS door games feel native.
 
 ```toml
 [[doors.definitions]]
-key = "lord"
-name = "Legend of the Red Dragon"
+key = "oxide-check"
+name = "Oxide Door Check"
 runner = "dosbox"
-working_dir = "./doors/lord"
-command = "LORD.EXE"
+working_dir = "./tools/doors/oxide-door-check/dist"
+command = "OXIDECHK.EXE"
 drop_file = "DORINFO1.DEF"
 exclusive = false
-time_limit_minutes = 30
+time_limit_minutes = 5
 ```
+
+### Bundled test fixture
+
+OxideBBS ships an owned DOSBox test fixture, not third-party game content:
+
+- `Oxide Door Check` is defined by `key = "oxide-check"` in docs examples.
+- The fixture source is Free Pascal (`tools/doors/oxide-door-check/src/oxidechk.pas`)
+  targeting `i8086-msdos`.
+- The checked-in executable `OXIDECHK.EXE` is a committed conformance fixture.
+- The fixture checksum is validated via `tools/doors/oxide-door-check/SHA256SUMS`.
+- Maintainers changing `oxidechk.pas` run
+  `scripts/bootstrap-fpc-i8086-msdos.sh` and `scripts/build-oxidechk-door.sh`.
 
 ## Drop files
 
@@ -41,6 +53,15 @@ Support later:
 - `CHAIN.TXT`
 - `DOORFILE.SR`
 - Wildcat, PCBoard, and other variants as needed
+
+For DOSBox execution:
+
+- mount door working directory as `C:`
+- mount node runtime directory as `D:`
+- use `D:` as the current directory for command execution
+- resolve bare commands as `C:\<EXE>` in DOSBox plans
+- write `OXNODE.TXT` into the node runtime directory as Oxide-owned diagnostic metadata
+  (not required by third-party doors)
 
 ## Runtime flow
 

@@ -140,6 +140,28 @@ This is intended for a local coding agent to work from.
 - [x] Define duplicate detection approach.
 - [x] Define packet import/export boundary.
 
+## Oxide Door Check
+
+- [x] Add Oxide-owned `OXIDECHK.EXE` test fixture metadata references to docs and
+  design docs.
+- [x] Add Free Pascal `src/oxidechk.pas` source and checked-in
+  `dist/OXIDECHK.EXE` conformance fixture.
+- [x] Add `SHA256SUMS` verification for the checked-in executable fixture.
+- [x] Add maintainer-only `scripts/bootstrap-fpc-i8086-msdos.sh` and
+  `scripts/build-oxidechk-door.sh` rebuild flow.
+- [x] Reference `oxide-check` in example, main, and setup-generated
+  configuration files.
+- [x] Document `doors check/dropfile/test` smoke-test workflow in setup,
+  getting-started, deployment, and sysop CLI docs.
+- [x] Document DOSBox C:/D: runtime mounts, bare command resolution from `C:\`,
+  and `OXNODE.TXT` diagnostics.
+- [x] Update changelog with the user-facing test-door documentation and config
+  behavior.
+- [x] Add optional DOSBox smoke script that is skipped unless explicitly run
+  interactively.
+- [x] Keep normal Cargo build/test independent of Free Pascal, DOSBox, and the
+  staged i8086/MS-DOS cross toolchain.
+
 ## Implementation Plan Phase 7 — Documentation And Runbook Completion
 
 - [x] Update docs for setup/validation/startup and local control flow in

@@ -22,20 +22,20 @@ Status values:
 | Phase | Status | Goal | Required Output |
 | --- | --- | --- | --- |
 | Phase 0 - Planning Baseline | COMPLETE | Capture the product and engineering decisions for the test door. | This document. |
-| Phase 1 - Repository Layout And License Boundary | TODO | Add a clear, source-owned home for the DOS test door and prevent licensing ambiguity. | `tools/doors/oxide-door-check/` layout, license note, build script contract. |
-| Phase 2 - DOS Door Program | TODO | Implement the actual DOS test program. | Free Pascal source, checked-in `OXIDECHK.EXE`, checksum, deterministic behavior. |
-| Phase 3 - DOSBox Runtime Contract | TODO | Make OxideBBS launch DOS doors with the drop file visible inside DOSBox. | Updated `oxidebbs-door` plan generation and validation tests. |
-| Phase 4 - Config And Sysop CLI Integration | TODO | Make the test door easy to configure and exercise from existing commands. | Example config, setup guidance, `doors check/test/dropfile` compatibility. |
-| Phase 5 - Testing Automation | TODO | Cover the fixture without making CI depend on DOSBox. | Rust unit/integration tests plus an optional DOSBox smoke script. |
-| Phase 6 - Documentation And Changelog | TODO | Document sysop usage and record the user-visible behavior change. | Updated design docs, operator docs, task list, and changelog. |
-| Phase 7 - Final Validation | TODO | Prove the branch is ready to merge. | `./scripts/dev-check.sh`, docs build, whitespace check, optional DOSBox smoke result. |
+| Phase 1 - Repository Layout And License Boundary | COMPLETE | Add a clear, source-owned home for the DOS test door and prevent licensing ambiguity. | `tools/doors/oxide-door-check/` layout, `SHA256SUMS`, maintainer rebuild scripts. |
+| Phase 2 - DOS Door Program | COMPLETE | Implement the actual DOS test program. | Free Pascal source, checked-in `OXIDECHK.EXE` fixture, checksum, deterministic behavior. |
+| Phase 3 - DOSBox Runtime Contract | COMPLETE | Make OxideBBS launch DOS doors with the drop file visible inside DOSBox. | Updated `oxidebbs-door` plan generation and validation tests. |
+| Phase 4 - Config And Sysop CLI Integration | COMPLETE | Make the test door easy to configure and exercise from existing commands. | Example config, setup guidance, `doors check/test/dropfile` compatibility. |
+| Phase 5 - Testing Automation | COMPLETE | Cover the fixture without making CI depend on DOSBox. | Rust unit/integration tests plus an optional DOSBox smoke script. |
+| Phase 6 - Documentation And Changelog | COMPLETE | Document sysop usage and record the user-visible behavior change. | Updated design docs, operator docs, task list, and changelog. |
+| Phase 7 - Final Validation | COMPLETE | Prove the branch is ready to merge. | `./scripts/dev-check.sh`, docs build, whitespace check, optional DOSBox smoke result. |
 
 ## Definition Of Done
 
 The Oxide test door is complete only when all of the following are true:
 
 1. A project-authored DOS door exists in the repository with source and a
-   reproducible binary artifact.
+   checked-in DOS executable fixture.
 2. The door artifact is clearly licensed for redistribution by OxideBBS.
 3. The door runs under DOSBox using the same `oxidebbs-door` launch path as
    third-party DOS doors.
@@ -43,14 +43,18 @@ The Oxide test door is complete only when all of the following are true:
    program in its current DOS directory.
 5. The test door can be exercised through existing sysop CLI commands without
    adding a special one-off runner path.
-6. Normal CI does not require DOSBox or Free Pascal to be installed.
-7. Optional/manual validation exists for systems that do have DOSBox installed.
-8. User-facing docs explain how to install DOSBox, configure the test door, run
+6. `SHA256SUMS` verifies the checked-in DOS executable fixture.
+7. Maintainer-only scripts exist to bootstrap the Free Pascal `i8086-msdos`
+   cross compiler locally and rebuild the fixture when needed.
+8. Normal Cargo build/test and `./scripts/dev-check.sh` do not require Free
+   Pascal, DOSBox, or the staged `i8086-msdos` toolchain.
+9. Optional/manual validation exists for systems that do have DOSBox installed.
+10. User-facing docs explain how to install DOSBox, configure the test door, run
    a dry run, and run a live test.
-9. `docs/about/changelog.md` is updated under `Unreleased`.
-10. `design/TASKS.md` is updated with completed work when implementation is
+11. `docs/about/changelog.md` is updated under `Unreleased`.
+12. `design/TASKS.md` is updated with completed work when implementation is
     finished.
-11. The required validation commands pass:
+13. The required validation commands pass:
 
     ```bash
     ./scripts/dev-check.sh
@@ -74,10 +78,14 @@ These decisions are part of the implementation contract.
 - The source file is `tools/doors/oxide-door-check/src/oxidechk.pas`.
 - The checked-in binary is
   `tools/doors/oxide-door-check/dist/OXIDECHK.EXE`.
-- The checked-in checksum is
-  `tools/doors/oxide-door-check/dist/OXIDECHK.EXE.sha256`.
-- The build script is
-  `tools/doors/oxide-door-check/build.sh`.
+- The checked-in checksum manifest is
+  `tools/doors/oxide-door-check/SHA256SUMS`.
+- The checked-in executable is a conformance-test fixture, not a mandatory
+  Cargo build artifact.
+- The Free Pascal bootstrap script is
+  `scripts/bootstrap-fpc-i8086-msdos.sh`.
+- The test-door rebuild script is
+  `scripts/build-oxidechk-door.sh`.
 - The canonical runner is DOSBox, configured as `runner = "dosbox"`.
 - The canonical drop-file format for the example config is `DORINFO1.DEF`.
 - The test program must also support `DOOR.SYS` so both supported drop-file
@@ -91,6 +99,7 @@ These decisions are part of the implementation contract.
   current DOS directory before invoking the door executable.
 - Mandatory Rust CI must not invoke DOSBox.
 - Mandatory Rust CI must not require Free Pascal.
+- Mandatory Rust CI must not require the staged `i8086-msdos` cross compiler.
 - Do not add a Rust dependency for command-line parsing or DOS path handling
   for this work. Implement the small helpers directly in `oxidebbs-door`.
 - Do not bundle third-party door source, third-party door binaries, abandonware,
@@ -110,6 +119,13 @@ Reasons:
 - Free Pascal officially supports DOS targets, including 16-bit DOS and
   32-bit DPMI paths.
 - The checked-in `OXIDECHK.EXE` means sysops still need only DOSBox at runtime.
+- The checked-in `OXIDECHK.EXE` also means normal Cargo validation does not
+  need to build the door from source.
+- Only maintainers changing `oxidechk.pas` need the Free Pascal `i8086-msdos`
+  cross compiler.
+- The cross compiler is staged locally by
+  `scripts/bootstrap-fpc-i8086-msdos.sh`; it is not installed system-wide and
+  is not part of the normal Rust build.
 
 Relevant upstream/package references:
 
@@ -119,8 +135,9 @@ Relevant upstream/package references:
   `https://docs.freepascal.org/docs-html/rtl/go32/index.html`
 
 The `go32v2` target remains explicitly excluded for v1 unless this document is
-updated, because it can introduce a DPMI runtime requirement. The v1 diagnostic
-door should be a single DOS executable plus files generated by OxideBBS.
+updated, because it can introduce a DPMI runtime requirement. Do not switch to
+`go32v2` just to simplify maintainer onboarding. The v1 diagnostic door should
+be a single checked-in DOS executable plus files generated by OxideBBS.
 
 ## Non-Goals
 
@@ -154,8 +171,9 @@ agents rediscover the runtime model.
 - Chose DOSBox as the canonical runner.
 - Chose an OxideBBS-authored source and binary artifact.
 - Chose Free Pascal output so the door source is maintainable, historically
-  aligned with BBS and door software, and buildable with a compiler that is
-  available in Fedora packages.
+  aligned with BBS and door software, while keeping the generated executable as
+  a checked-in fixture so normal development does not depend on cross-compiler
+  availability.
 - Identified the runtime contract gap: OxideBBS currently writes the drop file
   to the node runtime directory while the DOSBox plan mounts and enters the
   door working directory.
@@ -185,12 +203,14 @@ tools/
     oxide-door-check/
       README.md
       LICENSE.md
-      build.sh
+      SHA256SUMS
       src/
         oxidechk.pas
       dist/
         OXIDECHK.EXE
-        OXIDECHK.EXE.sha256
+scripts/
+  bootstrap-fpc-i8086-msdos.sh
+  build-oxidechk-door.sh
 ```
 
 ### File Requirements
@@ -199,18 +219,24 @@ tools/
 
 - Purpose: known-good DOSBox door fixture for OxideBBS.
 - License: OxideBBS-authored and redistributable under Apache-2.0.
-- Build requirement: Free Pascal is required only when regenerating the `.EXE`.
+- Fixture model: `OXIDECHK.EXE` is checked in as a conformance-test fixture.
+- Checksum: `SHA256SUMS` verifies the checked-in fixture.
+- Build requirement: Free Pascal is required only for maintainers regenerating
+  the `.EXE`.
 - Target requirement: the intended target is `i8086-msdos`.
 - Runtime requirement: DOSBox is required to run the door through OxideBBS.
 - Quick commands:
 
   ```bash
-  ./tools/doors/oxide-door-check/build.sh
-  sha256sum -c tools/doors/oxide-door-check/dist/OXIDECHK.EXE.sha256
+  (cd tools/doors/oxide-door-check && sha256sum -c SHA256SUMS)
+  ./scripts/bootstrap-fpc-i8086-msdos.sh
+  ./scripts/build-oxidechk-door.sh
   ```
 
 - A short explanation that normal OxideBBS CI uses the checked-in binary and
   does not rebuild it.
+- A short explanation that only maintainers changing `oxidechk.pas` need the
+  staged Free Pascal cross compiler.
 
 `tools/doors/oxide-door-check/LICENSE.md` must state that this test door is
 part of OxideBBS and is distributed under the repository's Apache-2.0 license.
@@ -218,41 +244,104 @@ Do not copy a full third-party license text into this subdirectory unless the
 repository already has the canonical full license file and the wording points
 to it.
 
-`tools/doors/oxide-door-check/build.sh` must:
+`tools/doors/oxide-door-check/SHA256SUMS` must:
+
+- Be generated by `sha256sum`.
+- Use paths relative to `tools/doors/oxide-door-check/`.
+- Include exactly the checked-in executable fixture:
+
+  ```text
+  dist/OXIDECHK.EXE
+  ```
+
+Validation must work with:
+
+```bash
+cd tools/doors/oxide-door-check
+sha256sum -c SHA256SUMS
+```
+
+`scripts/bootstrap-fpc-i8086-msdos.sh` must:
 
 - Use `#!/usr/bin/env bash`.
 - Use `set -euo pipefail`.
-- Resolve paths relative to the script location.
-- Check for `fpc` on `PATH`.
-- Print a clear message and exit non-zero if Free Pascal is missing.
-- Fail with a clear message if the installed Free Pascal toolchain cannot
-  compile `i8086-msdos` output.
-- Create `build/` and `dist/` if they do not exist.
-- Compile:
+- Resolve paths relative to the repository root.
+- Stage the official Free Pascal `i8086-msdos` cross compiler locally under:
 
-  ```bash
-  mkdir -p build dist
-  fpc -Mtp -Pi8086 -Tmsdos -FEbuild -FUbuild -oOXIDECHK.EXE src/oxidechk.pas
-  cp build/OXIDECHK.EXE dist/OXIDECHK.EXE
+  ```text
+  target/fpc-i8086-msdos/
+  ```
+
+- Avoid `sudo`, `dnf`, system package installation, and writes outside the
+  repository.
+- Be idempotent. Re-running it must reuse or refresh the staged toolchain
+  safely.
+- Pin the Free Pascal version used for the door fixture in the script.
+- Download only from official Free Pascal project distribution locations or
+  mirrors documented by the Free Pascal project.
+- Verify downloaded archive checksums before using them. If upstream checksum
+  files are used, verify those first according to the implementation's chosen
+  source.
+- Produce or expose a compiler command usable by the build script for:
+
+  ```text
+  i8086-msdos
+  ```
+
+- Fail with a clear message if the official toolchain cannot be staged.
+- Print the staged compiler path and version on success.
+
+`scripts/build-oxidechk-door.sh` must:
+
+- Use `#!/usr/bin/env bash`.
+- Use `set -euo pipefail`.
+- Resolve paths relative to the repository root.
+- Require the staged compiler from `target/fpc-i8086-msdos/`.
+- If the staged compiler is missing, print:
+
+  ```text
+  missing staged Free Pascal i8086-msdos compiler; run ./scripts/bootstrap-fpc-i8086-msdos.sh
+  ```
+
+  and exit non-zero.
+
+- Create a temporary build directory under:
+
+  ```text
+  target/oxidechk-door-build/
+  ```
+
+- Compile `tools/doors/oxide-door-check/src/oxidechk.pas` with Turbo Pascal
+  compatibility and `i8086-msdos` target semantics.
+- Copy the rebuilt executable to:
+
+  ```text
+  tools/doors/oxide-door-check/dist/OXIDECHK.EXE
   ```
 
 - Regenerate:
 
-  ```bash
-  sha256sum OXIDECHK.EXE > OXIDECHK.EXE.sha256
+  ```text
+  tools/doors/oxide-door-check/SHA256SUMS
   ```
 
-  The checksum file path should be relative to `dist/`, so it can be validated
-  with `cd tools/doors/oxide-door-check/dist && sha256sum -c OXIDECHK.EXE.sha256`.
+  with a relative `dist/OXIDECHK.EXE` entry.
+
+- Run `(cd tools/doors/oxide-door-check && sha256sum -c SHA256SUMS)` before
+  exiting.
+- Print the compiler version used for the rebuilt fixture.
 
 ### Acceptance Criteria
 
 - The directory layout exists exactly as specified.
 - The license note makes clear that no abandonware, shareware, or freeware door
   package has been copied into the repository.
-- `build.sh` works on a system with Free Pascal installed and `i8086-msdos`
-  target support available.
-- `build.sh` does not run as part of `./scripts/dev-check.sh`.
+- `SHA256SUMS` validates the checked-in `OXIDECHK.EXE`.
+- `scripts/bootstrap-fpc-i8086-msdos.sh` stages the maintainer-only compiler
+  locally.
+- `scripts/build-oxidechk-door.sh` rebuilds the checked-in fixture when the
+  staged compiler exists.
+- Neither script runs as part of `./scripts/dev-check.sh`.
 - `git diff --check` passes.
 
 ## Phase 2 - DOS Door Program
@@ -309,9 +398,9 @@ require a DPMI runtime such as `CWSDPMI.EXE`. A `go32v2` build can be used only
 as an explicit future design change after documenting the runtime file,
 licensing, installation, and DOSBox validation story.
 
-If the local Free Pascal package does not include `i8086-msdos` support,
-`build.sh` must fail with a clear message that says the installed Free Pascal
-cannot build the required target.
+If the staged Free Pascal cross compiler cannot produce `i8086-msdos` output,
+`scripts/build-oxidechk-door.sh` must fail with a clear message that says the
+staged Free Pascal toolchain cannot build the required target.
 
 ### Runtime Behavior
 
@@ -497,8 +586,10 @@ Do not add random or time-dependent exit codes.
 
 ### Acceptance Criteria
 
-- `build.sh` produces `dist/OXIDECHK.EXE`.
-- `dist/OXIDECHK.EXE.sha256` validates the checked-in binary.
+- The checked-in `dist/OXIDECHK.EXE` fixture exists.
+- `SHA256SUMS` validates the checked-in binary.
+- `scripts/build-oxidechk-door.sh` can reproduce `dist/OXIDECHK.EXE` when the
+  staged Free Pascal cross compiler exists.
 - The binary is small enough to remain reviewable as a generated artifact.
   There is no hard size limit, but it should remain small enough that reviewers
   can reason about the fixture.
@@ -876,6 +967,26 @@ Press I to view node info, R to write a report, then Q to return.
 
 and must still be optional, not part of `./scripts/dev-check.sh`.
 
+### Optional DOSBox Integration Tests
+
+If Rust integration tests are added that actually launch DOSBox, they must be
+opt-in ignored tests. Use this pattern:
+
+```rust
+#[ignore = "requires DOSBox"]
+```
+
+Do not gate normal behavior behind a Cargo feature solely for this phase. The
+required opt-in command for DOSBox-backed Rust tests must be documented as:
+
+```bash
+cargo test --workspace --locked -- --ignored
+```
+
+If this command would run unrelated ignored tests, document the narrower test
+name instead. DOSBox-backed tests must skip or fail clearly when `dosbox` is not
+on `PATH`, and they must never run during `./scripts/dev-check.sh`.
+
 ### CI Contract
 
 Do not add the DOSBox smoke script to mandatory CI in this phase.
@@ -885,13 +996,20 @@ DOSBox and runs the script, but that job must be allowed to skip cleanly when
 the environment cannot support DOSBox. This plan does not require that optional
 job.
 
+Normal Cargo build/test, `cargo test --workspace --locked`, and
+`./scripts/dev-check.sh` must not require Free Pascal, DOSBox, or the staged
+`i8086-msdos` toolchain.
+
 ### Acceptance Criteria
 
 - Mandatory Rust tests pass without DOSBox installed.
 - Mandatory Rust tests pass without Free Pascal installed.
+- Mandatory Rust tests pass without the staged `i8086-msdos` toolchain.
 - The optional DOSBox script skips with exit `77` when DOSBox is missing.
 - On a developer machine with DOSBox, the optional script can run the checked-in
   `OXIDECHK.EXE`.
+- Any DOSBox-backed Rust integration tests are ignored by default and documented
+  with an explicit opt-in command.
 
 ## Phase 6 - Documentation And Changelog
 
@@ -915,6 +1033,11 @@ Required additions:
 - Mention `Oxide Door Check` as the bundled, Oxide-owned test door.
 - Document that the test door source is Free Pascal and the required build
   target is `i8086-msdos`.
+- Document that `OXIDECHK.EXE` is a checked-in conformance-test fixture, not a
+  mandatory Cargo build artifact.
+- Document that only maintainers changing `oxidechk.pas` need to run
+  `scripts/bootstrap-fpc-i8086-msdos.sh` and
+  `scripts/build-oxidechk-door.sh`.
 - Document that the DOSBox runner mounts the door working directory as `C:` and
   the node runtime directory as `D:`.
 - Document that DOS doors are launched with `D:` as the current directory so
@@ -934,6 +1057,8 @@ Required additions:
 
 - State that v1 includes a redistributable DOSBox test door.
 - State that the bundled test door is implemented in Free Pascal.
+- State that the generated executable is committed as a fixture and verified
+  with `SHA256SUMS`.
 - State that the test door is multi-node aware and reports the active node
   number.
 - State that the bundled test door is not a game content dependency and does
@@ -977,6 +1102,8 @@ docs/project/deployment.md
 Only update files that exist. Required content somewhere in operator docs:
 
 - Install DOSBox before live door testing.
+- Do not install Free Pascal or the `i8086-msdos` cross compiler for normal
+  sysop use.
 - Enable the `oxide-check` door in config.
 - Run config validation.
 - Run a dry run.
@@ -996,8 +1123,10 @@ docs/about/changelog.md
 Add an `Unreleased` entry that mentions:
 
 - bundled Oxide-owned DOSBox test door
+- Free Pascal source with a checked-in `OXIDECHK.EXE` fixture and `SHA256SUMS`
 - DOSBox launch-plan correction that makes drop files visible in the DOS
   current directory
+- maintainer-only Free Pascal bootstrap/rebuild scripts
 - optional DOSBox smoke test script, if implemented
 
 Follow `design/VERSIONING_GUIDE.md`. Do not bump crate versions unless this
@@ -1026,17 +1155,18 @@ inside the implementation phases.
 Run:
 
 ```bash
+(cd tools/doors/oxide-door-check && sha256sum -c SHA256SUMS)
 ./scripts/dev-check.sh
 npm run docs:build
 git diff --check
 ```
 
-If Free Pascal with `i8086-msdos` target support is installed, also run:
+When changing the Pascal source or regenerating the fixture, also run:
 
 ```bash
-./tools/doors/oxide-door-check/build.sh
-cd tools/doors/oxide-door-check/dist
-sha256sum -c OXIDECHK.EXE.sha256
+./scripts/bootstrap-fpc-i8086-msdos.sh
+./scripts/build-oxidechk-door.sh
+(cd tools/doors/oxide-door-check && sha256sum -c SHA256SUMS)
 ```
 
 If DOSBox is installed, also run:
@@ -1045,31 +1175,34 @@ If DOSBox is installed, also run:
 ./scripts/test-oxide-door-dosbox.sh
 ```
 
-If Free Pascal target support or DOSBox are missing, do not treat that as a
-failure. Record the skip in the final implementation notes.
+If DOSBox is missing, do not treat that as a failure. Record the skip in the
+final implementation notes. If the Pascal source changed and the Free Pascal
+bootstrap/build scripts fail, treat that as a blocker for completing this plan.
 
 ### Final Review Checklist
 
 Before marking this plan complete:
 
-- [ ] All phase-map statuses are updated.
-- [ ] `tools/doors/oxide-door-check/dist/OXIDECHK.EXE` exists.
-- [ ] `tools/doors/oxide-door-check/dist/OXIDECHK.EXE.sha256` validates.
-- [ ] `config/doors.example.toml` references `oxide-check`.
-- [ ] `config/oxidebbs.example.toml` references disabled `oxide-check`.
-- [ ] The DOSBox plan mounts both `C:` and `D:`.
-- [ ] The DOSBox plan switches to `D:` before running the command.
-- [ ] The drop file path points into the node runtime directory.
-- [ ] Door command validation handles command arguments.
-- [ ] Mandatory tests do not require DOSBox.
-- [ ] Mandatory tests do not require Free Pascal.
-- [ ] Optional DOSBox smoke testing is documented.
-- [ ] Operator docs explain how to enable and run the test door.
-- [ ] `docs/about/changelog.md` is updated.
-- [ ] `design/TASKS.md` is updated.
-- [ ] `./scripts/dev-check.sh` passes.
-- [ ] `npm run docs:build` passes.
-- [ ] `git diff --check` passes.
+- [x] All phase-map statuses are updated.
+- [x] `tools/doors/oxide-door-check/dist/OXIDECHK.EXE` exists.
+- [x] `tools/doors/oxide-door-check/SHA256SUMS` validates.
+- [x] `scripts/bootstrap-fpc-i8086-msdos.sh` exists.
+- [x] `scripts/build-oxidechk-door.sh` exists.
+- [x] `config/doors.example.toml` references `oxide-check`.
+- [x] `config/oxidebbs.example.toml` references disabled `oxide-check`.
+- [x] The DOSBox plan mounts both `C:` and `D:`.
+- [x] The DOSBox plan switches to `D:` before running the command.
+- [x] The drop file path points into the node runtime directory.
+- [x] Door command validation handles command arguments.
+- [x] Mandatory tests do not require DOSBox.
+- [x] Mandatory tests do not require Free Pascal.
+- [x] Optional DOSBox smoke testing is documented.
+- [x] Operator docs explain how to enable and run the test door.
+- [x] `docs/about/changelog.md` is updated.
+- [x] `design/TASKS.md` is updated.
+- [x] `./scripts/dev-check.sh` passes.
+- [x] `npm run docs:build` passes.
+- [x] `git diff --check` passes.
 
 ## Implementation Notes Template
 
@@ -1077,10 +1210,17 @@ When implementation begins, add notes here instead of leaving decisions in chat
 history.
 
 ```text
-Implementation started:
-Implementation completed:
-Free Pascal validation:
-DOSBox smoke validation:
-Skipped validations:
-Notable decisions:
+Implementation started: 2026-06-01
+Implementation completed: 2026-06-01
+Free Pascal validation: `./scripts/bootstrap-fpc-i8086-msdos.sh` staged Free
+Pascal 3.2.2 `ppcross8086`; `./scripts/build-oxidechk-door.sh` rebuilt
+`dist/OXIDECHK.EXE`; `(cd tools/doors/oxide-door-check && sha256sum -c
+SHA256SUMS)` passed.
+DOSBox smoke validation: `./scripts/test-oxide-door-dosbox.sh` skipped with
+exit 77 unless `OXIDE_DOOR_INTERACTIVE=1` is set.
+Skipped validations: interactive DOSBox smoke run was not forced during the
+required automated gate.
+Notable decisions: `OXIDECHK.EXE` is committed as a conformance-test fixture;
+the Free Pascal i8086/MS-DOS cross compiler is staged under `target/` and is
+required only when maintainers rebuild the door fixture.
 ```

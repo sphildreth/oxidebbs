@@ -206,28 +206,70 @@ pub fn prepare_door_run(request: &DoorRunRequest) -> Result<DoorRunPlan, DoorErr
         _ => render_door_sys(&request.caller, request.node_number, 38_400),
     };
     fs::write(&drop_file_path, drop_contents)?;
+    fs::write(
+        request.runtime_dir.join("OXNODE.TXT"),
+        format!("node={}\r\n", request.node_number),
+    )?;
 
-    Ok(dosbox_plan(request, drop_file_path))
+    dosbox_plan(request, drop_file_path)
 }
 
-pub fn dosbox_plan(request: &DoorRunRequest, drop_file_path: PathBuf) -> DoorRunPlan {
-    let working_dir = PathBuf::from(&request.door.working_dir);
-    DoorRunPlan {
+pub fn resolve_dosbox_command(command: &str) -> Result<String, DoorError> {
+    let trimmed = command.trim();
+    if trimmed.is_empty() {
+        return Err(DoorError::InvalidConfig(
+            "door command is required".to_string(),
+        ));
+    }
+    if trimmed.starts_with('"') {
+        return Err(DoorError::InvalidConfig(
+            "quoted DOS commands are not supported yet; use DOS 8.3 paths".to_string(),
+        ));
+    }
+
+    let mut split = trimmed.splitn(2, |c: char| c.is_ascii_whitespace());
+    let command_token = split.next().unwrap_or_default();
+    let args = split.next().unwrap_or_default();
+
+    if command_token.contains(':') || command_token.contains('\\') || command_token.contains('/') {
+        if args.is_empty() {
+            return Ok(command_token.to_string());
+        }
+        return Ok(format!("{command_token} {args}"));
+    }
+
+    if args.is_empty() {
+        Ok(format!("C:\\{command_token}"))
+    } else {
+        Ok(format!("C:\\{command_token} {args}"))
+    }
+}
+
+pub fn dosbox_plan(
+    request: &DoorRunRequest,
+    drop_file_path: PathBuf,
+) -> Result<DoorRunPlan, DoorError> {
+    let command = resolve_dosbox_command(&request.door.command)?;
+    let working_dir = request.runtime_dir.clone();
+    let door_working_dir = PathBuf::from(&request.door.working_dir);
+    Ok(DoorRunPlan {
         program: request.door.runner.clone(),
         args: vec![
             "-c".to_string(),
-            format!("mount c {}", working_dir.display()),
+            format!("mount c {}", door_working_dir.display()),
             "-c".to_string(),
-            "c:".to_string(),
+            format!("mount d {}", request.runtime_dir.display()),
             "-c".to_string(),
-            request.door.command.clone(),
+            "d:".to_string(),
+            "-c".to_string(),
+            command,
             "-c".to_string(),
             "exit".to_string(),
         ],
         working_dir,
         drop_file_path,
         timeout: Duration::from_secs(u64::from(request.door.time_limit_minutes) * 60),
-    }
+    })
 }
 
 fn run_with_timeout(mut command: Command, timeout: Duration) -> Result<DoorRunResult, DoorError> {
@@ -411,17 +453,67 @@ command = "LORD.EXE"
     }
 
     #[test]
-    fn dosbox_plan_mounts_door_working_directory() {
+    fn dry_run_writes_oxnode_txt() {
+        let base = temp_path("dry-run-node");
+        let runtime_dir = prepare_node_runtime_dir(&base, 1).expect("runtime");
+        let request = DoorRunRequest {
+            door: door("DOOR.SYS"),
+            caller: caller(),
+            node_number: 1,
+            runtime_dir: runtime_dir.clone(),
+        };
+
+        let result = DryRunDoorRunner.run(&request).expect("dry run");
+        let oxnode = fs::read_to_string(runtime_dir.join("OXNODE.TXT")).expect("oxnode");
+
+        assert_eq!(result.exit_code, Some(0));
+        assert!(runtime_dir.join("DOOR.SYS").is_file());
+        assert_eq!(oxnode, "node=1\r\n");
+
+        cleanup_node_runtime_dir(&base).expect("cleanup");
+    }
+
+    #[test]
+    fn dosbox_plan_mounts_door_working_directory_as_c_and_runtime_as_d() {
         let request = DoorRunRequest {
             door: door("DORINFO1.DEF"),
             caller: caller(),
             node_number: 1,
             runtime_dir: PathBuf::from("./runtime/node-001"),
         };
-        let plan = dosbox_plan(&request, PathBuf::from("./runtime/node-001/DORINFO1.DEF"));
+        let plan =
+            dosbox_plan(&request, PathBuf::from("./runtime/node-001/DORINFO1.DEF")).expect("plan");
+
+        let command_windows = plan.args.windows(2).enumerate().collect::<Vec<_>>();
+        let mount_c = command_windows
+            .iter()
+            .find(|(_, window)| window[0] == "-c" && window[1].starts_with("mount c "))
+            .map(|(idx, _window)| *idx);
+        let mount_d = command_windows
+            .iter()
+            .find(|(_, window)| window[0] == "-c" && window[1].starts_with("mount d "))
+            .map(|(idx, _window)| *idx);
+        let switch_d = command_windows
+            .iter()
+            .find(|(_, window)| window[0] == "-c" && window[1] == "d:")
+            .map(|(idx, _)| *idx);
+        let command_arg = command_windows
+            .iter()
+            .find(|(_, window)| window[0] == "-c" && window[1].starts_with("C:\\"))
+            .map(|(_, window)| window[1].as_str());
 
         assert_eq!(plan.program, "dosbox");
-        assert!(plan.args.iter().any(|arg| arg.contains("mount c")));
+        let mount_c_idx = mount_c.expect("expected mount c command pair");
+        let mount_d_idx = mount_d.expect("expected mount d command pair");
+        let switch_d_idx = switch_d.expect("expected d: switch command pair");
+        let command_arg = command_arg.expect("expected resolved DOS command");
+        assert_eq!(plan.args[mount_c_idx + 1], "mount c ./doors/lord");
+        assert_eq!(plan.args[mount_d_idx + 1], "mount d ./runtime/node-001");
+        assert_eq!(plan.args[switch_d_idx + 1], "d:");
+        assert!(mount_c_idx < mount_d_idx);
+        assert!(mount_d_idx < switch_d_idx);
+        assert!(command_arg.starts_with("C:\\"));
+        assert_eq!(plan.working_dir, PathBuf::from("./runtime/node-001"));
         assert_eq!(plan.timeout, Duration::from_secs(60));
     }
 
@@ -436,8 +528,125 @@ command = "LORD.EXE"
             runtime_dir: PathBuf::from("./runtime/node-001"),
         };
 
-        let plan = dosbox_plan(&request, PathBuf::from("./runtime/node-001/DOOR.SYS"));
+        let plan =
+            dosbox_plan(&request, PathBuf::from("./runtime/node-001/DOOR.SYS")).expect("plan");
 
         assert_eq!(plan.program, "/opt/dosbox-staging/dosbox");
+    }
+
+    #[test]
+    fn dosbox_plan_resolves_bare_command_to_c_drive() {
+        let request = DoorRunRequest {
+            door: {
+                let mut command_door = door("DORINFO1.DEF");
+                command_door.command = "OXIDECHK.EXE".to_string();
+                command_door
+            },
+            caller: caller(),
+            node_number: 1,
+            runtime_dir: PathBuf::from("./runtime/node-001"),
+        };
+        let plan =
+            dosbox_plan(&request, PathBuf::from("./runtime/node-001/DORINFO1.DEF")).expect("plan");
+
+        let command = plan
+            .args
+            .iter()
+            .find(|arg| arg.contains("OXIDECHK.EXE"))
+            .expect("missing command arg");
+        assert_eq!(command, "C:\\OXIDECHK.EXE");
+    }
+
+    #[test]
+    fn resolve_dosbox_command_prefixes_bare_token() {
+        assert_eq!(
+            resolve_dosbox_command("LORD.EXE /N1").expect("resolved"),
+            "C:\\LORD.EXE /N1"
+        );
+    }
+
+    #[test]
+    fn resolve_dosbox_command_preserves_path_like_token() {
+        assert_eq!(
+            resolve_dosbox_command("C:\\LORD\\START.BAT").expect("resolved"),
+            "C:\\LORD\\START.BAT"
+        );
+        assert_eq!(
+            resolve_dosbox_command("UTILS\\DOOR.EXE").expect("resolved"),
+            "UTILS\\DOOR.EXE"
+        );
+    }
+
+    #[test]
+    fn resolve_dosbox_command_rejects_quoted_command() {
+        let error = resolve_dosbox_command("\"C:\\LORD\\START.BAT\"").expect_err("expected error");
+        match error {
+            DoorError::InvalidConfig(message) => {
+                assert!(message.contains("quoted DOS commands are not supported"));
+            }
+            _ => panic!("unexpected error variant"),
+        }
+    }
+
+    #[test]
+    fn prepare_door_run_rejects_empty_command() {
+        let base = temp_path("dry-run-empty");
+        let runtime_dir = prepare_node_runtime_dir(&base, 1).expect("runtime");
+        let request = DoorRunRequest {
+            door: {
+                let mut empty_command = door("DOOR.SYS");
+                empty_command.command = "   ".to_string();
+                empty_command
+            },
+            caller: caller(),
+            node_number: 1,
+            runtime_dir: runtime_dir.clone(),
+        };
+
+        let error = prepare_door_run(&request).expect_err("missing command");
+        match error {
+            DoorError::InvalidConfig(message) => {
+                assert!(message.contains("door command is required"));
+            }
+            _ => panic!("unexpected error variant"),
+        }
+
+        cleanup_node_runtime_dir(&base).expect("cleanup");
+    }
+
+    #[test]
+    fn prepare_door_run_writes_dorinfo1_def_into_runtime_dir() {
+        let base = temp_path("runtime-dorinfo");
+        let runtime_dir = prepare_node_runtime_dir(&base, 1).expect("runtime");
+        let request = DoorRunRequest {
+            door: door("DORINFO1.DEF"),
+            caller: caller(),
+            node_number: 1,
+            runtime_dir: runtime_dir.clone(),
+        };
+
+        DryRunDoorRunner.run(&request).expect("dry run");
+
+        assert!(runtime_dir.join("DORINFO1.DEF").is_file());
+
+        cleanup_node_runtime_dir(&base).expect("cleanup");
+    }
+
+    #[test]
+    fn prepare_door_run_writes_door_sys_into_runtime_dir() {
+        let base = temp_path("runtime-doorsys");
+        let runtime_dir = prepare_node_runtime_dir(&base, 1).expect("runtime");
+        let request = DoorRunRequest {
+            door: door("DOOR.SYS"),
+            caller: caller(),
+            node_number: 1,
+            runtime_dir: runtime_dir.clone(),
+        };
+
+        DryRunDoorRunner.run(&request).expect("dry run");
+
+        assert!(runtime_dir.join("DOOR.SYS").is_file());
+
+        cleanup_node_runtime_dir(&base).expect("cleanup");
     }
 }

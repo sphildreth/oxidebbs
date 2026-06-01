@@ -196,6 +196,16 @@ Door runner responsibilities:
 - Kill/cleanup on disconnect
 - Persist door run result
 
+V1 includes a redistributable door fixture:
+
+- `Oxide Door Check` (`key = "oxide-check"`) is an Oxide-owned test executable,
+  implemented in Free Pascal and committed as
+  `tools/doors/oxide-door-check/dist/OXIDECHK.EXE`.
+- The checked-in fixture is validated by `tools/doors/oxide-door-check/SHA256SUMS`.
+- The build target is `i8086-msdos`.
+- The fixture is multi-node aware and reports the active node number for diagnostics.
+- The fixture does not grant third-party door redistribution rights.
+
 Drop files to support early:
 
 - `DOOR.SYS`

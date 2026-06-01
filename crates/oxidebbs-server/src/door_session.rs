@@ -131,6 +131,27 @@ impl<'a> DoorService<'a> {
             ));
         }
 
+        let command = first_command_token(&door.command)
+            .ok_or_else(|| format!("Door {} command is empty.", door.key))?;
+        if is_quoted_dos_command(command) {
+            return Err(format!(
+                "Door {} uses a quoted DOS command, which is not supported yet. Use DOS 8.3 paths instead.",
+                door.key
+            ));
+        }
+        let command_path =
+            if command.contains(':') || command.contains('\\') || command.contains('/') {
+                Path::new(command).to_path_buf()
+            } else {
+                working_dir.join(command)
+            };
+        if !command_path.is_file() {
+            return Err(format!(
+                "Door {} command {} was not found.",
+                door.key, command
+            ));
+        }
+
         let runtime_dir = prepare_node_runtime_dir(&self.config.paths.runtime, node_number)
             .map_err(|error| {
                 format!(
@@ -639,6 +660,14 @@ fn command_exists(command: &str) -> bool {
     std::env::split_paths(&paths).any(|dir| dir.join(command).is_file())
 }
 
+fn first_command_token(command: &str) -> Option<&str> {
+    command.trim().split_ascii_whitespace().next()
+}
+
+fn is_quoted_dos_command(command: &str) -> bool {
+    command.starts_with('"') || command.starts_with('\'')
+}
+
 fn door_to_core(door: &DoorDefinitionRecord) -> ServeResult<DoorDefinition> {
     Ok(DoorDefinition {
         id: door.id.clone(),
@@ -782,6 +811,7 @@ mod tests {
     }
 
     fn test_config(runtime: std::path::PathBuf, working_dir: std::path::PathBuf) -> OxideConfig {
+        fs::write(working_dir.join("TEST.EXE"), b"").expect("create test command");
         OxideConfig {
             board: BoardConfig {
                 name: "Test BBS".to_string(),
@@ -899,6 +929,9 @@ mod tests {
     fn validate_door_rejects_disabled_missing_runner_and_bad_dropfile() {
         let runtime = temp_dir("validate-runtime");
         let working_dir = temp_dir("validate-working");
+        fs::write(working_dir.join("TEST.EXE"), b"").expect("create test command");
+        fs::write(working_dir.join("OXIDECHK.EXE"), b"").expect("create test command");
+        fs::write(working_dir.join("LORD.EXE"), b"").expect("create test command");
         let config = test_config(runtime.clone(), working_dir);
         let db = OxideDb::open_memory().expect("open db");
         let service = DoorService::new(&db, &config);
@@ -918,6 +951,23 @@ mod tests {
         door.runner = current_runner();
         door.drop_file = "BAD.TXT".to_string();
         assert!(service.validate_door(&door, 1).is_err());
+
+        door.drop_file = "DOOR.SYS".to_string();
+        door.command = "OXIDECHK.EXE".to_string();
+        assert!(service.validate_door(&door, 1).is_ok());
+
+        door.command = "LORD.EXE /N1".to_string();
+        assert!(service.validate_door(&door, 1).is_ok());
+
+        door.command = "\"OXIDECHK.EXE\"".to_string();
+        let quoted_error = service.validate_door(&door, 1).unwrap_err();
+        assert!(
+            quoted_error.contains("quoted DOS command") && quoted_error.contains("DOS 8.3 paths")
+        );
+
+        door.command = "   ".to_string();
+        let empty_error = service.validate_door(&door, 1).unwrap_err();
+        assert!(empty_error.contains("command is empty"));
 
         let _ = fs::remove_dir_all(runtime);
     }

@@ -148,10 +148,27 @@ Meaning:
 
 - `--dry-run` generates drop files and validates input without launching a child.
 - Without `--dry-run`, the configured runner is invoked locally.
+- The bundled test door is `oxide-check` (`OXIDECHK.EXE`) for validating the DOSBox
+  path and door runtime contract.
 - Enabled configured doors are the only ones selectable by live caller menu.
 - Live launch writes drop files in the node runtime directory, tracks `door_runs`,
   records `door_started`/`door_finished`/`door_timed_out` events, and returns
   the caller to menu on completion or timeout.
+
+Recommended smoke-test flow:
+
+```bash
+cargo run -p oxidebbs-server -- --config config/oxidebbs.example.toml doors check oxide-check
+cargo run -p oxidebbs-server -- --config config/oxidebbs.example.toml doors dropfile oxide-check --user sysop --node 1 --format DORINFO1.DEF
+cargo run -p oxidebbs-server -- --config config/oxidebbs.example.toml doors test oxide-check --user sysop --dry-run
+cargo run -p oxidebbs-server -- --config config/oxidebbs.example.toml doors test oxide-check --user sysop
+```
+
+- `doors dropfile ...` and `doors test ... --dry-run` generate `DORINFO1.DEF`,
+  `DOOR.SYS` when requested by command, and the Oxide diagnostic `OXNODE.TXT`
+  beside the drop files.
+- Live execution requires DOSBox and should return a clear missing-runner error
+  when `dosbox` is not installed.
 
 `nodes disconnect <n>` also closes an active door bridge for that node before
 normal disconnect cleanup.
