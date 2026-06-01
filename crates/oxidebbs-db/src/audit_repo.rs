@@ -13,7 +13,7 @@ pub struct AuditEventRecord {
 pub fn insert_audit_event(db: &Db, event: &AuditEventRecord) -> decentdb::Result<()> {
     db.execute_with_params(
         "INSERT INTO audit_events (id, created_at, event_type, user_id, node_number, details)
-         VALUES ($1, $2, $3, $4, $5, $6)",
+         VALUES (UUID_PARSE($1), $2, $3, UUID_PARSE($4), $5, $6)",
         &[
             Value::Text(event.id.clone()),
             Value::Text(event.created_at.clone()),
@@ -32,7 +32,7 @@ pub fn insert_audit_event(db: &Db, event: &AuditEventRecord) -> decentdb::Result
 
 pub fn list_audit_events(db: &Db, limit: i64) -> decentdb::Result<Vec<AuditEventRecord>> {
     let result = db.execute_with_params(
-        "SELECT id, created_at, event_type, user_id, node_number, details
+        "SELECT UUID_TO_STRING(id), CAST(created_at AS TEXT), event_type, UUID_TO_STRING(user_id), node_number, details
          FROM audit_events ORDER BY created_at DESC LIMIT $1",
         &[Value::Int64(limit)],
     )?;
@@ -45,8 +45,8 @@ pub fn list_audit_events_for_user(
     limit: i64,
 ) -> decentdb::Result<Vec<AuditEventRecord>> {
     let result = db.execute_with_params(
-        "SELECT id, created_at, event_type, user_id, node_number, details
-         FROM audit_events WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2",
+        "SELECT UUID_TO_STRING(id), CAST(created_at AS TEXT), event_type, UUID_TO_STRING(user_id), node_number, details
+         FROM audit_events WHERE user_id = UUID_PARSE($1) ORDER BY created_at DESC LIMIT $2",
         &[Value::Text(user_id.to_string()), Value::Int64(limit)],
     )?;
     Ok(result.rows().iter().map(row_to_audit_event).collect())
@@ -86,11 +86,14 @@ fn row_to_audit_event(row: &decentdb::QueryRow) -> AuditEventRecord {
 mod tests {
     use super::*;
     use crate::schema;
+    use crate::user_repo::{UserRecord, insert_user};
     use decentdb::DbConfig;
 
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static EVENT_SEQ: AtomicU64 = AtomicU64::new(0);
+    const USER_1: &str = "00000000-0000-4000-8000-000000000001";
+    const USER_2: &str = "00000000-0000-4000-8000-000000000002";
 
     fn test_db() -> Db {
         let db = Db::open_or_create(":memory:", DbConfig::default()).expect("open DecentDB");
@@ -98,12 +101,32 @@ mod tests {
         db
     }
 
+    fn insert_test_user(db: &Db, id: &str, alias: &str) {
+        insert_user(
+            db,
+            &UserRecord {
+                id: id.to_string(),
+                alias: alias.to_string(),
+                real_name: format!("{alias} User"),
+                email: None,
+                password_hash: "hashed".to_string(),
+                security_level: 10,
+                is_sysop: false,
+                created_at: "2026-01-01T00:00:00.000000Z".to_string(),
+                last_login_at: None,
+                total_calls: 0,
+                time_bank_minutes: 0,
+                status: "active".to_string(),
+            },
+        )
+        .expect("insert test user");
+    }
+
     fn sample_event(event_type: &str, user_id: Option<&str>) -> AuditEventRecord {
         let seq = EVENT_SEQ.fetch_add(1, Ordering::Relaxed);
-        let suffix = user_id.unwrap_or("none");
         AuditEventRecord {
-            id: format!("evt-{event_type}-{suffix}-{seq}"),
-            created_at: "2026-01-01T00:00:00Z".to_string(),
+            id: format!("00000000-0000-4000-9000-{:012x}", seq + 1),
+            created_at: "2026-01-01T00:00:00.000000Z".to_string(),
             event_type: event_type.to_string(),
             user_id: user_id.map(String::from),
             node_number: Some(1),
@@ -114,7 +137,8 @@ mod tests {
     #[test]
     fn insert_and_list_audit_events() {
         let db = test_db();
-        insert_audit_event(&db, &sample_event("login_success", Some("uid-1"))).expect("insert");
+        insert_test_user(&db, USER_1, "alice");
+        insert_audit_event(&db, &sample_event("login_success", Some(USER_1))).expect("insert");
         insert_audit_event(&db, &sample_event("caller_connected", None)).expect("insert");
 
         let events = list_audit_events(&db, 10).expect("list");
@@ -127,22 +151,24 @@ mod tests {
     #[test]
     fn filters_audit_events_by_user() {
         let db = test_db();
-        insert_audit_event(&db, &sample_event("login_success", Some("uid-1"))).expect("insert");
-        insert_audit_event(&db, &sample_event("login_success", Some("uid-2"))).expect("insert");
-        insert_audit_event(&db, &sample_event("login_failure", Some("uid-1"))).expect("insert");
+        insert_test_user(&db, USER_1, "alice");
+        insert_test_user(&db, USER_2, "bob");
+        insert_audit_event(&db, &sample_event("login_success", Some(USER_1))).expect("insert");
+        insert_audit_event(&db, &sample_event("login_success", Some(USER_2))).expect("insert");
+        insert_audit_event(&db, &sample_event("login_failure", Some(USER_1))).expect("insert");
 
-        let events = list_audit_events_for_user(&db, "uid-1", 10).expect("list");
+        let events = list_audit_events_for_user(&db, USER_1, 10).expect("list");
         assert_eq!(events.len(), 2);
-        assert!(events.iter().all(|e| e.user_id.as_deref() == Some("uid-1")));
+        assert!(events.iter().all(|e| e.user_id.as_deref() == Some(USER_1)));
     }
 
     #[test]
     fn audit_events_respect_limit() {
         let db = test_db();
-        for i in 0..5 {
+        for day in 1..=5 {
             let event = AuditEventRecord {
-                id: format!("evt-{i}"),
-                created_at: format!("2026-01-0{i}T00:00:00Z"),
+                id: format!("00000000-0000-4000-9000-{:012x}", day + 100),
+                created_at: format!("2026-01-0{day}T00:00:00.000000Z"),
                 event_type: "test".to_string(),
                 user_id: None,
                 node_number: None,

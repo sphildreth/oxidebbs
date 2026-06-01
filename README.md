@@ -119,6 +119,9 @@ and audit records to DecentDB, renders configured login/main menu screens, and
 routes starter menu keys. Authentication, message reading/posting, and real door
 launching still use placeholder responses.
 
+During pre-alpha, delete or recreate old development `.ddb` files after schema
+version changes; OxideBBS refuses to run against stale schema markers.
+
 ## Documentation site
 
 The documentation site is built with VitePress from `docs/` and deployed to

@@ -19,7 +19,7 @@ pub struct UserRecord {
 pub fn insert_user(db: &Db, user: &UserRecord) -> decentdb::Result<()> {
     db.execute_with_params(
         "INSERT INTO users (id, alias, real_name, email, password_hash, security_level, is_sysop, created_at, last_login_at, total_calls, time_bank_minutes, status)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+         VALUES (UUID_PARSE($1), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
         &[
             Value::Text(user.id.clone()),
             Value::Text(user.alias.clone()),
@@ -40,7 +40,7 @@ pub fn insert_user(db: &Db, user: &UserRecord) -> decentdb::Result<()> {
 
 pub fn find_user_by_alias(db: &Db, alias: &str) -> decentdb::Result<Option<UserRecord>> {
     let result = db.execute_with_params(
-        "SELECT id, alias, real_name, email, password_hash, security_level, is_sysop, created_at, last_login_at, total_calls, time_bank_minutes, status
+        "SELECT UUID_TO_STRING(id), alias, real_name, email, password_hash, security_level, is_sysop, CAST(created_at AS TEXT), CAST(last_login_at AS TEXT), total_calls, time_bank_minutes, status
          FROM users WHERE alias = $1",
         &[Value::Text(alias.to_string())],
     )?;
@@ -49,8 +49,8 @@ pub fn find_user_by_alias(db: &Db, alias: &str) -> decentdb::Result<Option<UserR
 
 pub fn find_user_by_id(db: &Db, id: &str) -> decentdb::Result<Option<UserRecord>> {
     let result = db.execute_with_params(
-        "SELECT id, alias, real_name, email, password_hash, security_level, is_sysop, created_at, last_login_at, total_calls, time_bank_minutes, status
-         FROM users WHERE id = $1",
+        "SELECT UUID_TO_STRING(id), alias, real_name, email, password_hash, security_level, is_sysop, CAST(created_at AS TEXT), CAST(last_login_at AS TEXT), total_calls, time_bank_minutes, status
+         FROM users WHERE id = UUID_PARSE($1)",
         &[Value::Text(id.to_string())],
     )?;
     Ok(result.rows().first().map(row_to_user))
@@ -58,7 +58,7 @@ pub fn find_user_by_id(db: &Db, id: &str) -> decentdb::Result<Option<UserRecord>
 
 pub fn list_users(db: &Db) -> decentdb::Result<Vec<UserRecord>> {
     let result = db.execute(
-        "SELECT id, alias, real_name, email, password_hash, security_level, is_sysop, created_at, last_login_at, total_calls, time_bank_minutes, status
+        "SELECT UUID_TO_STRING(id), alias, real_name, email, password_hash, security_level, is_sysop, CAST(created_at AS TEXT), CAST(last_login_at AS TEXT), total_calls, time_bank_minutes, status
          FROM users ORDER BY alias",
     )?;
     Ok(result.rows().iter().map(row_to_user).collect())
@@ -66,7 +66,7 @@ pub fn list_users(db: &Db) -> decentdb::Result<Vec<UserRecord>> {
 
 pub fn update_user_login(db: &Db, id: &str, login_at: &str) -> decentdb::Result<()> {
     db.execute_with_params(
-        "UPDATE users SET last_login_at = $1, total_calls = total_calls + 1 WHERE id = $2",
+        "UPDATE users SET last_login_at = $1, total_calls = total_calls + 1 WHERE id = UUID_PARSE($2)",
         &[
             Value::Text(login_at.to_string()),
             Value::Text(id.to_string()),
@@ -77,7 +77,7 @@ pub fn update_user_login(db: &Db, id: &str, login_at: &str) -> decentdb::Result<
 
 pub fn update_user_password_hash(db: &Db, id: &str, password_hash: &str) -> decentdb::Result<()> {
     db.execute_with_params(
-        "UPDATE users SET password_hash = $1 WHERE id = $2",
+        "UPDATE users SET password_hash = $1 WHERE id = UUID_PARSE($2)",
         &[
             Value::Text(password_hash.to_string()),
             Value::Text(id.to_string()),
@@ -144,16 +144,26 @@ mod tests {
         db
     }
 
+    fn test_uuid(seed: &str) -> String {
+        let hash = seed.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| {
+            hash.wrapping_mul(0x0000_0100_0000_01b3) ^ u64::from(byte)
+        });
+        format!(
+            "00000000-0000-4000-8000-{:012x}",
+            hash & 0x0000_ffff_ffff_ffff
+        )
+    }
+
     fn sample_user(alias: &str) -> UserRecord {
         UserRecord {
-            id: format!("uid-{alias}"),
+            id: test_uuid(alias),
             alias: alias.to_string(),
             real_name: format!("{alias} User"),
             email: Some(format!("{alias}@test.com")),
             password_hash: "hashed".to_string(),
             security_level: 10,
             is_sysop: false,
-            created_at: "2026-01-01T00:00:00Z".to_string(),
+            created_at: "2026-01-01T00:00:00.000000Z".to_string(),
             last_login_at: None,
             total_calls: 0,
             time_bank_minutes: 0,
@@ -184,7 +194,7 @@ mod tests {
         let user = sample_user("bob");
         insert_user(&db, &user).expect("insert");
 
-        let found = find_user_by_id(&db, "uid-bob").expect("find");
+        let found = find_user_by_id(&db, &user.id).expect("find");
         assert_eq!(found, Some(user));
     }
 
@@ -207,13 +217,13 @@ mod tests {
         user.total_calls = 5;
         insert_user(&db, &user).expect("insert");
 
-        update_user_login(&db, "uid-dave", "2026-06-01T12:00:00Z").expect("update");
+        update_user_login(&db, &user.id, "2026-06-01T12:00:00.000000Z").expect("update");
 
-        let found = find_user_by_id(&db, "uid-dave").expect("find").unwrap();
+        let found = find_user_by_id(&db, &user.id).expect("find").unwrap();
         assert_eq!(found.total_calls, 6);
         assert_eq!(
             found.last_login_at,
-            Some("2026-06-01T12:00:00Z".to_string())
+            Some("2026-06-01T12:00:00.000000Z".to_string())
         );
     }
 
@@ -229,10 +239,22 @@ mod tests {
     fn update_password_hash_replaces_hash() {
         let db = test_db();
         insert_user(&db, &sample_user("frank")).expect("insert");
+        let user = sample_user("frank");
 
-        update_user_password_hash(&db, "uid-frank", "$argon2id$new").expect("update hash");
+        update_user_password_hash(&db, &user.id, "$argon2id$new").expect("update hash");
 
-        let found = find_user_by_id(&db, "uid-frank").expect("find").unwrap();
+        let found = find_user_by_id(&db, &user.id).expect("find").unwrap();
         assert_eq!(found.password_hash, "$argon2id$new");
+    }
+
+    #[test]
+    fn invalid_user_uuid_is_rejected() {
+        let db = test_db();
+        let mut user = sample_user("invalid");
+        user.id = "uid-invalid".to_string();
+
+        let result = insert_user(&db, &user);
+
+        assert!(result.is_err());
     }
 }

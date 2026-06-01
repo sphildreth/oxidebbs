@@ -56,6 +56,8 @@ This is intended for a local coding agent to work from.
 - [x] Add user repository.
 - [x] Add audit event repository.
 - [x] Add test database fixture.
+- [x] Use DecentDB-native UUID, TIMESTAMPTZ, IPADDR, BOOL, foreign-key, and
+  CHECK constraints in the starter schema.
 
 ## Phase 6 — Users and menus
 

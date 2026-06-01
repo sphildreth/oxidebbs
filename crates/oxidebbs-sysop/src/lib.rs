@@ -120,16 +120,20 @@ mod tests {
         insert_session, insert_user,
     };
 
+    const USER_ALICE: &str = "00000000-0000-4000-8000-000000000701";
+    const SESSION_1: &str = "00000000-0000-4000-8000-000000000702";
+    const EVENT_1: &str = "00000000-0000-4000-8000-000000000703";
+
     fn sample_user(alias: &str) -> UserRecord {
         UserRecord {
-            id: format!("uid-{alias}"),
+            id: USER_ALICE.to_string(),
             alias: alias.to_string(),
             real_name: format!("{alias} User"),
             email: None,
             password_hash: "old".to_string(),
             security_level: 10,
             is_sysop: false,
-            created_at: "2026-01-01T00:00:00Z".to_string(),
+            created_at: "2026-01-01T00:00:00.000000Z".to_string(),
             last_login_at: None,
             total_calls: 0,
             time_bank_minutes: 0,
@@ -153,26 +157,27 @@ mod tests {
         let db = OxideDb::open_memory().expect("open db");
         insert_user(db.db(), &sample_user("alice")).expect("insert user");
 
-        reset_password(db.db(), "uid-alice", "new-hash").expect("reset");
+        reset_password(db.db(), USER_ALICE, "new-hash").expect("reset");
 
-        let user = find_user_by_id(db.db(), "uid-alice")
-            .expect("find")
-            .unwrap();
+        let user = find_user_by_id(db.db(), USER_ALICE).expect("find").unwrap();
         assert_eq!(user.password_hash, "new-hash");
     }
 
     #[test]
     fn list_nodes_returns_active_sessions() {
         let db = OxideDb::open_memory().expect("open db");
+        insert_user(db.db(), &sample_user("alice")).expect("insert user");
         insert_session(
             db.db(),
             &SessionRecord {
-                id: "session-1".to_string(),
+                id: SESSION_1.to_string(),
                 node_number: 1,
-                user_id: Some("uid-alice".to_string()),
+                user_id: Some(USER_ALICE.to_string()),
                 transport: "telnet".to_string(),
                 remote_address: "127.0.0.1:2323".to_string(),
-                started_at: "2026-01-01T00:00:00Z".to_string(),
+                remote_ip: Some("127.0.0.1".to_string()),
+                remote_port: Some(2323),
+                started_at: "2026-01-01T00:00:00.000000Z".to_string(),
                 ended_at: None,
                 disconnect_reason: None,
             },
@@ -188,13 +193,14 @@ mod tests {
     #[test]
     fn recent_calls_reads_audit_events() {
         let db = OxideDb::open_memory().expect("open db");
+        insert_user(db.db(), &sample_user("alice")).expect("insert user");
         insert_audit_event(
             db.db(),
             &AuditEventRecord {
-                id: "event-1".to_string(),
-                created_at: "2026-01-01T00:00:00Z".to_string(),
+                id: EVENT_1.to_string(),
+                created_at: "2026-01-01T00:00:00.000000Z".to_string(),
                 event_type: "login_success".to_string(),
-                user_id: Some("uid-alice".to_string()),
+                user_id: Some(USER_ALICE.to_string()),
                 node_number: Some(1),
                 details: "alice logged in".to_string(),
             },

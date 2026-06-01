@@ -11,7 +11,7 @@ mod schema;
 mod session_repo;
 mod user_repo;
 
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 
 pub use audit_repo::{
     AuditEventRecord, insert_audit_event, list_audit_events, list_audit_events_for_user,
@@ -76,7 +76,7 @@ mod tests {
     fn opens_memory_database_and_initializes_schema_marker() {
         let db = OxideDb::open_memory().expect("open in-memory DecentDB");
 
-        assert_eq!(db.schema_version().expect("read schema version"), 1);
+        assert_eq!(db.schema_version().expect("read schema version"), 2);
     }
 
     #[test]
@@ -86,6 +86,6 @@ mod tests {
         schema::init_schema(&db).expect("first schema init");
         schema::init_schema(&db).expect("second schema init");
 
-        assert_eq!(schema::schema_version(&db).expect("read schema version"), 1);
+        assert_eq!(schema::schema_version(&db).expect("read schema version"), 2);
     }
 }

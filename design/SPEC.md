@@ -143,6 +143,13 @@ Initial storage domains:
 - system_config
 - network_config
 
+Implemented DecentDB tables must use DecentDB-native types where the domain is
+known. Entity IDs use `UUID`, lifecycle fields use `TIMESTAMPTZ`, caller peer IP
+fields use `IPADDR`, and boolean flags use `BOOL`. Relationships between users,
+sessions, messages, message areas, doors, door runs, and audit events must be
+enforced with DecentDB foreign keys instead of application-only conventions.
+Bounded numeric and label fields should have `CHECK` constraints.
+
 Do not introduce SQLite, PostgreSQL, MySQL, Redis, or an ORM.
 
 ## 7. Write model

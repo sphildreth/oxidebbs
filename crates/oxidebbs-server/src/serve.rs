@@ -1,6 +1,6 @@
 use std::fmt::Write as FmtWrite;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
@@ -32,6 +32,9 @@ pub enum ServeError {
 
     #[error("configuration error: {0}")]
     Config(String),
+
+    #[error("runtime error: {0}")]
+    Runtime(String),
 }
 
 type ServeResult<T> = Result<T, ServeError>;
@@ -75,7 +78,11 @@ pub async fn run(config: &OxideConfig) -> ServeResult<()> {
 
     loop {
         let (stream, peer_addr) = listener.accept().await?;
-        let remote_address = peer_addr.to_string();
+        let peer = CallerPeer {
+            address: peer_addr.to_string(),
+            ip: peer_addr.ip().to_string(),
+            port: i64::from(peer_addr.port()),
+        };
 
         if let Some(allocation) = node_slots.try_allocate() {
             let db = Arc::clone(&db);
@@ -84,16 +91,8 @@ pub async fn run(config: &OxideConfig) -> ServeResult<()> {
             let main_menu = Arc::clone(&main_menu);
 
             tokio::spawn(async move {
-                if let Err(error) = handle_caller(
-                    allocation,
-                    stream,
-                    remote_address,
-                    db,
-                    config,
-                    login_menu,
-                    main_menu,
-                )
-                .await
+                if let Err(error) =
+                    handle_caller(allocation, stream, peer, db, config, login_menu, main_menu).await
                 {
                     warn!("caller session ended with error: {error}");
                 }
@@ -118,14 +117,15 @@ async fn reject_connection(mut stream: TcpStream) -> ServeResult<()> {
 async fn handle_caller(
     allocation: NodeAllocation,
     stream: TcpStream,
-    remote_address: String,
+    peer: CallerPeer,
     db: Arc<OxideDb>,
     config: Arc<OxideConfig>,
     login_menu: Arc<Menu>,
     main_menu: Arc<Menu>,
 ) -> ServeResult<()> {
     let node_number = i64::from(allocation.node_number);
-    let session_id = format!("node-{node_number}-{}", timestamp_now());
+    let session_id = generated_uuid(&db)?;
+    let connected_at = current_timestamp(&db)?;
     let mut transport = TcpTransport::new(stream);
     let mut parser = TelnetParser::default();
     let mut capabilities = TerminalCapabilities::ansi_80();
@@ -138,8 +138,10 @@ async fn handle_caller(
             node_number,
             user_id: None,
             transport: "telnet".to_string(),
-            remote_address: remote_address.clone(),
-            started_at: timestamp_now(),
+            remote_address: peer.address.clone(),
+            remote_ip: Some(peer.ip),
+            remote_port: Some(peer.port),
+            started_at: connected_at.clone(),
             ended_at: None,
             disconnect_reason: None,
         },
@@ -152,12 +154,12 @@ async fn handle_caller(
     if let Err(error) = insert_audit_event(
         db.db(),
         &AuditEventRecord {
-            id: format!("evt-{node_number}-{}", timestamp_now()),
-            created_at: timestamp_now(),
+            id: generated_uuid(&db)?,
+            created_at: connected_at,
             event_type: "caller_connected".to_string(),
             user_id: None,
             node_number: Some(node_number),
-            details: format!("caller connected from {remote_address}"),
+            details: format!("caller connected from {}", peer.address),
         },
     ) {
         warn!("failed to insert caller_connected event: {error}");
@@ -289,7 +291,7 @@ async fn handle_caller(
         warn!("failed to hang up telnet transport: {error}");
     }
 
-    let ended_at = timestamp_now();
+    let ended_at = current_timestamp(&db)?;
     if let Err(error) = end_session(db.db(), &session_id, &ended_at, &disconnect_reason) {
         warn!("failed to close session record: {error}");
     }
@@ -297,7 +299,7 @@ async fn handle_caller(
     if let Err(error) = insert_audit_event(
         db.db(),
         &AuditEventRecord {
-            id: format!("evt-{node_number}-{}", timestamp_now()),
+            id: generated_uuid(&db)?,
             created_at: ended_at,
             event_type: "caller_disconnected".to_string(),
             user_id: None,
@@ -310,7 +312,7 @@ async fn handle_caller(
 
     info!(
         node = %node_number,
-        remote = %remote_address,
+        remote = %peer.address,
         reason = %disconnect_reason,
         "session ended"
     );
@@ -457,12 +459,33 @@ enum CallerInput {
     IdleTimeout,
 }
 
-fn timestamp_now() -> String {
-    match SystemTime::now().duration_since(UNIX_EPOCH) {
-        Ok(since_epoch) => {
-            format!("{}.{}", since_epoch.as_secs(), since_epoch.subsec_millis())
-        }
-        Err(error) => format!("clockerror:{error}"),
+struct CallerPeer {
+    address: String,
+    ip: String,
+    port: i64,
+}
+
+fn generated_uuid(db: &OxideDb) -> ServeResult<String> {
+    db_scalar_text(db, "SELECT UUID_TO_STRING(GEN_RANDOM_UUID())")
+}
+
+fn current_timestamp(db: &OxideDb) -> ServeResult<String> {
+    db_scalar_text(db, "SELECT CAST(NOW() AS TEXT)")
+}
+
+fn db_scalar_text(db: &OxideDb, sql: &str) -> ServeResult<String> {
+    let result = db.db().execute(sql).map_err(ServeError::Database)?;
+    let value = result
+        .rows()
+        .first()
+        .and_then(|row| row.values().first())
+        .ok_or_else(|| ServeError::Runtime(format!("query returned no scalar value: {sql}")))?;
+
+    match value {
+        oxidebbs_db::Value::Text(value) => Ok(value.clone()),
+        other => Err(ServeError::Runtime(format!(
+            "query returned non-text scalar for {sql}: {other:?}"
+        ))),
     }
 }
 

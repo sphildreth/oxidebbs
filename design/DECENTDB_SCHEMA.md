@@ -1,136 +1,205 @@
-# DecentDB Schema Sketch
+# DecentDB Schema
 
-This is an initial logical schema sketch, not final implementation syntax.
+OxideBBS uses DecentDB as the only system database. The schema should lean into
+DecentDB's PostgreSQL-like type system instead of treating it as a SQLite-style
+string store.
 
-## users
+Current schema version: `2`
 
-```text
-id
-alias
-real_name
-email_optional
-password_hash
-security_level
-is_sysop
-created_at
-last_login_at
-total_calls
-time_bank_minutes
-status
+Schema version `2` is still pre-alpha. The initializer refuses to open a
+database with an older OxideBBS schema marker instead of silently running against
+stale tables. Until migrations exist, recreate development databases when the
+schema version changes.
+
+## Type Rules
+
+- Entity identifiers use `UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID()`.
+- Lifecycle timestamps use `TIMESTAMPTZ`, not ad hoc text.
+- Session peer IPs use `IPADDR`; the display endpoint is retained as text
+  because it includes a port.
+- Boolean flags use `BOOL`.
+- Counters, levels, node numbers, ports, and exit codes use `INT` with `CHECK`
+  constraints where the domain is bounded.
+- External identifiers, display names, paths, commands, and ANSI/BBS text remain
+  `TEXT`.
+- Menu/status-like fields currently use `TEXT CHECK (...)` instead of DecentDB
+  `ENUM(...)` so the repository API can continue to return stable labels without
+  exposing internal enum label ids.
+
+## Tables
+
+### system_config
+
+```sql
+key TEXT PRIMARY KEY
+value TEXT NOT NULL
+updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 ```
 
-## nodes
+### users
 
-```text
-id
-node_number
-status
-current_user_id
-current_activity
-connected_at
-last_activity_at
-transport
+```sql
+id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID()
+alias TEXT NOT NULL UNIQUE
+real_name TEXT NOT NULL
+email TEXT
+password_hash TEXT NOT NULL
+security_level INT NOT NULL DEFAULT 10
+is_sysop BOOL NOT NULL DEFAULT FALSE
+created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+last_login_at TIMESTAMPTZ
+total_calls INT NOT NULL DEFAULT 0
+time_bank_minutes INT NOT NULL DEFAULT 0
+status TEXT NOT NULL DEFAULT 'active'
 ```
 
-## sessions
+Constraints:
 
-```text
-id
-node_number
-user_id
-transport
-remote_address
-started_at
-ended_at
-disconnect_reason
+- aliases and real names must not be blank
+- security levels are `0..255`
+- counters cannot be negative
+- status is `active`, `locked`, or `disabled`
+
+### audit_events
+
+```sql
+id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID()
+created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+event_type TEXT NOT NULL
+user_id UUID REFERENCES users(id) ON DELETE SET NULL
+node_number INT
+details TEXT NOT NULL DEFAULT ''
 ```
 
-## message_areas
+Indexes:
 
-```text
-id
-key
-name
-description
-kind
-network_id_optional
-read_security_level
-post_security_level
-moderated
+- `created_at`
+- `user_id`
+
+### message_areas
+
+```sql
+id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID()
+key TEXT NOT NULL UNIQUE
+name TEXT NOT NULL
+description TEXT NOT NULL DEFAULT ''
+kind TEXT NOT NULL DEFAULT 'local'
+network_id TEXT
+read_security_level INT NOT NULL DEFAULT 0
+post_security_level INT NOT NULL DEFAULT 10
+moderated BOOL NOT NULL DEFAULT FALSE
 ```
 
-## messages
+Constraints:
 
-```text
-id
-area_id
-author_user_id
-to_user_id_optional
-subject
-body
-created_at
-reply_to_id_optional
-network_message_id_optional
-visibility
+- key and name must not be blank
+- kind is `local`, `echomail`, or `netmail`
+- security levels are `0..255`
+
+### messages
+
+```sql
+id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID()
+area_id UUID NOT NULL REFERENCES message_areas(id) ON DELETE CASCADE
+author_user_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT
+to_user_id UUID REFERENCES users(id) ON DELETE SET NULL
+subject TEXT NOT NULL
+body TEXT NOT NULL
+created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+reply_to_id UUID REFERENCES messages(id) ON DELETE SET NULL
+network_message_id TEXT
+visibility TEXT NOT NULL DEFAULT 'normal'
 ```
 
-## doors
+Constraints:
 
-```text
-id
-key
-name
-runner
-working_dir
-command
-drop_file
-exclusive
-time_limit_minutes
-enabled
+- subject must not be blank
+- visibility is `normal`, `deleted`, or `hidden`
+
+Indexes:
+
+- `(area_id, created_at)`
+- `author_user_id`
+- `to_user_id`
+
+### sessions
+
+```sql
+id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID()
+node_number INT NOT NULL
+user_id UUID REFERENCES users(id) ON DELETE SET NULL
+transport TEXT NOT NULL
+remote_address TEXT NOT NULL DEFAULT ''
+remote_ip IPADDR
+remote_port INT
+started_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+ended_at TIMESTAMPTZ
+disconnect_reason TEXT
 ```
 
-## door_runs
+Constraints:
 
-```text
-id
-door_id
-user_id
-node_number
-started_at
-ended_at
-exit_code
-timed_out
-disconnect_forced
-bytes_in
-bytes_out
+- node numbers are positive
+- v1 transport is `telnet`
+- remote ports are `0..65535` when present
+
+Indexes:
+
+- `user_id`
+- `started_at`
+
+### doors
+
+```sql
+id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID()
+key TEXT NOT NULL UNIQUE
+name TEXT NOT NULL
+runner TEXT NOT NULL
+working_dir TEXT NOT NULL
+command TEXT NOT NULL
+drop_file TEXT NOT NULL
+exclusive BOOL NOT NULL DEFAULT FALSE
+time_limit_minutes INT NOT NULL DEFAULT 30
+enabled BOOL NOT NULL DEFAULT TRUE
 ```
 
-## audit_events
+Constraints:
 
-```text
-id
-created_at
-event_type
-user_id_optional
-node_number_optional
-details
+- key, name, runner, working directory, command, and drop file must not be blank
+- time limits must be positive
+
+### door_runs
+
+```sql
+id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID()
+door_id UUID NOT NULL REFERENCES doors(id) ON DELETE RESTRICT
+user_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT
+node_number INT NOT NULL
+started_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+ended_at TIMESTAMPTZ
+exit_code INT
+timed_out BOOL NOT NULL DEFAULT FALSE
+disconnect_forced BOOL NOT NULL DEFAULT FALSE
+bytes_in INT NOT NULL DEFAULT 0
+bytes_out INT NOT NULL DEFAULT 0
 ```
 
-## system_config
+Constraints:
 
-```text
-key
-value
-updated_at
-```
+- node numbers are positive
+- byte counters cannot be negative
 
-## network_config
+Indexes:
 
-```text
-id
-key
-name
-kind
-address
-enabled
-```
+- `door_id`
+- `user_id`
+- `started_at`
+
+## Planned Tables
+
+These domains are still design-level and should follow the same native-type and
+foreign-key rules when implemented:
+
+- `nodes`
+- `network_config`
+- FTN/OxideNet packet import/export tables

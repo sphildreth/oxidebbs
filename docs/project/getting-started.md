@@ -50,6 +50,10 @@ session/audit rows in DecentDB, renders configured login and main menu screens,
 and routes menu hotkeys. Login, new-user, messages, and doors currently respond
 with placeholders while those full workflows are wired into sessions.
 
+The pre-alpha schema is versioned. If you have an older development database at
+`data/oxidebbs.ddb`, recreate it after schema changes; the server refuses to run
+against a stale schema marker rather than silently using incompatible tables.
+
 ## Local Admin Commands
 
 The starter server binary includes a local `admin` command group:

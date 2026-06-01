@@ -32,7 +32,7 @@ pub struct DoorRunRecord {
 pub fn insert_door_definition(db: &Db, door: &DoorDefinitionRecord) -> decentdb::Result<()> {
     db.execute_with_params(
         "INSERT INTO doors (id, key, name, runner, working_dir, command, drop_file, exclusive, time_limit_minutes, enabled)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+         VALUES (UUID_PARSE($1), $2, $3, $4, $5, $6, $7, $8, $9, $10)",
         &[
             Value::Text(door.id.clone()),
             Value::Text(door.key.clone()),
@@ -51,7 +51,7 @@ pub fn insert_door_definition(db: &Db, door: &DoorDefinitionRecord) -> decentdb:
 
 pub fn list_door_definitions(db: &Db) -> decentdb::Result<Vec<DoorDefinitionRecord>> {
     let result = db.execute(
-        "SELECT id, key, name, runner, working_dir, command, drop_file, exclusive, time_limit_minutes, enabled
+        "SELECT UUID_TO_STRING(id), key, name, runner, working_dir, command, drop_file, exclusive, time_limit_minutes, enabled
          FROM doors ORDER BY key",
     )?;
     Ok(result.rows().iter().map(row_to_door).collect())
@@ -60,7 +60,7 @@ pub fn list_door_definitions(db: &Db) -> decentdb::Result<Vec<DoorDefinitionReco
 pub fn insert_door_run(db: &Db, run: &DoorRunRecord) -> decentdb::Result<()> {
     db.execute_with_params(
         "INSERT INTO door_runs (id, door_id, user_id, node_number, started_at, ended_at, exit_code, timed_out, disconnect_forced, bytes_in, bytes_out)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+         VALUES (UUID_PARSE($1), UUID_PARSE($2), UUID_PARSE($3), $4, $5, $6, $7, $8, $9, $10, $11)",
         &[
             Value::Text(run.id.clone()),
             Value::Text(run.door_id.clone()),
@@ -87,7 +87,7 @@ pub fn finish_door_run(
     disconnect_forced: bool,
 ) -> decentdb::Result<()> {
     db.execute_with_params(
-        "UPDATE door_runs SET ended_at = $1, exit_code = $2, timed_out = $3, disconnect_forced = $4 WHERE id = $5",
+        "UPDATE door_runs SET ended_at = $1, exit_code = $2, timed_out = $3, disconnect_forced = $4 WHERE id = UUID_PARSE($5)",
         &[
             Value::Text(ended_at.to_string()),
             exit_code.map(Value::Int64).unwrap_or(Value::Null),
@@ -101,7 +101,7 @@ pub fn finish_door_run(
 
 pub fn list_door_runs(db: &Db, limit: i64) -> decentdb::Result<Vec<DoorRunRecord>> {
     let result = db.execute_with_params(
-        "SELECT id, door_id, user_id, node_number, started_at, ended_at, exit_code, timed_out, disconnect_forced, bytes_in, bytes_out
+        "SELECT UUID_TO_STRING(id), UUID_TO_STRING(door_id), UUID_TO_STRING(user_id), node_number, CAST(started_at AS TEXT), CAST(ended_at AS TEXT), exit_code, timed_out, disconnect_forced, bytes_in, bytes_out
          FROM door_runs ORDER BY started_at DESC LIMIT $1",
         &[Value::Int64(limit)],
     )?;
@@ -180,7 +180,12 @@ fn bool_value(value: &Value) -> bool {
 mod tests {
     use super::*;
     use crate::schema;
+    use crate::user_repo::{UserRecord, insert_user};
     use decentdb::DbConfig;
+
+    const USER_1: &str = "00000000-0000-4000-8000-000000000031";
+    const DOOR_LORD: &str = "00000000-0000-4000-8000-000000000401";
+    const RUN_1: &str = "00000000-0000-4000-8000-000000000501";
 
     fn test_db() -> Db {
         let db = Db::open_or_create(":memory:", DbConfig::default()).expect("open DecentDB");
@@ -188,9 +193,30 @@ mod tests {
         db
     }
 
+    fn insert_test_user(db: &Db) {
+        insert_user(
+            db,
+            &UserRecord {
+                id: USER_1.to_string(),
+                alias: "dooruser".to_string(),
+                real_name: "Door User".to_string(),
+                email: None,
+                password_hash: "hashed".to_string(),
+                security_level: 10,
+                is_sysop: false,
+                created_at: "2026-01-01T00:00:00.000000Z".to_string(),
+                last_login_at: None,
+                total_calls: 0,
+                time_bank_minutes: 0,
+                status: "active".to_string(),
+            },
+        )
+        .expect("insert test user");
+    }
+
     fn sample_door() -> DoorDefinitionRecord {
         DoorDefinitionRecord {
-            id: "door-lord".to_string(),
+            id: DOOR_LORD.to_string(),
             key: "lord".to_string(),
             name: "Legend of the Red Dragon".to_string(),
             runner: "dosbox".to_string(),
@@ -205,11 +231,11 @@ mod tests {
 
     fn sample_run() -> DoorRunRecord {
         DoorRunRecord {
-            id: "run-1".to_string(),
-            door_id: "door-lord".to_string(),
-            user_id: "uid-1".to_string(),
+            id: RUN_1.to_string(),
+            door_id: DOOR_LORD.to_string(),
+            user_id: USER_1.to_string(),
             node_number: 1,
-            started_at: "2026-01-01T00:00:00Z".to_string(),
+            started_at: "2026-01-01T00:00:00.000000Z".to_string(),
             ended_at: None,
             exit_code: None,
             timed_out: false,
@@ -233,13 +259,33 @@ mod tests {
     #[test]
     fn records_and_finishes_door_run() {
         let db = test_db();
+        insert_test_user(&db);
+        insert_door_definition(&db, &sample_door()).expect("insert door");
         insert_door_run(&db, &sample_run()).expect("insert run");
 
-        finish_door_run(&db, "run-1", "2026-01-01T00:05:00Z", Some(0), false, false)
-            .expect("finish run");
+        finish_door_run(
+            &db,
+            RUN_1,
+            "2026-01-01T00:05:00.000000Z",
+            Some(0),
+            false,
+            false,
+        )
+        .expect("finish run");
 
         let runs = list_door_runs(&db, 10).expect("list runs");
-        assert_eq!(runs[0].ended_at.as_deref(), Some("2026-01-01T00:05:00Z"));
+        assert_eq!(
+            runs[0].ended_at.as_deref(),
+            Some("2026-01-01T00:05:00.000000Z")
+        );
         assert_eq!(runs[0].exit_code, Some(0));
+    }
+
+    #[test]
+    fn door_run_foreign_keys_reject_missing_door_or_user() {
+        let db = test_db();
+        let result = insert_door_run(&db, &sample_run());
+
+        assert!(result.is_err());
     }
 }

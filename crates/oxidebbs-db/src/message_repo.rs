@@ -30,7 +30,7 @@ pub struct MessageRecord {
 pub fn insert_message_area(db: &Db, area: &MessageAreaRecord) -> decentdb::Result<()> {
     db.execute_with_params(
         "INSERT INTO message_areas (id, key, name, description, kind, network_id, read_security_level, post_security_level, moderated)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+         VALUES (UUID_PARSE($1), $2, $3, $4, $5, $6, $7, $8, $9)",
         &[
             Value::Text(area.id.clone()),
             Value::Text(area.key.clone()),
@@ -48,7 +48,7 @@ pub fn insert_message_area(db: &Db, area: &MessageAreaRecord) -> decentdb::Resul
 
 pub fn list_message_areas(db: &Db) -> decentdb::Result<Vec<MessageAreaRecord>> {
     let result = db.execute(
-        "SELECT id, key, name, description, kind, network_id, read_security_level, post_security_level, moderated
+        "SELECT UUID_TO_STRING(id), key, name, description, kind, network_id, read_security_level, post_security_level, moderated
          FROM message_areas ORDER BY key",
     )?;
     Ok(result.rows().iter().map(row_to_area).collect())
@@ -56,7 +56,7 @@ pub fn list_message_areas(db: &Db) -> decentdb::Result<Vec<MessageAreaRecord>> {
 
 pub fn find_message_area_by_key(db: &Db, key: &str) -> decentdb::Result<Option<MessageAreaRecord>> {
     let result = db.execute_with_params(
-        "SELECT id, key, name, description, kind, network_id, read_security_level, post_security_level, moderated
+        "SELECT UUID_TO_STRING(id), key, name, description, kind, network_id, read_security_level, post_security_level, moderated
          FROM message_areas WHERE key = $1",
         &[Value::Text(key.to_string())],
     )?;
@@ -66,7 +66,7 @@ pub fn find_message_area_by_key(db: &Db, key: &str) -> decentdb::Result<Option<M
 pub fn insert_message(db: &Db, message: &MessageRecord) -> decentdb::Result<()> {
     db.execute_with_params(
         "INSERT INTO messages (id, area_id, author_user_id, to_user_id, subject, body, created_at, reply_to_id, network_message_id, visibility)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+         VALUES (UUID_PARSE($1), UUID_PARSE($2), UUID_PARSE($3), UUID_PARSE($4), $5, $6, $7, UUID_PARSE($8), $9, $10)",
         &[
             Value::Text(message.id.clone()),
             Value::Text(message.area_id.clone()),
@@ -89,8 +89,8 @@ pub fn insert_message(db: &Db, message: &MessageRecord) -> decentdb::Result<()> 
 
 pub fn list_messages_in_area(db: &Db, area_id: &str) -> decentdb::Result<Vec<MessageRecord>> {
     let result = db.execute_with_params(
-        "SELECT id, area_id, author_user_id, to_user_id, subject, body, created_at, reply_to_id, network_message_id, visibility
-         FROM messages WHERE area_id = $1 ORDER BY created_at",
+        "SELECT UUID_TO_STRING(id), UUID_TO_STRING(area_id), UUID_TO_STRING(author_user_id), UUID_TO_STRING(to_user_id), subject, body, CAST(created_at AS TEXT), UUID_TO_STRING(reply_to_id), network_message_id, visibility
+         FROM messages WHERE area_id = UUID_PARSE($1) ORDER BY created_at",
         &[Value::Text(area_id.to_string())],
     )?;
     Ok(result.rows().iter().map(row_to_message).collect())
@@ -102,7 +102,7 @@ pub fn update_message_visibility(
     visibility: &str,
 ) -> decentdb::Result<()> {
     db.execute_with_params(
-        "UPDATE messages SET visibility = $1 WHERE id = $2",
+        "UPDATE messages SET visibility = $1 WHERE id = UUID_PARSE($2)",
         &[
             Value::Text(visibility.to_string()),
             Value::Text(message_id.to_string()),
@@ -174,7 +174,12 @@ fn bool_value(value: &Value) -> bool {
 mod tests {
     use super::*;
     use crate::schema;
+    use crate::user_repo::{UserRecord, insert_user};
     use decentdb::DbConfig;
+
+    const USER_1: &str = "00000000-0000-4000-8000-000000000011";
+    const AREA_GENERAL: &str = "00000000-0000-4000-8000-000000000101";
+    const MSG_1: &str = "00000000-0000-4000-8000-000000000201";
 
     fn test_db() -> Db {
         let db = Db::open_or_create(":memory:", DbConfig::default()).expect("open DecentDB");
@@ -182,9 +187,33 @@ mod tests {
         db
     }
 
+    fn insert_test_user(db: &Db) {
+        insert_user(
+            db,
+            &UserRecord {
+                id: USER_1.to_string(),
+                alias: "alice".to_string(),
+                real_name: "Alice User".to_string(),
+                email: None,
+                password_hash: "hashed".to_string(),
+                security_level: 10,
+                is_sysop: false,
+                created_at: "2026-01-01T00:00:00.000000Z".to_string(),
+                last_login_at: None,
+                total_calls: 0,
+                time_bank_minutes: 0,
+                status: "active".to_string(),
+            },
+        )
+        .expect("insert test user");
+    }
+
     fn sample_area(key: &str) -> MessageAreaRecord {
         MessageAreaRecord {
-            id: format!("area-{key}"),
+            id: match key {
+                "general" => AREA_GENERAL.to_string(),
+                _ => "00000000-0000-4000-8000-000000000102".to_string(),
+            },
             key: key.to_string(),
             name: format!("{key} area"),
             description: "discussion".to_string(),
@@ -200,11 +229,11 @@ mod tests {
         MessageRecord {
             id: id.to_string(),
             area_id: area_id.to_string(),
-            author_user_id: "uid-1".to_string(),
+            author_user_id: USER_1.to_string(),
             to_user_id: None,
             subject: "Subject".to_string(),
             body: "Body".to_string(),
-            created_at: "2026-01-01T00:00:00Z".to_string(),
+            created_at: "2026-01-01T00:00:00.000000Z".to_string(),
             reply_to_id: None,
             network_message_id: None,
             visibility: "normal".to_string(),
@@ -225,24 +254,34 @@ mod tests {
     #[test]
     fn lists_messages_in_area() {
         let db = test_db();
+        insert_test_user(&db);
         insert_message_area(&db, &sample_area("general")).expect("insert area");
-        insert_message(&db, &sample_message("msg-1", "area-general")).expect("insert message");
+        insert_message(&db, &sample_message(MSG_1, AREA_GENERAL)).expect("insert message");
 
-        let messages = list_messages_in_area(&db, "area-general").expect("list");
+        let messages = list_messages_in_area(&db, AREA_GENERAL).expect("list");
 
         assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0].id, "msg-1");
+        assert_eq!(messages[0].id, MSG_1);
     }
 
     #[test]
     fn updates_message_visibility() {
         let db = test_db();
+        insert_test_user(&db);
         insert_message_area(&db, &sample_area("general")).expect("insert area");
-        insert_message(&db, &sample_message("msg-1", "area-general")).expect("insert message");
+        insert_message(&db, &sample_message(MSG_1, AREA_GENERAL)).expect("insert message");
 
-        update_message_visibility(&db, "msg-1", "deleted").expect("update");
+        update_message_visibility(&db, MSG_1, "deleted").expect("update");
 
-        let messages = list_messages_in_area(&db, "area-general").expect("list");
+        let messages = list_messages_in_area(&db, AREA_GENERAL).expect("list");
         assert_eq!(messages[0].visibility, "deleted");
+    }
+
+    #[test]
+    fn message_foreign_keys_reject_missing_area_or_author() {
+        let db = test_db();
+        let result = insert_message(&db, &sample_message(MSG_1, AREA_GENERAL));
+
+        assert!(result.is_err());
     }
 }
