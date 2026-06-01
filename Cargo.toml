@@ -31,3 +31,4 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4", features = ["derive", "env"] }
 decentdb = { git = "https://github.com/sphildreth/decentdb", tag = "v2.8.0", package = "decentdb", default-features = false }
 toml = "0.8"
+nix = { version = "0.31.3", features = ["term", "fs"] }

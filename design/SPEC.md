@@ -214,7 +214,7 @@ Drop files to support early:
 - `CHAIN.TXT`
 
 The initial implementation includes `DOOR.SYS` and `DORINFO1.DEF` generation,
-per-node runtime directory helpers, dry-run execution, DOSBox command planning,
+per-node runtime directory helpers, dry-run execution, DOSEMU2 command planning,
 live caller launch from the configured `Doors` menu, byte bridging between the
 caller transport and child process, timeout/sysop-disconnect cleanup, DecentDB
 door-run records with byte counters, and `in_door` live node state. Additional

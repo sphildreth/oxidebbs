@@ -2,7 +2,7 @@
 
 This document defines the implementation plan for a bundled OxideBBS-owned DOS
 test door. The goal is to give developers and sysops a known-good door program
-that exercises the same DOSBox path that real v1 doors will use, without
+that exercises the same DOSEMU2 path that real v1 doors will use, without
 redistributing copyrighted or abandonware software.
 
 The plan is intentionally prescriptive. Coding agents implementing this work
@@ -24,11 +24,11 @@ Status values:
 | Phase 0 - Planning Baseline | COMPLETE | Capture the product and engineering decisions for the test door. | This document. |
 | Phase 1 - Repository Layout And License Boundary | COMPLETE | Add a clear, source-owned home for the DOS test door and prevent licensing ambiguity. | `tools/doors/oxide-door-check/` layout, `SHA256SUMS`, maintainer rebuild scripts. |
 | Phase 2 - DOS Door Program | COMPLETE | Implement the actual DOS test program. | Free Pascal source, checked-in `OXIDECHK.EXE` fixture, checksum, deterministic behavior. |
-| Phase 3 - DOSBox Runtime Contract | COMPLETE | Make OxideBBS launch DOS doors with the drop file visible inside DOSBox. | Updated `oxidebbs-door` plan generation and validation tests. |
+| Phase 3 - DOSEMU2 Runtime Contract | COMPLETE | Make OxideBBS launch DOS doors with the drop file visible inside DOSEMU2. | Updated `oxidebbs-door` plan generation and validation tests. |
 | Phase 4 - Config And Sysop CLI Integration | COMPLETE | Make the test door easy to configure and exercise from existing commands. | Example config, setup guidance, `doors check/test/dropfile` compatibility. |
-| Phase 5 - Testing Automation | COMPLETE | Cover the fixture without making CI depend on DOSBox. | Rust unit/integration tests plus an optional DOSBox smoke script. |
+| Phase 5 - Testing Automation | COMPLETE | Cover the fixture without making CI depend on DOSEMU2. | Rust unit/integration tests plus an optional DOSEMU2 smoke script. |
 | Phase 6 - Documentation And Changelog | COMPLETE | Document sysop usage and record the user-visible behavior change. | Updated design docs, operator docs, task list, and changelog. |
-| Phase 7 - Final Validation | COMPLETE | Prove the branch is ready to merge. | `./scripts/dev-check.sh`, docs build, whitespace check, optional DOSBox smoke result. |
+| Phase 7 - Final Validation | COMPLETE | Prove the branch is ready to merge. | `./scripts/dev-check.sh`, docs build, whitespace check, optional DOSEMU2 smoke result. |
 
 ## Definition Of Done
 
@@ -37,7 +37,7 @@ The Oxide test door is complete only when all of the following are true:
 1. A project-authored DOS door exists in the repository with source and a
    checked-in DOS executable fixture.
 2. The door artifact is clearly licensed for redistribution by OxideBBS.
-3. The door runs under DOSBox using the same `oxidebbs-door` launch path as
+3. The door runs under DOSEMU2 using the same `oxidebbs-door` launch path as
    third-party DOS doors.
 4. The generated `DORINFO1.DEF` or `DOOR.SYS` file is visible to the DOS
    program in its current DOS directory.
@@ -47,9 +47,9 @@ The Oxide test door is complete only when all of the following are true:
 7. Maintainer-only scripts exist to bootstrap the Free Pascal `i8086-msdos`
    cross compiler locally and rebuild the fixture when needed.
 8. Normal Cargo build/test and `./scripts/dev-check.sh` do not require Free
-   Pascal, DOSBox, or the staged `i8086-msdos` toolchain.
-9. Optional/manual validation exists for systems that do have DOSBox installed.
-10. User-facing docs explain how to install DOSBox, configure the test door, run
+   Pascal, DOSEMU2, or the staged `i8086-msdos` toolchain.
+9. Optional/manual validation exists for systems that do have DOSEMU2 installed.
+10. User-facing docs explain how to install DOSEMU2, configure the test door, run
    a dry run, validate COM1 serial transport expectations, and run a live test.
 11. `docs/about/changelog.md` is updated under `Unreleased`.
 12. `design/TASKS.md` is updated with completed work when implementation is
@@ -86,23 +86,21 @@ These decisions are part of the implementation contract.
   `scripts/bootstrap-fpc-i8086-msdos.sh`.
 - The test-door rebuild script is
   `scripts/build-oxidechk-door.sh`.
-- The canonical runner is DOSBox, configured as `runner = "dosbox"`.
-- The v1 runtime contract uses a per-door Rust TCP bridge:
-  - OxideBBS starts a run-local TCP bridge listener for the caller transport.
-  - DOSBox maps `COM1` with
-    `serial1=nullmodem server:127.0.0.1 port:<bridge_port> transparent:1 rxdelay:1000 txdelay:10`
+- The canonical runner is DOSEMU2, configured as `runner = "dosemu"`.
+- The v1 runtime contract uses a per-door PTY bridge:
+  - OxideBBS starts a run-local PTY bridge listener for the caller transport.
+  - DOSEMU2 maps `COM1` with
+    `$_com1 = "pts <absolute_path_to_runtime/node-001/OXCOM1.PTY>"`
     to that listener.
   - `OXIDECHK.EXE` communicates over `COM1` UART-style, not through console
     stdio.
-- Generated DOSBox configs include quiet runtime settings:
+- Generated DOSEMU2 configs include quiet runtime settings:
   `startup_verbosity=quiet`, `waitonerror=false`, `pause_when_inactive=false`,
   and `mute_when_inactive=true`.
-- Plain DOSBox may still create an SDL window. Sysops who need a no-window
-  server-side launch can configure the runner to an absolute path for
-  `scripts/run-dosbox-headless.sh`, which wraps DOSBox with `xvfb-run`.
+- DOSEMU2 is headless in this deployment model and does not require a GUI wrapper.
 - The v1 bridge is not a Rust FOSSIL TSR. A FOSSIL driver is a DOS-side
   interrupt/API component inside the emulated machine; OxideBBS v1 validates the
-  host side by providing a real COM1/UART path that DOSBox exposes to the door.
+  host side by providing a real COM1/UART path that DOSEMU2 exposes to the door.
   A bundled DOS-side FOSSIL-compatible shim can be designed after v1 if needed.
 - The canonical drop-file format for the example config is `DORINFO1.DEF`.
 - The test program must also support `DOOR.SYS` so both supported drop-file
@@ -112,9 +110,9 @@ These decisions are part of the implementation contract.
 - The test door writes `OXIDECHK.RPT` to its current DOS directory.
 - The test door must be multi-node aware. It must display the node number and
   include the node number in its report file.
-- The OxideBBS DOSBox launch plan must make the node runtime directory the
+- The OxideBBS DOSEMU2 launch plan must make the node runtime directory the
   current DOS directory before invoking the door executable.
-- Mandatory Rust CI must not invoke DOSBox.
+- Mandatory Rust CI must not invoke DOSEMU2.
 - Mandatory Rust CI must not require Free Pascal.
 - Mandatory Rust CI must not require the staged `i8086-msdos` cross compiler.
 - Do not add a Rust dependency for command-line parsing or DOS path handling
@@ -135,7 +133,7 @@ Reasons:
   than the OpenWatcom license.
 - Free Pascal officially supports DOS targets, including 16-bit DOS and
   32-bit DPMI paths.
-- The checked-in `OXIDECHK.EXE` means sysops still need only DOSBox at runtime.
+- The checked-in `OXIDECHK.EXE` means sysops still need only DOSEMU2 at runtime.
 - The checked-in `OXIDECHK.EXE` also means normal Cargo validation does not
   need to build the door from source.
 - Only maintainers changing `oxidechk.pas` need the Free Pascal `i8086-msdos`
@@ -161,17 +159,18 @@ be a single checked-in DOS executable plus files generated by OxideBBS.
 This project does not need to solve every DOS door compatibility issue in this
 work item.
 
-- Do not add DOSEMU support in this plan. DOSBox remains the v1 test path.
+- Do not add alternate DOS runtimes in this plan. DOSEMU2 remains the v1 test
+  path.
 - Do not add physical serial port or modem hardware integration in v1.
 - Do not add a remote admin API.
 - Do not add new drop-file formats beyond the existing `DORINFO1.DEF` and
   `DOOR.SYS`.
 - Do not add a full door installer/downloader.
-- Do not make DOSBox a required dependency for `./scripts/dev-check.sh`.
+- Do not make DOSEMU2 a required dependency for `./scripts/dev-check.sh`.
 - Do not use a DOS batch file as the primary fixture. A batch file is too weak
   to validate binary execution, file reads, file writes, and exit behavior.
 - Do not use a native Rust executable as the primary fixture. Native execution
-  does not dogfood DOSBox, DOS-visible paths, or classic door assumptions.
+  does not dogfood DOSEMU2, DOS-visible paths, or classic door assumptions.
 
 ## Phase 0 - Planning Baseline
 
@@ -185,15 +184,15 @@ agents rediscover the runtime model.
 ### Completed Work
 
 - Chose a DOS-based fixture instead of a native helper.
-- Chose DOSBox as the canonical runner.
+- Chose DOSEMU2 as the canonical runner.
 - Chose an OxideBBS-authored source and binary artifact.
 - Chose Free Pascal output so the door source is maintainable, historically
   aligned with BBS and door software, while keeping the generated executable as
   a checked-in fixture so normal development does not depend on cross-compiler
   availability.
-- Identified the runtime contract gap: OxideBBS currently writes the drop file
-  to the node runtime directory while the DOSBox plan mounts and enters the
-  door working directory.
+- Identified the runtime contract gap: OxideBBS must keep the node runtime
+  directory as the current directory while resolving the door executable from
+  the configured host `working_dir`.
 
 ### Notes For Implementers
 
@@ -234,14 +233,14 @@ scripts/
 
 `tools/doors/oxide-door-check/README.md` must include:
 
-- Purpose: known-good DOSBox door fixture for OxideBBS.
+- Purpose: known-good DOSEMU2 door fixture for OxideBBS.
 - License: OxideBBS-authored and redistributable under Apache-2.0.
 - Fixture model: `OXIDECHK.EXE` is checked in as a conformance-test fixture.
 - Checksum: `SHA256SUMS` verifies the checked-in fixture.
 - Build requirement: Free Pascal is required only for maintainers regenerating
   the `.EXE`.
 - Target requirement: the intended target is `i8086-msdos`.
-- Runtime requirement: DOSBox is required to run the door through OxideBBS.
+- Runtime requirement: DOSEMU2 is required to run the door through OxideBBS.
 - Quick commands:
 
   ```bash
@@ -368,7 +367,7 @@ Status: `COMPLETE`
 ### Objective
 
 Implement `OXIDECHK.EXE`, a tiny Pascal DOS door that proves OxideBBS can
-generate a drop file, launch a DOS binary under DOSBox, pass caller metadata,
+generate a drop file, launch a DOS binary under DOSEMU2, pass caller metadata,
 accept keyboard input, write a file, and exit cleanly.
 
 ### Pascal Requirements
@@ -395,7 +394,7 @@ Implementation rules:
 - Do not inspect host paths.
 - Do not require ANSI escape support.
 - Do not require mouse, graphics, sound, timers, or extended memory.
-- The generated `.EXE` must run in DOSBox without requiring a separate DPMI
+- The generated `.EXE` must run in DOSEMU2 without requiring a separate DPMI
   host, extender, DLL, overlay, Pascal runtime file, or unit file.
 - Record the Free Pascal version and target used to build the checked-in binary
   in `tools/doors/oxide-door-check/README.md`.
@@ -413,7 +412,7 @@ the simplest runtime path:
 Do not silently fall back to `go32v2`. `go32v2` is a 32-bit DPMI target and may
 require a DPMI runtime such as `CWSDPMI.EXE`. A `go32v2` build can be used only
 as an explicit future design change after documenting the runtime file,
-licensing, installation, and DOSBox validation story.
+licensing, installation, and DOSEMU2 validation story.
 
 If the staged Free Pascal cross compiler cannot produce `i8086-msdos` output,
 `scripts/build-oxidechk-door.sh` must fail with a clear message that says the
@@ -612,79 +611,71 @@ Do not add random or time-dependent exit codes.
   can reason about the fixture.
 - The source contains comments for non-obvious DOS/Free Pascal compatibility
   choices.
-- A local DOSBox run can show the prompt and exit with `Q`.
+- A local DOSEMU2 run can show the prompt and exit with `Q`.
 
-## Phase 3 - DOSBox Runtime Contract
+## Phase 3 - DOSEMU2 Runtime Contract
 
 Status: `COMPLETE`
 
 ### Objective
 
-Fix the DOSBox launch plan so generated drop files are visible to DOS programs
+Fix the DOSEMU2 launch plan so generated drop files are visible to DOS programs
 in a predictable current directory. This phase is required before the test door
 can be considered useful.
 
 ### Current Behavior To Replace
 
 At the time this plan was written, `oxidebbs-door` writes the drop file to the
-node runtime directory, then builds a DOSBox plan that mounts the door
-`working_dir` as `C:` and switches to `C:` before running the command.
+node runtime directory, then builds a DOSEMU2 plan that must keep the node
+runtime directory as the current directory while resolving the executable from
+the configured host `working_dir`.
 
 That makes the drop file invisible to a normal DOS program that expects
 `DORINFO1.DEF` or `DOOR.SYS` in the current directory.
 
 ### Required Runtime Contract
 
-For DOSBox runs:
+For DOSEMU2 runs:
 
-- Host door working directory is mounted as DOS drive `C:`.
-- Host node runtime directory is mounted as DOS drive `D:`.
-- A per-door TCP bridge is started for the run.
-- DOS drive `D:` is the current DOS directory when the door command runs.
-- Drop files are written into the host node runtime directory.
-- `OXNODE.TXT` is written into the host node runtime directory beside the drop
-  file.
-- Door-created per-run files, including `OXIDECHK.RPT`, are written into the
-  host node runtime directory.
-- The configured command is invoked from the current `D:` directory. Bare
-  executable names are found by adding `C:\` to DOS `PATH`, so drop-file reads
-  and report writes stay rooted in the runtime directory.
-- DOSBox maps COM1 to the run-local bridge port with
-  `serial1=nullmodem server:127.0.0.1 port:<bridge_port> transparent:1 rxdelay:1000 txdelay:10`
+- DOSEMU2 runs in the node runtime directory, and runtime-generated files remain
+  in that node directory.
+- A per-door PTY bridge is started for the run.
+- `$_com1` is configured to the runtime PTY in `OXDOSEMU2.CONF`.
+- Drop files and `OXNODE.TXT` are written into the same node runtime directory.
+- Door-created per-run files, including `OXIDECHK.RPT`, are written into that same
+  directory.
+- The configured command is resolved from the door `working_dir` on the host,
+  staged into the node runtime directory, and then launched by DOS filename
+  with DOSEMU2 `-E`. DOSEMU2 starts from the node runtime directory with `-K`,
+  so drop-file reads and report writes stay rooted in the runtime directory.
+- DOSEMU2 maps COM1 to the run-local PTY path with
+  `$_com1 = "pts <absolute_path_to_runtime/node-001/OXCOM1.PTY>"`
   semantics.
 
-The generated DOSBox command sequence must include a run-local config file:
+The generated DOSEMU2 command sequence must include a run-local config file:
 
 ```text
---noprimaryconf
---nolocalconf
---conf <node runtime dir>/OXDOSBOX.CONF
+-f <node runtime dir>/OXDOSEMU2.CONF
 ```
 
-`OXDOSBOX.CONF` must contain:
+`OXDOSEMU2.CONF` must contain:
 
 ```ini
-[sdl]
-waitonerror=false
-pause_when_inactive=false
-mute_when_inactive=true
-
-[dosbox]
-startup_verbosity=quiet
-
-[serial]
-serial1=nullmodem server:127.0.0.1 port:<bridge_port> transparent:1 rxdelay:1000 txdelay:10
+$_cpu_vm = "emulated"
+$_cpu_vm_dpmi = "emulated"
+$_sound = (off)
+$_mouse_internal = (off)
+$_joy_device = ""
+$_pktdriver = (off)
+$_tcpdriver = (off)
+$_ttylocks = ""
+$_com1 = "pts <absolute_path_to_runtime/node-001/OXCOM1.PTY>"
 ```
 
-The generated DOSBox command sequence must then run:
+The generated DOSEMU2 command sequence must then run:
 
 ```text
--c "mount c <door working dir>"
--c "mount d <node runtime dir>"
--c "path C:\"
--c "d:"
--c "<resolved door command>"
--c "exit"
+<dosemu_bin> -f <node runtime dir>/OXDOSEMU2.CONF -dumb -quiet -K <node runtime dir> -E "<runtime-staged command and args>"
 ```
 
 For the Oxide test door example:
@@ -699,12 +690,15 @@ the resolved DOS command must be:
 OXIDECHK.EXE
 ```
 
+The source executable is resolved from the configured host `working_dir` and
+staged into the node runtime directory before launch.
+
 ### Command Resolution Rules
 
 Implement a small helper in `oxidebbs-door`; suggested name:
 
 ```rust
-fn resolve_dosbox_command(command: &str) -> String
+fn resolve_dosemu2_command(working_dir: &Path, command: &str) -> Dosemu2Command
 ```
 
 Rules:
@@ -714,20 +708,20 @@ Rules:
    generation.
 3. Split the command into the first token and the remaining argument string at
    the first ASCII whitespace character.
-4. If the first token contains `:` or `\` or `/`, leave the first token
-   unchanged.
-5. Otherwise, prefix the first token with `C:\`.
-6. Append the remaining argument string unchanged after one space if arguments
-   exist.
+4. If the first token contains `:` or `\` or `/`, reject it for v1 with a clear
+   error. Set `working_dir` and use a bare DOS 8.3 filename instead.
+5. Otherwise, resolve the first token against the configured host
+   `working_dir`.
+6. Preserve remaining tokens as the argument vector.
 
 Examples:
 
-| Configured Command | Resolved Command |
-| --- | --- |
-| `OXIDECHK.EXE` | `OXIDECHK.EXE` |
-| `LORD.EXE /N1` | `LORD.EXE /N1` |
-| `C:\LORD\START.BAT` | `C:\LORD\START.BAT` |
-| `UTILS\DOOR.EXE` | `UTILS\DOOR.EXE` |
+| Configured Command | Resolved Host Executable | Arguments |
+| --- | --- | --- |
+| `OXIDECHK.EXE` | `<working_dir>/OXIDECHK.EXE` | `[]` |
+| `LORD.EXE /N1` | `<working_dir>/LORD.EXE` | `["/N1"]` |
+| `C:\LORD\START.BAT` | rejected | rejected |
+| `UTILS\DOOR.EXE` | rejected | rejected |
 
 Do not add quoted-path support in this phase. DOS 8.3 paths should be used for
 door commands. If a configured command starts with a quote, validation should
@@ -749,18 +743,18 @@ crates/oxidebbs-door/src/lib.rs
 - `drop_file_path`
 - `timeout`
 
-The meaning of `working_dir` for DOSBox plans must be updated to the host node
+The meaning of `working_dir` for DOSEMU2 plans must be updated to the host node
 runtime directory, because that is the directory where the child process should
-start from the host perspective. If DOSBox itself does not require a host
+start from the host perspective. If DOSEMU2 itself does not require a host
 current directory, using the runtime directory is still the least surprising
 choice because all generated run files live there.
 
 `prepare_door_run` must continue to write the drop file before constructing the
 plan.
 
-`dosbox_plan` must use `request.runtime_dir` in its mount commands. If the
-current function signature does not include enough data, change it rather than
-deriving paths from `drop_file_path`.
+`dosemu2_plan` must use `request.runtime_dir` for run-local artifacts and PTY path
+construction. If the current function signature does not include enough data,
+change it rather than deriving paths from `drop_file_path`.
 
 ### Validation Requirements
 
@@ -778,7 +772,7 @@ Validation must continue to ensure:
 - time limit is positive
 - node runtime directory is writable
 
-Validation of the configured command must use the first token before DOSBox
+Validation of the configured command must use the first token before DOSEMU2
 resolution. For `command = "OXIDECHK.EXE"`, validate that:
 
 ```text
@@ -803,11 +797,11 @@ used.
 
 - `DORINFO1.DEF` and `DOOR.SYS` are generated under the host node runtime
   directory.
-- DOSBox plans mount both the door working directory and node runtime
-  directory.
-- DOSBox plans switch to `D:` before running the command.
-- Bare commands are prefixed with `C:\`.
-- Existing dry-run behavior still writes drop files and does not launch DOSBox.
+- DOSEMU2 plans use the node runtime directory as the host working directory
+  and `-K` directory.
+- DOSEMU2 plans resolve bare commands from the configured host `working_dir`.
+- Path-like DOS commands are rejected for v1 with a clear error.
+- Existing dry-run behavior still writes drop files and does not launch DOSEMU2.
 - Existing live door bridge behavior still tracks start/finish/timeout records.
 
 ## Phase 4 - Config And Sysop CLI Integration
@@ -833,7 +827,7 @@ Replace the current third-party example with the Oxide-owned test door:
 [[definitions]]
 key = "oxide-check"
 name = "Oxide Door Check"
-runner = "dosbox"
+runner = "dosemu"
 working_dir = "./tools/doors/oxide-door-check/dist"
 command = "OXIDECHK.EXE"
 drop_file = "DORINFO1.DEF"
@@ -854,7 +848,7 @@ Replace the placeholder `Example Door` definition with:
 [[doors.definitions]]
 key = "oxide-check"
 name = "Oxide Door Check"
-runner = "dosbox"
+runner = "dosemu"
 working_dir = "./tools/doors/oxide-door-check/dist"
 command = "OXIDECHK.EXE"
 drop_file = "DORINFO1.DEF"
@@ -864,7 +858,7 @@ enabled = false
 ```
 
 The main example config must keep the test door disabled by default. This keeps
-fresh configuration validation from requiring DOSBox to be installed before the
+fresh configuration validation from requiring DOSEMU2 to be installed before the
 operator intentionally enables door testing. The dedicated `doors.example.toml`
 may keep it enabled because that file is specifically for door setup examples.
 
@@ -878,7 +872,7 @@ crates/oxidebbs-server/src/setup.rs
 
 If setup currently generates a fictional or third-party placeholder door,
 replace it with the disabled `oxide-check` definition above. Setup-generated
-configs should not require DOSBox for a clean first `check` unless the sysop
+configs should not require DOSEMU2 for a clean first `check` unless the sysop
 enables the door.
 
 ### Sysop CLI Commands
@@ -903,13 +897,13 @@ cargo run -p oxidebbs-server -- --config config/oxidebbs.example.toml serve
 Connect over telnet, log in as a caller, open the caller `Doors` menu, and
 select `oxide-check`.
 
-If DOSBox is not installed, launch must fail with a clear missing-runner error.
+If DOSEMU2 is not installed, launch must fail with a clear missing-runner error.
 That is acceptable. The failure must not look like an OxideBBS internal error.
 
 ### Acceptance Criteria
 
 - Example configs reference only the Oxide-owned test door.
-- The main example config does not require DOSBox for default setup.
+- The main example config does not require DOSEMU2 for default setup.
 - The dedicated doors example is ready to copy into a test setup.
 - Existing sysop CLI commands can list, check, generate drop files, dry-run,
   and live-run the test door.
@@ -921,7 +915,7 @@ Status: `COMPLETE`
 ### Objective
 
 Add deterministic automated tests for the OxideBBS side of the contract, and
-add an optional smoke test for hosts with DOSBox installed.
+add an optional smoke test for hosts with DOSEMU2 installed.
 
 ### Rust Unit Tests
 
@@ -937,13 +931,14 @@ Add or update tests for:
 - `prepare_door_run` writes `DOOR.SYS` into `request.runtime_dir`.
 - `prepare_door_run` writes `OXNODE.TXT` into `request.runtime_dir`.
 - `OXNODE.TXT` contains the request node number with CRLF line endings.
-- `dosbox_plan` mounts the door working directory as `C:`.
-- `dosbox_plan` mounts the node runtime directory as `D:`.
-- `dosbox_plan` switches to `D:`.
-- `dosbox_plan` adds `C:\` to DOS `PATH`.
-- `dosbox_plan` resolves `OXIDECHK.EXE` to `OXIDECHK.EXE`.
-- `resolve_dosbox_command("LORD.EXE /N1")` returns `LORD.EXE /N1`.
-- commands with a drive or path are not prefixed.
+- `dosemu2_plan` keeps the node runtime directory as the door working directory.
+- `OXDOSEMU2.CONF` includes the PTY-compliant COM1 mapping and runtime settings.
+- `dosemu2_plan` resolves command arguments and executes within the node runtime
+  directory.
+- `dosemu2_plan` resolves `OXIDECHK.EXE` against the configured host
+  `working_dir`.
+- `resolve_dosemu2_command("LORD.EXE /N1")` preserves `/N1` as an argument.
+- commands with a drive or path are rejected for v1.
 - empty commands are rejected by validation before plan generation.
 
 Update tests in:
@@ -971,18 +966,18 @@ If the existing test structure has CLI integration tests, add coverage for:
   `DORINFO1.DEF`.
 - `doors dropfile oxide-check --format DORINFO1.DEF` also writes node metadata
   when the command path exercises full run preparation.
-- `doors test oxide-check --dry-run` succeeds without DOSBox.
+- `doors test oxide-check --dry-run` succeeds without DOSEMU2.
 
 If CLI integration tests are not already present for door commands, do not
 create a large new test harness solely for this phase. Cover the behavior at
 the `oxidebbs-door` and server command-helper level instead.
 
-### Optional DOSBox Smoke Script
+### Optional DOSEMU2 Smoke Script
 
 Add:
 
 ```text
-scripts/test-oxide-door-dosbox.sh
+scripts/test-oxide-door-dosemu2.sh
 ```
 
 The script must:
@@ -990,11 +985,16 @@ The script must:
 - Use `#!/usr/bin/env bash`.
 - Use `set -euo pipefail`.
 - Resolve paths relative to the repository root.
-- Check for `dosbox` on `PATH`.
-- If DOSBox is missing, print:
+- Check for `dosemu` on `PATH`.
+- Verify that the executable is DOSEMU2. A binary reporting `dosemu-1.x` is the
+  legacy DOSEMU runtime and must be treated as unsupported for this smoke test,
+  because it does not accept the run-local `pts <path>` COM1 mapping.
+- If DOSEMU2 is missing or the available `dosemu` is legacy DOSEMU 1.x, print a
+  clear `SKIP:` line and exit `77`.
+- If the executable is missing, print:
 
   ```text
-  SKIP: dosbox not found
+  SKIP: dosemu not found
   ```
 
   and exit `77`.
@@ -1003,11 +1003,11 @@ The script must:
 - Create a temporary runtime directory under `target/`.
 - Create a representative `DORINFO1.DEF` in that runtime directory.
 - Create a representative `OXNODE.TXT` in that runtime directory.
-- Launch DOSBox using the same mount/current-directory pattern required in
-  Phase 3.
-- Use DOSBox commands that run the door in the most automated way practical.
+- Launch DOSEMU2 using the same runtime-directory/current-directory pattern
+  required in Phase 3.
+- Use DOSEMU2 commands that run the door in the most automated way practical.
 
-If fully automated key input is not reliable across DOSBox versions, the script
+If fully automated key input is not reliable across DOSEMU2 versions, the script
 may be interactive. In that case it must clearly print:
 
 ```text
@@ -1016,48 +1016,48 @@ Press I to view node info, R to write a report, then Q to return.
 
 and must still be optional, not part of `./scripts/dev-check.sh`.
 
-### Optional DOSBox Integration Tests
+### Optional DOSEMU2 Integration Tests
 
-If Rust integration tests are added that actually launch DOSBox, they must be
+If Rust integration tests are added that actually launch DOSEMU2, they must be
 opt-in ignored tests. Use this pattern:
 
 ```rust
-#[ignore = "requires DOSBox"]
+#[ignore = "requires DOSEMU2"]
 ```
 
 Do not gate normal behavior behind a Cargo feature solely for this phase. The
-required opt-in command for DOSBox-backed Rust tests must be documented as:
+required opt-in command for DOSEMU2-backed Rust tests must be documented as:
 
 ```bash
 cargo test --workspace --locked -- --ignored
 ```
 
 If this command would run unrelated ignored tests, document the narrower test
-name instead. DOSBox-backed tests must skip or fail clearly when `dosbox` is not
+name instead. DOSEMU2-backed tests must skip or fail clearly when `dosemu` is not
 on `PATH`, and they must never run during `./scripts/dev-check.sh`.
 
 ### CI Contract
 
-Do not add the DOSBox smoke script to mandatory CI in this phase.
+Do not add the DOSEMU2 smoke script to mandatory CI in this phase.
 
 It is acceptable to add a future optional GitHub Actions job that installs
-DOSBox and runs the script, but that job must be allowed to skip cleanly when
-the environment cannot support DOSBox. This plan does not require that optional
+DOSEMU2 and runs the script, but that job must be allowed to skip cleanly when
+the environment cannot support DOSEMU2. This plan does not require that optional
 job.
 
 Normal Cargo build/test, `cargo test --workspace --locked`, and
-`./scripts/dev-check.sh` must not require Free Pascal, DOSBox, or the staged
+`./scripts/dev-check.sh` must not require Free Pascal, DOSEMU2, or the staged
 `i8086-msdos` toolchain.
 
 ### Acceptance Criteria
 
-- Mandatory Rust tests pass without DOSBox installed.
+- Mandatory Rust tests pass without DOSEMU2 installed.
 - Mandatory Rust tests pass without Free Pascal installed.
 - Mandatory Rust tests pass without the staged `i8086-msdos` toolchain.
-- The optional DOSBox script skips with exit `77` when DOSBox is missing.
-- On a developer machine with DOSBox, the optional script can run the checked-in
+- The optional DOSEMU2 script skips with exit `77` when DOSEMU2 is missing.
+- On a developer machine with DOSEMU2, the optional script can run the checked-in
   `OXIDECHK.EXE`.
-- Any DOSBox-backed Rust integration tests are ignored by default and documented
+- Any DOSEMU2-backed Rust integration tests are ignored by default and documented
   with an explicit opt-in command.
 
 ## Phase 6 - Documentation And Changelog
@@ -1087,12 +1087,10 @@ Required additions:
 - Document that only maintainers changing `oxidechk.pas` need to run
   `scripts/bootstrap-fpc-i8086-msdos.sh` and
   `scripts/build-oxidechk-door.sh`.
-- Document that the DOSBox runner mounts the door working directory as `C:` and
-  the node runtime directory as `D:`.
-- Document that DOS doors are launched with `D:` as the current directory so
-  drop files are visible.
-- Document that bare configured commands are found through DOS `PATH` after
-  adding `C:\`.
+- Document that the DOSEMU2 runner starts from the node runtime directory so
+  drop files are visible and per-run reports stay isolated by node.
+- Document that bare configured commands are resolved from the configured host
+  `working_dir`.
 - Document that OxideBBS writes `OXNODE.TXT` as Oxide-owned per-node metadata
   for diagnostics, and that third-party doors are not expected to consume it.
 - Keep the legal note: no copyrighted or abandonware DOS doors are bundled.
@@ -1105,7 +1103,7 @@ design/SPEC.md
 
 Required additions:
 
-- State that v1 includes a redistributable DOSBox test door.
+- State that v1 includes a redistributable DOSEMU2 test door.
 - State that the bundled test door is implemented in Free Pascal.
 - State that the generated executable is committed as a fixture and verified
   with `SHA256SUMS`.
@@ -1139,7 +1137,7 @@ Required additions:
 - Show how to run `doors check oxide-check`.
 - Show how to generate a `DORINFO1.DEF` drop file for `oxide-check`.
 - Show how to dry-run the test door.
-- Explain that live run requires DOSBox.
+- Explain that live run requires DOSEMU2.
 
 Update setup/getting-started documentation if present:
 
@@ -1151,7 +1149,7 @@ docs/project/deployment.md
 
 Only update files that exist. Required content somewhere in operator docs:
 
-- Install DOSBox before live door testing.
+- Install DOSEMU2 before live door testing.
 - Do not install Free Pascal or the `i8086-msdos` cross compiler for normal
   sysop use.
 - Enable the `oxide-check` door in config.
@@ -1172,20 +1170,20 @@ docs/about/changelog.md
 
 Add an `Unreleased` entry that mentions:
 
-- bundled Oxide-owned DOSBox test door
+- bundled Oxide-owned DOSEMU2 test door
 - Free Pascal source with a checked-in `OXIDECHK.EXE` fixture and `SHA256SUMS`
-- DOSBox launch-plan correction that makes drop files visible in the DOS
+- DOSEMU2 launch-plan correction that makes drop files visible in the DOS
   current directory
 - maintainer-only Free Pascal bootstrap/rebuild scripts
-- optional DOSBox smoke test script, if implemented
+- optional DOSEMU2 smoke test script, if implemented
 
 Follow `design/VERSIONING_GUIDE.md`. Do not bump crate versions unless this
 work is being combined with an explicit release-version change.
 
 ### Acceptance Criteria
 
-- Design docs and operator docs agree on the DOSBox mount/current-directory
-  contract.
+- Design docs and operator docs agree on the DOSEMU2 runtime-directory/current
+  directory contract.
 - Changelog mentions the user-visible behavior change.
 - Documentation does not imply that OxideBBS ships third-party DOS games.
 - Documentation commands use actual repo paths and command names.
@@ -1219,13 +1217,13 @@ When changing the Pascal source or regenerating the fixture, also run:
 (cd tools/doors/oxide-door-check && sha256sum -c SHA256SUMS)
 ```
 
-If DOSBox is installed, also run:
+If DOSEMU2 is installed, also run:
 
 ```bash
-OXIDE_DOOR_INTERACTIVE=1 ./scripts/test-oxide-door-dosbox.sh
+OXIDE_DOOR_INTERACTIVE=1 ./scripts/test-oxide-door-dosemu2.sh
 ```
 
-If DOSBox is missing, do not treat that as a failure. Record the skip in the
+If DOSEMU2 is missing, do not treat that as a failure. Record the skip in the
 final implementation notes. If the Pascal source changed and the Free Pascal
 bootstrap/build scripts fail, treat that as a blocker for completing this plan.
 
@@ -1240,13 +1238,14 @@ Before marking this plan complete:
 - [x] `scripts/build-oxidechk-door.sh` exists.
 - [x] `config/doors.example.toml` references `oxide-check`.
 - [x] `config/oxidebbs.example.toml` references disabled `oxide-check`.
-- [x] The DOSBox plan mounts both `C:` and `D:`.
-- [x] The DOSBox plan switches to `D:` before running the command.
+- [x] The DOSEMU2 plan runs from the node runtime directory with `-K`.
+- [x] The DOSEMU2 plan resolves the executable from the configured host
+  `working_dir`.
 - [x] The drop file path points into the node runtime directory.
 - [x] Door command validation handles command arguments.
-- [x] Mandatory tests do not require DOSBox.
+- [x] Mandatory tests do not require DOSEMU2.
 - [x] Mandatory tests do not require Free Pascal.
-- [x] Optional DOSBox smoke testing is documented.
+- [x] Optional DOSEMU2 smoke testing is documented.
 - [x] Operator docs explain how to enable and run the test door.
 - [x] `docs/about/changelog.md` is updated.
 - [x] `design/TASKS.md` is updated.
@@ -1266,10 +1265,13 @@ Free Pascal validation: `./scripts/bootstrap-fpc-i8086-msdos.sh` staged Free
 Pascal 3.2.2 `ppcross8086`; `./scripts/build-oxidechk-door.sh` rebuilt
 `dist/OXIDECHK.EXE`; `(cd tools/doors/oxide-door-check && sha256sum -c
 SHA256SUMS)` passed.
-DOSBox smoke validation:
-`OXIDE_DOOR_INTERACTIVE=1 ./scripts/test-oxide-door-dosbox.sh` passed, including
-COM1 output capture, scripted `I`/`R`/`Q` input, and `OXIDECHK.RPT` creation.
-Skipped validations: none for this plan on the local workstation.
+DOSEMU2 smoke validation:
+`OXIDE_DOOR_INTERACTIVE=1 ./scripts/test-oxide-door-dosemu2.sh` passed with
+`dosemu2-2.0pre9` after the host loader path exposed `libdj64.so.0`.
+`OXIDE_DOOR_MULTI_NODE=1 OXIDE_DOOR_INTERACTIVE=1
+./scripts/test-oxide-door-dosemu2.sh` also passed. The smoke test verified the
+COM1 PTY bridge, scripted `I`/`R`/`Q` input, per-node `OXIDECHK.RPT` creation,
+and separate node runtime directories.
 Notable decisions: `OXIDECHK.EXE` is committed as a conformance-test fixture;
 the Free Pascal i8086/MS-DOS cross compiler is staged under `target/` and is
 required only when maintainers rebuild the door fixture.

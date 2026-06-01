@@ -92,22 +92,45 @@ The caller `Doors` menu lists enabled configured doors and launches the selected
 door through the server-side bridge. Before launch, verify:
 
 - the door working directory exists
-- the configured runner executable, usually `dosbox`, exists on `PATH` or at
+- the configured runner executable, usually `dosemu`, exists on `PATH` or at
   the configured path
 - the drop-file format is `DOOR.SYS` or `DORINFO1.DEF`
 - the runtime directory is writable
 - the time limit is greater than zero
 
-During a live door, `nodes list` reports the caller as `in_door`. Normal child
-exit and timeout return the caller to the main menu; timeout kills the child and
-records `door_timed_out`. `nodes disconnect <node>` also terminates an active
-door bridge and then lets the caller session follow normal disconnect cleanup.
+During a live door, the byte path is:
+
+```text
+caller telnet client
+  <-> OxideBBS caller transport
+  <-> OxideBBS PTY byte bridge
+  <-> DOSEMU2 COM1 pts backend
+  <-> DOSEMU2-emulated COM1 UART
+  <-> DOS door program
+```
+
+The server tracks node state as `in_door` while the bridge owns the transport.
+Caller disconnect or `nodes disconnect <node>` terminates the bridge and triggers
+normal session cleanup. `nodes disconnect <node>` also terminates an active door
+bridge and then lets the caller session follow normal disconnect cleanup.
 OxideBBS never bundles door binaries; sysops provide their own licensed door
 files under the configured door working directory.
 
-When a caller session is running a door, the node status is `in_door`. Disconnect
-that node from the control socket to terminate the bridge cleanly and trigger
-normal session cleanup.
+## Common door launch failures
+
+- `dosemu` not found: fix `PATH` or `runner` path in door config.
+- PTY path never appears: verify `/dev/pts` is mounted and writable; restart
+  node runtime path and check stale permissions.
+- PTY permission denied: ensure `runtime/` and per-node directory permissions are
+  writable by the server user.
+- Door never writes COM1: check generated `OXDOSEMU2.CONF`, and validate the
+test door path and command arguments.
+- Caller disconnect during door: bridge should stop immediately and session state
+  should return to normal disconnect flow.
+- Timeout kill: confirm the `time_limit_minutes` and `door_timed_out` state in
+  `door_runs`.
+- Stale runtime directory cleanup: stale files under `runtime/node-XXX/` should be
+  removed when the run finalizes.
 
 ## Node operations
 
@@ -115,10 +138,9 @@ normal session cleanup.
   `main_menu`, `reading_messages`, `posting_message`, `in_door`,
   `disconnecting`, `offline`, `stale`).
 - `nodes show <n>` prints detail and heartbeat age.
-- `nodes message <n> "text"` and `nodes broadcast "text"` write direct text to live
-  caller sessions.
-- `nodes disconnect <n>` asks live runtime to disconnect through the normal
-  session path.
+- `nodes message <n>` and `nodes broadcast <n>` write direct text to live caller
+  sessions.
+- `nodes disconnect <n>` asks live runtime to disconnect through the normal path.
 - `nodes reset-stale` requests disconnect of stale nodes and marks them
   `disconnecting` before cleanup.
 
@@ -160,18 +182,13 @@ UUIDs with full foreign-key-aware insertion order and transactionality.
 `db compact` is intentionally unsupported in this release because DecentDB does
 not expose a safe compaction API contract.
 
-## Troubleshooting checklist
+## DOSEMU2 smoke path
 
-- Config file exists
-- Data directory is writable
-- Runtime directory is writable
-- Telnet bind address is available
-- ANSI assets are readable
-- Door working directory exists
-- DOSBox/DOSEMU command exists
-- Node runtime directories are writable
-- Control socket directory exists/writable (`runtime/` by default), and stale
-  `runtime/oxidebbs-control.sock` files are removed automatically on startup when
-  no server is listening
-- `nodes reset-stale` finds stale entries
-- `nodes watch` reports heartbeat age and `stale` state where applicable
+When a runtime-capable host is available, validate the bridge path end-to-end:
+
+```bash
+OXIDE_DOOR_INTERACTIVE=1 ./scripts/test-oxide-door-dosemu2.sh
+```
+
+Optional runtime check can be used on production-like host settings before opening
+doors to callers.

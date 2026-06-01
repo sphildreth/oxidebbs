@@ -79,7 +79,7 @@ This is intended for a local coding agent to work from.
 - [x] Add DOOR.SYS generation.
 - [x] Add DORINFO1.DEF generation.
 - [x] Add dry-run door test.
-- [x] Add DOSBox runner.
+- [x] Add DOSEMU2 runner.
 - [x] Add timeout and disconnect cleanup.
 - [x] Record door runs in DecentDB.
 
@@ -153,33 +153,34 @@ This is intended for a local coding agent to work from.
   configuration files.
 - [x] Document `doors check/dropfile/test` smoke-test workflow in setup,
   getting-started, deployment, and sysop CLI docs.
-- [x] Document DOSBox C:/D: runtime mounts, DOS `PATH` command lookup from
-  `C:\`, and `OXNODE.TXT` diagnostics.
+- [x] Document DOSEMU2 runtime directory execution, COM1 PTY mapping, and
+  `OXNODE.TXT` diagnostics.
 - [x] Convert `OXIDECHK.EXE` and live caller launch to validate COM1 serial I/O
-  through a run-local Rust TCP bridge instead of DOSBox console/stdout.
-- [x] Add quiet DOSBox runtime config and optional `xvfb-run` wrapper support
-  for sysops who want live DOS doors without a visible DOSBox window.
+  through a run-local DOSEMU2 COM1 PTY bridge instead of DOS console/stdout.
+- [x] Add container-safe DOSEMU2 runtime config for live DOS door execution.
 - [x] Update changelog with the user-facing test-door documentation and config
   behavior.
-- [x] Add optional DOSBox smoke script that is skipped unless explicitly run
+- [x] Add optional DOSEMU2 smoke script that is skipped unless explicitly run
   interactively.
-- [x] Keep normal Cargo build/test independent of Free Pascal, DOSBox, and the
+- [x] Keep normal Cargo build/test independent of Free Pascal, DOSEMU2, and the
   staged i8086/MS-DOS cross toolchain.
 
-## DOSBox To DOSEMU2 Refactor Planning
+## DOSEMU2 Door Runtime Refactor
 
 - [x] Add `design/DOSBOX_TO_DOSEMU2_REFACTOR_PLAN.md` to define the phased
-  removal of DOSBox and replacement with DOSEMU2.
+  replacement of the temporary DOS runtime with DOSEMU2.
 - [x] Add ADR 0010 selecting DOSEMU2 and its COM1 PTY backend as the long-term
   v1 DOS door runtime.
-- [x] Add ADR 0011 documenting that DOSBox should be removed before v1 instead
-  of maintained as a parallel runner.
-- [ ] Prove DOSEMU2 headless operation in a Debian 13 LXC container.
-- [ ] Replace DOSBox command planning and serial bridge code with DOSEMU2
+- [x] Add ADR 0011 documenting that the temporary runner should be removed
+  before v1 instead of maintained as a parallel runner.
+- [x] Document the Debian 13 LXC validation decision and keep live DOSEMU2
+  validation opt-in until a target LXC host is available.
+- [x] Replace temporary command planning and serial bridge code with DOSEMU2
   command planning and COM1 PTY bridging.
-- [ ] Convert Oxide Door Check documentation and optional smoke testing to
+- [x] Convert Oxide Door Check documentation and optional smoke testing to
   DOSEMU2.
-- [ ] Remove DOSBox scripts, config defaults, and user-facing documentation.
+- [x] Remove temporary runner scripts, config defaults, and user-facing
+  documentation.
 
 ## Implementation Plan Phase 7 — Documentation And Runbook Completion
 

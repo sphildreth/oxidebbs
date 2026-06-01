@@ -49,10 +49,10 @@ Local sysop console:
 
 v1:
 
-- DOSBox runner
+- DOSEMU2 runner
+- COM1 PTY bridge (`OXCOM1.PTY`)
+- Host byte bridge to caller transport
 
 Future:
 
-- DOSBox-X runner
-- DOSEMU2 runner
-- Native door API
+- native door API (server-local)

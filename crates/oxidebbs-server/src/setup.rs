@@ -17,7 +17,7 @@ const DEFAULT_SCREENS_PATH: &str = "./assets/screens";
 const DEFAULT_DOORS_PATH: &str = "./doors";
 const DEFAULT_RUNTIME_PATH: &str = "./runtime";
 const DEFAULT_LOGS_PATH: &str = "./logs";
-const DEFAULT_DOSBOX: &str = "dosbox";
+const DEFAULT_DOSEMU: &str = "dosemu";
 
 #[derive(Debug, Clone)]
 pub struct SetupAnswers {
@@ -266,11 +266,11 @@ pub fn build_setup_toml(answers: &SetupAnswers) -> io::Result<String> {
     let doors = if answers.include_example_door {
         GeneratedDoorsConfig {
             enabled: true,
-            default_runner: DEFAULT_DOSBOX.to_string(),
+            default_runner: DEFAULT_DOSEMU.to_string(),
             definitions: vec![GeneratedDoorDefinitionConfig {
                 key: "oxide-check".to_string(),
                 name: "Oxide Door Check".to_string(),
-                runner: DEFAULT_DOSBOX.to_string(),
+                runner: DEFAULT_DOSEMU.to_string(),
                 working_dir: "./tools/doors/oxide-door-check/dist".to_string(),
                 command: "OXIDECHK.EXE".to_string(),
                 drop_file: "DORINFO1.DEF".to_string(),
@@ -282,7 +282,7 @@ pub fn build_setup_toml(answers: &SetupAnswers) -> io::Result<String> {
     } else {
         GeneratedDoorsConfig {
             enabled: false,
-            default_runner: DEFAULT_DOSBOX.to_string(),
+            default_runner: DEFAULT_DOSEMU.to_string(),
             definitions: Vec::new(),
         }
     };

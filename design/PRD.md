@@ -2,7 +2,10 @@
 
 ## 1. Product summary
 
-OxideBBS is a modern BBS software package built in Rust. It targets sysops who want the experience of a classic 1990s BBS with modern reliability, clean deployment, DecentDB-backed persistence, and first-class support for telnet callers, ANSI/CP437 screens, DOS door games, and future FTN-style message networking.
+OxideBBS is a modern BBS software package built in Rust. It targets sysops who want
+experience of a classic 1990s BBS with modern reliability, clean deployment,
+DecentDB-backed persistence, and first-class support for telnet callers, ANSI/
+CP437 screens, DOS door games, and future FTN-style message networking.
 
 OxideBBS is software for running a board. It is not itself a single hosted board.
 
@@ -25,11 +28,13 @@ They value:
 
 ### Secondary user: retro developer
 
-A developer interested in Rust, terminal systems, DecentDB, telnet, CP437, protocol work, and BBS internals.
+A developer interested in Rust, terminal systems, DecentDB, telnet, CP437, protocol
+work, and BBS internals.
 
 ### Future user: message-network sysop
 
-A sysop who wants FTN/FidoNet-style shared echomail and netmail using OxideBBS and possibly OxideNet.
+A sysop who wants FTN/FidoNet-style shared echomail and netmail using OxideBBS and
+possibly OxideNet.
 
 ## 3. Product goals
 
@@ -92,7 +97,7 @@ A sysop who wants FTN/FidoNet-style shared echomail and netmail using OxideBBS a
 - Door definitions in TOML
 - Per-node working directories
 - Drop-file generation
-- DOSBox runner for v1
+- DOSEMU2 runner for v1
 - Timeout and disconnect cleanup
 - Door run history in DecentDB
 - Exclusive-door option

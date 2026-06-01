@@ -879,13 +879,13 @@ Recommended design:
    - building a `DoorRunPlan`
 2. Add an interactive server adapter in `oxidebbs-server`, for example
    `door_session.rs`, that:
-   - starts a run-local loopback TCP serial bridge
-   - writes a run-local DOSBox config mapping `COM1` with
-     `serial1=nullmodem server:127.0.0.1 port:<bridge_port> transparent:1 rxdelay:1000 txdelay:10`
-   - spawns the configured process without forwarding DOSBox stdout/stderr to
+   - writes a run-local DOSEMU2 config mapping `COM1` with
+     `$_com1 = "pts <node runtime dir>/OXCOM1.PTY"`
+   - waits for the run-local PTY path to appear
+   - spawns the configured process without forwarding DOSEMU2 stdout/stderr to
      the caller
    - pauses normal menu input handling while the door is active
-   - forwards bytes between the caller `Transport` and the serial bridge socket
+   - forwards bytes between the caller `Transport` and the COM1 PTY
    - watches for caller disconnect, child exit, timeout, and sysop disconnect
    - terminates the child on timeout or caller disconnect
 3. Keep the current dry-run path for tests and sysop troubleshooting.
@@ -919,7 +919,7 @@ Add tests for:
   that echoes stdin to stdout.
 - Timeout cleanup of a fake long-running child process.
 
-Do not require DOSBox in unit tests. Use dry-run or a fake runner.
+Do not require DOSEMU2 in unit tests. Use dry-run or a fake runner.
 
 ### Documentation
 
@@ -933,7 +933,7 @@ Update:
 ### Not In Scope
 
 - Bundling real door binaries.
-- Full DOSBox terminal emulation beyond byte forwarding.
+- Full DOS terminal emulation beyond byte forwarding.
 - File-transfer protocol implementation.
 - Door editor UI.
 - Multi-node exclusive-door locking beyond rejecting obviously invalid
@@ -963,10 +963,10 @@ Update:
 
 - Added a server-side `door_session.rs` adapter with `DoorService`, caller door
   selection rendering/parsing, selected-door validation, run record lifecycle,
-  audit events, runtime cleanup, and a run-local COM1 serial byte bridge.
+  audit events, runtime cleanup, and a run-local DOSEMU2 COM1 PTY byte bridge.
 - Kept the existing `Transport` trait unchanged. The bridge temporarily borrows
   the caller transport, pauses normal menu/line parsing, and forwards bytes
-  between the caller and the DOSBox `serial1=nullmodem` loopback socket.
+  between the caller and the DOSEMU2 COM1 PTY.
 - Live door execution marks the node `in_door`, watches for child exit, caller
   disconnect, timeout, and sysop disconnect, then returns normal completions and
   timeouts to the main menu.
@@ -974,7 +974,7 @@ Update:
   `oxidebbs-door` command planning to use the configured runner executable.
 - Added tests for door menu selection, disabled/missing/invalid validation,
   `DryRunDoorRunner` service lifecycle, finished door run records, interactive
-  bridge echo behavior, and timeout cleanup without requiring DOSBox.
+  bridge echo behavior, and timeout cleanup without requiring DOSEMU2.
 
 ## Phase 4 — DecentDB Schema Migrations
 

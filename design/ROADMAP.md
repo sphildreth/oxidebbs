@@ -53,7 +53,7 @@
 - [x] Message areas
 - [x] Read message
 - [x] Post message
-- [x] Reply to message
+- [x] Reply to visible messages
 - [x] Private mail foundation
 - [x] Moderation primitives
 
@@ -64,7 +64,7 @@
 - [x] DOOR.SYS writer
 - [x] DORINFO1.DEF writer
 - [x] Door test command
-- [x] DOSBox runner
+- [x] DOSEMU2 runner
 - [x] Timeout cleanup
 - [x] Door run logging
 
@@ -98,10 +98,10 @@
 
 ## Future
 
-- [ ] Physical serial/modem transport
-- [ ] BinkP polling
-- [ ] Full FTN tosser/scanner
-- [ ] OxideNet network support
-- [ ] File transfer support, if still desired
-- [ ] Dedicated welcome/logoff screen rendering
-- [ ] DbWriter service if write contention emerges
+- Physical serial/modem transport
+- BinkP polling
+- Full FTN tosser/scanner
+- OxideNet network support
+- File transfer support, if still desired
+- Dedicated welcome/logoff screen rendering
+- DbWriter service if write contention emerges

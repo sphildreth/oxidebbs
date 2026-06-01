@@ -483,7 +483,7 @@ fn default_menu_prompt() -> String {
     "Command? ".into()
 }
 fn default_door_runner() -> String {
-    "dosbox".into()
+    "dosemu".into()
 }
 fn default_door_time_limit() -> u32 {
     30
@@ -686,12 +686,12 @@ name = "Test"
 
 [doors]
 enabled = true
-default_runner = "dosbox"
+default_runner = "dosemu"
 
 [[doors.definitions]]
 key = "lord"
 name = "Legend of the Red Dragon"
-runner = "dosbox"
+runner = "dosemu"
 working_dir = "./doors/lord"
 command = "LORD.EXE"
 drop_file = "DORINFO1.DEF"

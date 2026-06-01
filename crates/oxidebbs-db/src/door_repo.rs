@@ -250,7 +250,7 @@ mod tests {
             id: DOOR_LORD.to_string(),
             key: "lord".to_string(),
             name: "Legend of the Red Dragon".to_string(),
-            runner: "dosbox".to_string(),
+            runner: "dosemu".to_string(),
             working_dir: "./doors/lord".to_string(),
             command: "LORD.EXE".to_string(),
             drop_file: "DOOR.SYS".to_string(),

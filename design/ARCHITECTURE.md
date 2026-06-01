@@ -20,7 +20,7 @@ OxideBBS is a single-node Rust application with a modular internal architecture.
 oxidebbs-term     oxidebbs-db      oxidebbs-door
    |                    |                |
    v                    v                v
-ANSI/CP437          DecentDB        DOSBox/DOSEMU
+ANSI/CP437          DecentDB        DOSEMU2
 ```
 
 ## Why modular monolith?

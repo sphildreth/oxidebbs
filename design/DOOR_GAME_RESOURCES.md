@@ -157,7 +157,7 @@ verify = [
   "Inspect README/DOC/REGISTER/FREE-KEY files",
   "Record SHA256",
   "Record supported drop files",
-  "Test in DOSBox runner"
+  "Test in DOSEMU2 runner"
 ]
 ```
 
@@ -190,7 +190,7 @@ Evidence needed: keep source page notes and inspect bundled docs
 
 Recommended OxideBBS usage:
 
-This is another excellent early test set. Because the collection is described as already extracted from installers, it may be easier to stage for DOSBox/DOSEMU tests.
+This is another excellent early test set. Because the collection is described as already extracted from installers, it may be easier to stage for DOSEMU2 tests.
 
 Recommended catalog entry:
 
@@ -205,7 +205,7 @@ verify = [
   "Inspect docs inside collection",
   "Record individual door names",
   "Record supported drop files",
-  "Test at least one door with DOSBox runner"
+  "Test at least one door with DOSEMU2 runner"
 ]
 ```
 
@@ -445,19 +445,19 @@ These are useful for OxideBBS implementation research.
 
 ## 10. DoorNode
 
-**Use for:** implementation inspiration for DOSBox-based door launching.
+**Use for:** implementation inspiration for legacy DOS door launching.
 
 Source:
 
 - https://github.com/dinchak/doornode
 
-DoorNode is a Node.js application for launching BBS door games using DOSBox on modern operating systems. It was designed for MajorBBS/WorldGroup via RLogin but is still relevant because it shows how modern systems can wrap old DOS doors.
+DoorNode is a Node.js application for launching BBS door games on modern operating systems. It was designed for MajorBBS/WorldGroup via RLogin but is still relevant because it shows how modern systems can wrap old DOS doors.
 
 Recommended OxideBBS usage:
 
 Study ideas, not code dependencies:
 
-- DOSBox configuration
+- emulator configuration
 - Door launch lifecycle
 - Runtime directory management
 - Debugging approach
@@ -472,13 +472,11 @@ Study ideas, not code dependencies:
 Sources:
 
 - https://github.com/rickparrish/GameSrv
-- https://www.hanselman.com/blog/running-bbs-door-games-on-windows-10-with-gamesrv-dosbox-plus-telnet-fun-with-wsl
-
-GameSrv is a BBS door game server for Windows, and Scott Hanselman wrote about using GameSrv with DOSBox and telnet for BBS door games.
+GameSrv is a BBS door game server for Windows.
 
 Recommended OxideBBS usage:
 
-Use as proof that modern front-end/telnet + DOSBox door execution is a practical approach.
+Use as proof that modern front-end/telnet plus isolated door execution is a practical approach.
 
 ---
 
@@ -558,7 +556,7 @@ The repository describes 32-bit and 64-bit ports of the Usurper BBS doorgame.
 
 Recommended OxideBBS usage:
 
-Investigate license and build/runtime details before recommending as an OxideBBS test door. This may be more useful as a modern native/ported door candidate than as a DOSBox v1 test.
+Investigate license and build/runtime details before recommending as an OxideBBS test door. This may be more useful as a modern native/ported door candidate than as a DOSEMU2 v1 test.
 
 ---
 
@@ -710,7 +708,7 @@ key_source = "archive"
 supported_drop_files = ["DORINFO1.DEF", "DOOR.SYS"]
 preferred_drop_file = "DORINFO1.DEF"
 
-runner = "dosbox"
+runner = "dosemu"
 tested_with_oxidebbs = false
 tested_date = ""
 notes = "Candidate for early OxideBBS door-runner testing."
@@ -819,7 +817,7 @@ oxidebbs doors test <door-key> --user sysop --dry-run
 
 Test with:
 
-- DOSBox runner
+- DOSEMU2 runner
 - One local node
 - Clean disconnect
 - Time-limit enforcement
@@ -849,7 +847,8 @@ Avoid or quarantine doors with:
 - Unclear redistribution terms
 - Installers that modify global paths unexpectedly
 - Door expects direct COM port access only
-- Door requires fossil driver behavior that DOSBox runner does not support yet
+- Door requires FOSSIL driver behavior that the v1 DOSEMU2 COM1 PTY bridge does
+  not provide by itself
 - Door writes to absolute paths outside its configured directory
 
 ## Recommended first OxideBBS test set
@@ -861,7 +860,7 @@ Start small and clean.
 1. **Bob Dalton freeware DOS doors**
    - Source: DoorWare freeware index
    - Why: described as freeware with key codes
-   - Use: DOSBox/drop-file runner testing
+   - Use: DOSEMU2/drop-file runner testing
 
 2. **Sunrise Door collection**
    - Source: SynchroFans/Sunrise references
@@ -927,7 +926,7 @@ docs/
 [[doors]]
 key = "death-by-trivia"
 name = "Death by Trivia"
-runner = "dosbox"
+runner = "dosemu"
 working_dir = "./doors/death-by-trivia"
 command = "DBTRIVIA.EXE"
 drop_file = "DORINFO1.DEF"
@@ -992,8 +991,6 @@ This gives OxideBBS a responsible, contributor-friendly way to support classic B
   - https://github.com/dinchak/doornode
 - GameSrv:
   - https://github.com/rickparrish/GameSrv
-- Hanselman GameSrv/DOSBox/telnet article:
-  - https://www.hanselman.com/blog/running-bbs-door-games-on-windows-10-with-gamesrv-dosbox-plus-telnet-fun-with-wsl
 - ENiGMA½ local doors:
   - https://nuskooler.github.io/enigma-bbs/modding/local-doors.html
 - BBSLink:

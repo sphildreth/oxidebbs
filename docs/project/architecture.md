@@ -30,7 +30,9 @@ Drop File Writer
     |
 Door Runner
     |
-DOS Runtime
+DOSEMU2 Runtime
+    |
+PTY/COM1 Bridge
 ```
 
 ## Constraints
@@ -52,13 +54,29 @@ commands.
 
 ## Menus
 
-Menus are configured as safe key-to-action mappings. Screen assets draw the
-visual menu, while menu entries decide what a pressed key does. The current
-starter config models a login menu, optional post-login screens, and a main
-menu.
+Menus are configured as safe key-to-action mappings. Screen assets draw the visual
+menu, while menu entries decide what a pressed key does. The current implementation
+also includes pure core flows for new-user creation, login state updates, local
+message commands, private mail targeting, moderation state changes, and FTN/OxideNet
+address and packet-boundary models. Door support has tested drop-file
+generation, per-node runtime directories, dry-run planning, DOSEMU2 command
+planning, and DecentDB run logging helpers.
 
-The current implementation also includes pure core flows for new-user creation,
-login state updates, local message commands, private mail targeting, moderation
-state changes, and FTN/OxideNet address and packet-boundary models. Door support
-has tested drop-file generation, per-node runtime directories, dry-run planning,
-DOSBox command planning, and DecentDB run logging helpers.
+## Door byte bridge model
+
+Door launch is separated from caller transport logic.
+
+```text
+caller telnet client
+  <-> OxideBBS caller transport
+  <-> OxideBBS PTY byte bridge
+  <-> DOSEMU2 COM1 pts backend
+  <-> DOSEMU2-emulated COM1 UART
+  <-> DOS door program
+```
+
+OxideBBS owns `Transport` and bridge ownership during door sessions. DOSEMU2
+remains an isolated runtime that receives caller bytes over a host PTY file and
+presents them as COM1 UART bytes. This is not a Rust-hosted FOSSIL driver. A
+DOS-side FOSSIL TSR may be loaded by a specific door if that door requires
+FOSSIL APIs.

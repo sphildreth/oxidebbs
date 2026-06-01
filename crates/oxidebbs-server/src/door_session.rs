@@ -1,9 +1,9 @@
 use std::fs;
-use std::net::SocketAddr;
 use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
 
+use nix::sys::termios::{SetArg, cfmakeraw, tcgetattr, tcsetattr};
 use oxidebbs_core::door::DoorDefinition;
 use oxidebbs_core::user::User;
 use oxidebbs_db::{
@@ -19,8 +19,7 @@ use oxidebbs_door::{
 };
 use oxidebbs_telnet::Transport;
 use oxidebbs_term::encode_cp437;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::process::{Child, Command};
 use tokio::time::{self, Instant as TokioInstant};
 use tracing::warn;
@@ -31,6 +30,8 @@ use crate::serve::{ServeError, ServeResult};
 
 const DOOR_BRIDGE_POLL: Duration = Duration::from_millis(250);
 const DOOR_KILL_WAIT: Duration = Duration::from_secs(2);
+const DOSEMU2_CONFIG_FILE: &str = "OXDOSEMU2.CONF";
+const DOSEMU2_COM1_PTY: &str = "OXCOM1.PTY";
 
 pub(crate) struct DoorService<'a> {
     db: &'a OxideDb,
@@ -67,6 +68,11 @@ pub(crate) enum DoorSelection<'a> {
     Return,
     Door(&'a DoorDefinitionRecord),
     Invalid,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Dosemu2ComBridge {
+    pty_path: std::path::PathBuf,
 }
 
 impl<'a> DoorService<'a> {
@@ -235,14 +241,14 @@ impl<'a> DoorService<'a> {
             .map_err(ServeError::Runtime)?;
         let request = self.build_request(user, node_number, door)?;
         let mut plan = prepare_door_run(&request).map_err(door_error)?;
-        let serial_listener = prepare_dosbox_serial_bridge(&mut plan, &request.runtime_dir).await?;
+        let com_bridge = prepare_dosemu2_com1_bridge(&mut plan, &request.runtime_dir)?;
         let run_id = self.insert_started_run(door, user, node_number)?;
 
         let mut command = Command::new(&plan.program);
         command
             .args(&plan.args)
             .current_dir(&plan.working_dir)
-            .stdin(Stdio::null())
+            .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
 
@@ -274,7 +280,7 @@ impl<'a> DoorService<'a> {
             runtime,
             node_number,
             child,
-            serial_listener,
+            com_bridge,
             plan.timeout,
         )
         .await;
@@ -528,31 +534,37 @@ pub(crate) fn select_door<'a>(
         .unwrap_or(DoorSelection::Invalid)
 }
 
-async fn prepare_dosbox_serial_bridge(
+fn prepare_dosemu2_com1_bridge(
     plan: &mut DoorRunPlan,
     runtime_dir: &Path,
-) -> ServeResult<TcpListener> {
-    let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
-    let addr = listener.local_addr()?;
-    let config_path = runtime_dir.join("OXDOSBOX.CONF");
-    fs::write(&config_path, dosbox_serial_config(addr))?;
-    add_dosbox_serial_config(plan, &config_path);
-    Ok(listener)
+) -> ServeResult<Dosemu2ComBridge> {
+    let pty_path = runtime_dir.join(DOSEMU2_COM1_PTY);
+    if pty_path.exists() {
+        fs::remove_file(&pty_path)?;
+    }
+    let config_path = runtime_dir.join(DOSEMU2_CONFIG_FILE);
+    fs::write(&config_path, dosemu2_serial_config(&pty_path))?;
+    add_dosemu2_config(plan, &config_path);
+    Ok(Dosemu2ComBridge { pty_path })
 }
 
-fn dosbox_serial_config(addr: SocketAddr) -> String {
+fn dosemu2_serial_config(pty_path: &Path) -> String {
     format!(
-        "[sdl]\nwaitonerror=false\npause_when_inactive=false\nmute_when_inactive=true\n\n[dosbox]\nstartup_verbosity=quiet\n\n[serial]\nserial1=nullmodem server:{} port:{} transparent:1 rxdelay:1000 txdelay:10\n",
-        addr.ip(),
-        addr.port()
+        "$_cpu_vm = \"emulated\"\n$_cpu_vm_dpmi = \"emulated\"\n$_sound = (off)\n$_mouse_internal = (off)\n$_joy_device = \"\"\n$_pktdriver = (off)\n$_tcpdriver = (off)\n$_ttylocks = \"\"\n$_com1 = \"pts {}\"\n",
+        escape_dosemu2_config_path(pty_path)
     )
 }
 
-fn add_dosbox_serial_config(plan: &mut DoorRunPlan, config_path: &Path) {
-    let mut args = Vec::with_capacity(plan.args.len() + 5);
-    args.push("--noprimaryconf".to_string());
-    args.push("--nolocalconf".to_string());
-    args.push("--conf".to_string());
+fn escape_dosemu2_config_path(path: &Path) -> String {
+    path.display()
+        .to_string()
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+}
+
+fn add_dosemu2_config(plan: &mut DoorRunPlan, config_path: &Path) {
+    let mut args = Vec::with_capacity(plan.args.len() + 2);
+    args.push("-f".to_string());
     args.push(config_path.display().to_string());
     args.append(&mut plan.args);
     plan.args = args;
@@ -563,17 +575,17 @@ pub(crate) async fn run_door_bridge<T: Transport>(
     runtime: &ServerRuntime,
     node_number: u16,
     mut child: Child,
-    listener: TcpListener,
+    com_bridge: Dosemu2ComBridge,
     timeout: Duration,
 ) -> ServeResult<DoorBridgeResult> {
     let deadline = TokioInstant::now() + timeout;
     let mut result = DoorBridgeResult::default();
-    let serial = wait_for_serial_connection(
+    let serial = wait_for_com1_pty(
         transport,
         runtime,
         node_number,
         &mut child,
-        listener,
+        &com_bridge,
         deadline,
         &mut result,
     )
@@ -596,19 +608,23 @@ pub(crate) async fn run_door_bridge<T: Transport>(
     Ok(result)
 }
 
-async fn wait_for_serial_connection<T: Transport>(
+async fn wait_for_com1_pty<T: Transport>(
     transport: &mut T,
     runtime: &ServerRuntime,
     node_number: u16,
     child: &mut Child,
-    listener: TcpListener,
+    com_bridge: &Dosemu2ComBridge,
     deadline: TokioInstant,
     result: &mut DoorBridgeResult,
-) -> ServeResult<Option<TcpStream>> {
+) -> ServeResult<Option<tokio::fs::File>> {
     loop {
         if let Some(status) = child.try_wait()? {
             result.exit_code = status.code();
             return Ok(None);
+        }
+        if com_bridge.pty_path.exists() {
+            runtime.heartbeat_node(node_number);
+            return Ok(Some(open_com1_pty(&com_bridge.pty_path)?));
         }
 
         let timeout_sleep = time::sleep_until(deadline);
@@ -626,11 +642,6 @@ async fn wait_for_serial_connection<T: Transport>(
             _ = &mut poll_sleep => {
                 runtime.heartbeat_node(node_number);
             }
-            accepted = listener.accept() => {
-                let (serial, _peer) = accepted?;
-                runtime.heartbeat_node(node_number);
-                return Ok(Some(serial));
-            }
             commands = runtime.wait_for_node_commands(node_number) => {
                 for message in commands.messages {
                     write_bridge_message(transport, &message, result).await?;
@@ -647,16 +658,45 @@ async fn wait_for_serial_connection<T: Transport>(
     }
 }
 
-async fn bridge_connected_serial<T: Transport>(
+fn open_com1_pty(path: &Path) -> ServeResult<tokio::fs::File> {
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .map_err(|error| {
+            ServeError::Runtime(format!(
+                "failed to open DOSEMU2 COM1 PTY {}: {error}",
+                path.display()
+            ))
+        })?;
+    set_raw_mode(&file)?;
+    Ok(tokio::fs::File::from_std(file))
+}
+
+fn set_raw_mode(file: &fs::File) -> ServeResult<()> {
+    let mut termios = tcgetattr(file).map_err(|error| {
+        ServeError::Runtime(format!("failed to read DOSEMU2 COM1 PTY mode: {error}"))
+    })?;
+    cfmakeraw(&mut termios);
+    tcsetattr(file, SetArg::TCSANOW, &termios).map_err(|error| {
+        ServeError::Runtime(format!("failed to set DOSEMU2 COM1 PTY raw mode: {error}"))
+    })
+}
+
+async fn bridge_connected_serial<T, S>(
     transport: &mut T,
     runtime: &ServerRuntime,
     node_number: u16,
     child: &mut Child,
-    serial: TcpStream,
+    serial: S,
     deadline: TokioInstant,
     result: &mut DoorBridgeResult,
-) -> ServeResult<()> {
-    let (mut serial_reader, mut serial_writer) = serial.into_split();
+) -> ServeResult<()>
+where
+    T: Transport,
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let (mut serial_reader, mut serial_writer) = tokio::io::split(serial);
     let mut serial_buf = [0_u8; 1024];
 
     loop {
@@ -990,40 +1030,36 @@ mod tests {
     }
 
     #[test]
-    fn dosbox_serial_config_maps_com1_to_loopback_bridge() {
-        let addr: std::net::SocketAddr = "127.0.0.1:43210".parse().expect("addr");
+    fn dosemu2_serial_config_maps_com1_to_pty_bridge() {
+        let config = dosemu2_serial_config(Path::new("/tmp/node-001/OXCOM1.PTY"));
 
-        let config = dosbox_serial_config(addr);
-
-        assert!(config.contains("[sdl]"));
-        assert!(config.contains("waitonerror=false"));
-        assert!(config.contains("pause_when_inactive=false"));
-        assert!(config.contains("mute_when_inactive=true"));
-        assert!(config.contains("[dosbox]"));
-        assert!(config.contains("startup_verbosity=quiet"));
-        assert!(config.contains("[serial]"));
-        assert!(config.contains(
-            "serial1=nullmodem server:127.0.0.1 port:43210 transparent:1 rxdelay:1000 txdelay:10"
-        ));
+        assert!(config.contains("$_cpu_vm = \"emulated\""));
+        assert!(config.contains("$_cpu_vm_dpmi = \"emulated\""));
+        assert!(config.contains("$_sound = (off)"));
+        assert!(config.contains("$_mouse_internal = (off)"));
+        assert!(config.contains("$_joy_device = \"\""));
+        assert!(config.contains("$_pktdriver = (off)"));
+        assert!(config.contains("$_tcpdriver = (off)"));
+        assert!(config.contains("$_ttylocks = \"\""));
+        assert!(config.contains("$_com1 = \"pts /tmp/node-001/OXCOM1.PTY\""));
     }
 
     #[test]
-    fn add_dosbox_serial_config_prepends_runtime_conf() {
+    fn add_dosemu2_config_prepends_runtime_conf() {
         let mut plan = DoorRunPlan {
-            program: "dosbox".to_string(),
-            args: vec!["-c".to_string(), "exit".to_string()],
+            program: "dosemu".to_string(),
+            args: vec!["-dumb".to_string(), "-quiet".to_string()],
             working_dir: Path::new("/tmp").to_path_buf(),
             drop_file_path: Path::new("/tmp/DORINFO1.DEF").to_path_buf(),
             timeout: Duration::from_secs(60),
         };
 
-        add_dosbox_serial_config(&mut plan, Path::new("/tmp/OXDOSBOX.CONF"));
+        add_dosemu2_config(&mut plan, Path::new("/tmp/OXDOSEMU2.CONF"));
 
-        assert_eq!(plan.args[0], "--noprimaryconf");
-        assert_eq!(plan.args[1], "--nolocalconf");
-        assert_eq!(plan.args[2], "--conf");
-        assert_eq!(plan.args[3], "/tmp/OXDOSBOX.CONF");
-        assert_eq!(plan.args[4], "-c");
+        assert_eq!(plan.args[0], "-f");
+        assert_eq!(plan.args[1], "/tmp/OXDOSEMU2.CONF");
+        assert_eq!(plan.args[2], "-dumb");
+        assert_eq!(plan.args[3], "-quiet");
     }
 
     #[test]
@@ -1108,10 +1144,7 @@ mod tests {
 
     #[tokio::test]
     async fn bridge_forwards_caller_bytes_and_serial_output() {
-        let listener = TcpListener::bind(("127.0.0.1", 0))
-            .await
-            .expect("serial listener");
-        let addr = listener.local_addr().expect("serial addr");
+        let (serial_bridge, mut serial_peer) = tokio::io::duplex(1024);
         let (mut transport, mut client) = LoopbackTransport::new();
         client.write_bytes(b"hello\n").expect("caller input");
         let runtime = ServerRuntime::new("test".to_string(), 1, 1, 30);
@@ -1123,14 +1156,13 @@ mod tests {
         );
 
         let serial_task = tokio::spawn(async move {
-            let mut serial = TcpStream::connect(addr).await.expect("connect serial");
             let mut input = [0_u8; 6];
-            serial
+            serial_peer
                 .read_exact(&mut input)
                 .await
                 .expect("read caller bytes");
             assert_eq!(&input, b"hello\n");
-            serial
+            serial_peer
                 .write_all(b"serial-ready\r\n")
                 .await
                 .expect("write serial bytes");
@@ -1145,13 +1177,16 @@ mod tests {
             .spawn()
             .expect("spawn sleep helper");
 
-        let result = run_door_bridge(
+        let mut child = child;
+        let mut result = DoorBridgeResult::default();
+        bridge_connected_serial(
             &mut transport,
             &runtime,
             1,
-            child,
-            listener,
-            Duration::from_secs(2),
+            &mut child,
+            serial_bridge,
+            TokioInstant::now() + Duration::from_secs(2),
+            &mut result,
         )
         .await
         .expect("bridge");
@@ -1166,9 +1201,10 @@ mod tests {
 
     #[tokio::test]
     async fn bridge_times_out_and_terminates_child() {
-        let listener = TcpListener::bind(("127.0.0.1", 0))
-            .await
-            .expect("serial listener");
+        let runtime_dir = temp_dir("missing-pty-runtime");
+        let bridge = Dosemu2ComBridge {
+            pty_path: runtime_dir.join(DOSEMU2_COM1_PTY),
+        };
         let (mut transport, _client) = LoopbackTransport::new();
         let runtime = ServerRuntime::new("test".to_string(), 1, 1, 30);
         runtime.mark_node_connected(
@@ -1191,7 +1227,7 @@ mod tests {
             &runtime,
             1,
             child,
-            listener,
+            bridge,
             Duration::from_millis(50),
         )
         .await
@@ -1199,5 +1235,6 @@ mod tests {
 
         assert!(result.timed_out);
         assert!(result.disconnect_forced);
+        let _ = fs::remove_dir_all(runtime_dir);
     }
 }

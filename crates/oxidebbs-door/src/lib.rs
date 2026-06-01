@@ -2,7 +2,7 @@
 
 use std::fs;
 use std::path::{Component, Path, PathBuf};
-use std::process::{Command, ExitStatus};
+use std::process::{Command, ExitStatus, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -109,13 +109,16 @@ impl DoorRunner for DryRunDoorRunner {
 }
 
 #[derive(Debug, Default, Clone)]
-pub struct DosBoxRunner;
+pub struct Dosemu2Runner;
 
-impl DoorRunner for DosBoxRunner {
+impl DoorRunner for Dosemu2Runner {
     fn run(&self, request: &DoorRunRequest) -> Result<DoorRunResult, DoorError> {
         let plan = prepare_door_run(request)?;
         let mut command = Command::new(&plan.program);
-        command.args(&plan.args).current_dir(&plan.working_dir);
+        command
+            .args(&plan.args)
+            .current_dir(&plan.working_dir)
+            .stdin(Stdio::piped());
         run_with_timeout(command, plan.timeout)
     }
 }
@@ -211,10 +214,19 @@ pub fn prepare_door_run(request: &DoorRunRequest) -> Result<DoorRunPlan, DoorErr
         format!("node={}\r\n", request.node_number),
     )?;
 
-    dosbox_plan(request, drop_file_path)
+    dosemu2_plan(request, drop_file_path)
 }
 
-pub fn resolve_dosbox_command(command: &str) -> Result<String, DoorError> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Dosemu2Command {
+    pub executable: PathBuf,
+    pub args: Vec<String>,
+}
+
+pub fn resolve_dosemu2_command(
+    working_dir: &Path,
+    command: &str,
+) -> Result<Dosemu2Command, DoorError> {
     let trimmed = command.trim();
     if trimmed.is_empty() {
         return Err(DoorError::InvalidConfig(
@@ -227,52 +239,79 @@ pub fn resolve_dosbox_command(command: &str) -> Result<String, DoorError> {
         ));
     }
 
-    let mut split = trimmed.splitn(2, |c: char| c.is_ascii_whitespace());
+    let mut split = trimmed.split_ascii_whitespace();
     let command_token = split.next().unwrap_or_default();
-    let args = split.next().unwrap_or_default();
-
     if command_token.contains(':') || command_token.contains('\\') || command_token.contains('/') {
-        if args.is_empty() {
-            return Ok(command_token.to_string());
-        }
-        return Ok(format!("{command_token} {args}"));
+        return Err(DoorError::InvalidConfig(
+            "path-like DOS commands are not supported for DOSEMU2 runs yet; set working_dir and use a DOS 8.3 filename".to_string(),
+        ));
     }
 
-    if args.is_empty() {
-        Ok(command_token.to_string())
-    } else {
-        Ok(format!("{command_token} {args}"))
-    }
+    Ok(Dosemu2Command {
+        executable: normalize_path(working_dir.join(command_token)),
+        args: split.map(ToString::to_string).collect(),
+    })
 }
 
-pub fn dosbox_plan(
+pub fn dosemu2_plan(
     request: &DoorRunRequest,
     drop_file_path: PathBuf,
 ) -> Result<DoorRunPlan, DoorError> {
-    let command = resolve_dosbox_command(&request.door.command)?;
     let working_dir = absolute_host_path(&request.runtime_dir)?;
     let door_working_dir = absolute_host_path(Path::new(&request.door.working_dir))?;
     let runtime_dir = absolute_host_path(&request.runtime_dir)?;
+    let command = resolve_dosemu2_command(&door_working_dir, &request.door.command)?;
+    let runtime_command = stage_dosemu2_command(&runtime_dir, &command)?;
+    let mut dos_command = runtime_command;
+    if !command.args.is_empty() {
+        dos_command.push(' ');
+        dos_command.push_str(&command.args.join(" "));
+    }
+    let args = vec![
+        "-dumb".to_string(),
+        "-quiet".to_string(),
+        "-K".to_string(),
+        runtime_dir.display().to_string(),
+        "-E".to_string(),
+        dos_command,
+    ];
     Ok(DoorRunPlan {
         program: request.door.runner.clone(),
-        args: vec![
-            "-c".to_string(),
-            mount_command("c", &door_working_dir),
-            "-c".to_string(),
-            mount_command("d", &runtime_dir),
-            "-c".to_string(),
-            "path C:\\".to_string(),
-            "-c".to_string(),
-            "d:".to_string(),
-            "-c".to_string(),
-            command,
-            "-c".to_string(),
-            "exit".to_string(),
-        ],
+        args,
         working_dir,
         drop_file_path,
         timeout: Duration::from_secs(u64::from(request.door.time_limit_minutes) * 60),
     })
+}
+
+fn stage_dosemu2_command(
+    runtime_dir: &Path,
+    command: &Dosemu2Command,
+) -> Result<String, DoorError> {
+    fs::create_dir_all(runtime_dir)?;
+    let file_name = command.executable.file_name().ok_or_else(|| {
+        DoorError::InvalidConfig("door command executable must include a filename".to_string())
+    })?;
+    let runtime_executable = runtime_dir.join(file_name);
+    if normalize_path(command.executable.clone()) != normalize_path(runtime_executable.clone()) {
+        if runtime_executable.exists() {
+            fs::remove_file(&runtime_executable)?;
+        }
+        if let Err(link_error) = fs::hard_link(&command.executable, &runtime_executable) {
+            fs::copy(&command.executable, &runtime_executable).map_err(|copy_error| {
+                DoorError::Io(std::io::Error::new(
+                    copy_error.kind(),
+                    format!(
+                        "failed to stage door command {} into runtime {}: hard link failed: {link_error}; copy failed: {copy_error}",
+                        command.executable.display(),
+                        runtime_executable.display()
+                    ),
+                ))
+            })?;
+        }
+    }
+
+    Ok(file_name.to_string_lossy().to_string())
 }
 
 fn absolute_host_path(path: &Path) -> Result<PathBuf, DoorError> {
@@ -298,10 +337,6 @@ fn normalize_path(path: PathBuf) -> PathBuf {
         }
     }
     normalized
-}
-
-fn mount_command(drive: &str, host_path: &Path) -> String {
-    format!("mount {drive} \"{}\"", host_path.display())
 }
 
 fn run_with_timeout(mut command: Command, timeout: Duration) -> Result<DoorRunResult, DoorError> {
@@ -338,7 +373,7 @@ fn split_name(name: &str) -> (String, String) {
 }
 
 fn default_runner() -> String {
-    "dosbox".to_string()
+    "dosemu".to_string()
 }
 
 fn default_drop_file() -> String {
@@ -411,7 +446,7 @@ mod tests {
             id: "door-lord".to_string(),
             key: "lord".to_string(),
             name: "Legend of the Red Dragon".to_string(),
-            runner: "dosbox".to_string(),
+            runner: "dosemu".to_string(),
             working_dir: "./doors/lord".to_string(),
             command: "LORD.EXE".to_string(),
             drop_file: drop_file.to_string(),
@@ -419,6 +454,17 @@ mod tests {
             time_limit_minutes: 1,
             enabled: true,
         }
+    }
+
+    fn door_with_working_dir(drop_file: &str, working_dir: &Path) -> DoorDefinition {
+        let mut door = door(drop_file);
+        door.working_dir = working_dir.display().to_string();
+        door
+    }
+
+    fn write_command_fixture(working_dir: &Path, command_name: &str) {
+        fs::create_dir_all(working_dir).expect("create working dir");
+        fs::write(working_dir.join(command_name), b"fixture command").expect("write command");
     }
 
     #[test]
@@ -469,8 +515,10 @@ command = "LORD.EXE"
     fn dry_run_writes_drop_file_and_finishes_successfully() {
         let base = temp_path("dry-run");
         let runtime_dir = prepare_node_runtime_dir(&base, 1).expect("runtime");
+        let working_dir = base.join("door-files");
+        write_command_fixture(&working_dir, "LORD.EXE");
         let request = DoorRunRequest {
-            door: door("DOOR.SYS"),
+            door: door_with_working_dir("DOOR.SYS", &working_dir),
             caller: caller(),
             node_number: 1,
             runtime_dir: runtime_dir.clone(),
@@ -488,8 +536,10 @@ command = "LORD.EXE"
     fn dry_run_writes_oxnode_txt() {
         let base = temp_path("dry-run-node");
         let runtime_dir = prepare_node_runtime_dir(&base, 1).expect("runtime");
+        let working_dir = base.join("door-files");
+        write_command_fixture(&working_dir, "LORD.EXE");
         let request = DoorRunRequest {
-            door: door("DOOR.SYS"),
+            door: door_with_working_dir("DOOR.SYS", &working_dir),
             caller: caller(),
             node_number: 1,
             runtime_dir: runtime_dir.clone(),
@@ -506,128 +556,109 @@ command = "LORD.EXE"
     }
 
     #[test]
-    fn dosbox_plan_mounts_door_working_directory_as_c_and_runtime_as_d() {
-        let cwd = std::env::current_dir().expect("current dir");
-        let expected_door_dir = cwd.join("doors/lord");
-        let expected_runtime_dir = cwd.join("runtime/node-001");
+    fn dosemu2_plan_stages_command_into_runtime() {
+        let base = temp_path("dosemu2-plan");
+        let door_dir = base.join("doors/lord");
+        let runtime_dir = base.join("runtime/node-001");
+        write_command_fixture(&door_dir, "LORD.EXE");
         let request = DoorRunRequest {
-            door: door("DORINFO1.DEF"),
+            door: door_with_working_dir("DORINFO1.DEF", &door_dir),
             caller: caller(),
             node_number: 1,
-            runtime_dir: PathBuf::from("./runtime/node-001"),
+            runtime_dir: runtime_dir.clone(),
         };
-        let plan =
-            dosbox_plan(&request, PathBuf::from("./runtime/node-001/DORINFO1.DEF")).expect("plan");
+        let plan = dosemu2_plan(&request, runtime_dir.join("DORINFO1.DEF")).expect("plan");
+        let expected_runtime_dir = absolute_host_path(&runtime_dir).expect("runtime abs");
 
-        let command_windows = plan.args.windows(2).enumerate().collect::<Vec<_>>();
-        let mount_c = command_windows
-            .iter()
-            .find(|(_, window)| window[0] == "-c" && window[1].starts_with("mount c "))
-            .map(|(idx, _window)| *idx);
-        let mount_d = command_windows
-            .iter()
-            .find(|(_, window)| window[0] == "-c" && window[1].starts_with("mount d "))
-            .map(|(idx, _window)| *idx);
-        let switch_d = command_windows
-            .iter()
-            .find(|(_, window)| window[0] == "-c" && window[1] == "d:")
-            .map(|(idx, _)| *idx);
-        let path_c = command_windows
-            .iter()
-            .find(|(_, window)| window[0] == "-c" && window[1] == "path C:\\")
-            .map(|(idx, _)| *idx);
-        let command_arg = command_windows
-            .iter()
-            .find(|(_, window)| window[0] == "-c" && window[1] == "LORD.EXE")
-            .map(|(_, window)| window[1].as_str());
-
-        assert_eq!(plan.program, "dosbox");
-        let mount_c_idx = mount_c.expect("expected mount c command pair");
-        let mount_d_idx = mount_d.expect("expected mount d command pair");
-        let path_c_idx = path_c.expect("expected path c command pair");
-        let switch_d_idx = switch_d.expect("expected d: switch command pair");
-        let command_arg = command_arg.expect("expected resolved DOS command");
-        assert_eq!(
-            plan.args[mount_c_idx + 1],
-            format!("mount c \"{}\"", expected_door_dir.display())
-        );
-        assert_eq!(
-            plan.args[mount_d_idx + 1],
-            format!("mount d \"{}\"", expected_runtime_dir.display())
-        );
-        assert_eq!(plan.args[path_c_idx + 1], "path C:\\");
-        assert_eq!(plan.args[switch_d_idx + 1], "d:");
-        assert!(mount_c_idx < mount_d_idx);
-        assert!(mount_d_idx < path_c_idx);
-        assert!(path_c_idx < switch_d_idx);
-        assert_eq!(command_arg, "LORD.EXE");
+        assert_eq!(plan.program, "dosemu");
+        assert_eq!(plan.args[0], "-dumb");
+        assert_eq!(plan.args[1], "-quiet");
+        assert_eq!(plan.args[2], "-K");
+        assert_eq!(plan.args[3], expected_runtime_dir.display().to_string());
+        assert_eq!(plan.args[4], "-E");
+        assert_eq!(plan.args[5], "LORD.EXE");
         assert_eq!(plan.working_dir, expected_runtime_dir);
         assert_eq!(plan.timeout, Duration::from_secs(60));
+        assert!(runtime_dir.join("LORD.EXE").is_file());
+
+        cleanup_node_runtime_dir(&base).expect("cleanup");
     }
 
     #[test]
-    fn dosbox_plan_uses_configured_runner_program() {
+    fn dosemu2_plan_uses_configured_runner_program() {
+        let base = temp_path("dosemu2-plan-runner");
+        let door_dir = base.join("doors/lord");
+        let runtime_dir = base.join("runtime/node-001");
+        write_command_fixture(&door_dir, "LORD.EXE");
         let mut door = door("DOOR.SYS");
-        door.runner = "/opt/dosbox-staging/dosbox".to_string();
+        door.runner = "/opt/dosemu2/bin/dosemu".to_string();
+        door.working_dir = door_dir.display().to_string();
         let request = DoorRunRequest {
             door,
             caller: caller(),
             node_number: 1,
-            runtime_dir: PathBuf::from("./runtime/node-001"),
+            runtime_dir: runtime_dir.clone(),
         };
 
-        let plan =
-            dosbox_plan(&request, PathBuf::from("./runtime/node-001/DOOR.SYS")).expect("plan");
+        let plan = dosemu2_plan(&request, runtime_dir.join("DOOR.SYS")).expect("plan");
 
-        assert_eq!(plan.program, "/opt/dosbox-staging/dosbox");
+        assert_eq!(plan.program, "/opt/dosemu2/bin/dosemu");
+
+        cleanup_node_runtime_dir(&base).expect("cleanup");
     }
 
     #[test]
-    fn dosbox_plan_resolves_bare_command_through_path() {
+    fn dosemu2_plan_resolves_bare_command_through_working_dir() {
+        let base = temp_path("dosemu2-plan-command");
+        let door_dir = base.join("doors/lord");
+        let runtime_dir = base.join("runtime/node-001");
+        write_command_fixture(&door_dir, "OXIDECHK.EXE");
         let request = DoorRunRequest {
             door: {
                 let mut command_door = door("DORINFO1.DEF");
+                command_door.working_dir = door_dir.display().to_string();
                 command_door.command = "OXIDECHK.EXE".to_string();
                 command_door
             },
             caller: caller(),
             node_number: 1,
-            runtime_dir: PathBuf::from("./runtime/node-001"),
+            runtime_dir: runtime_dir.clone(),
         };
-        let plan =
-            dosbox_plan(&request, PathBuf::from("./runtime/node-001/DORINFO1.DEF")).expect("plan");
+        let plan = dosemu2_plan(&request, runtime_dir.join("DORINFO1.DEF")).expect("plan");
 
-        let command = plan
-            .args
-            .iter()
-            .find(|arg| arg.contains("OXIDECHK.EXE"))
-            .expect("missing command arg");
-        assert_eq!(command, "OXIDECHK.EXE");
+        assert_eq!(plan.args[5], "OXIDECHK.EXE");
+        assert!(runtime_dir.join("OXIDECHK.EXE").is_file());
+
+        cleanup_node_runtime_dir(&base).expect("cleanup");
     }
 
     #[test]
-    fn resolve_dosbox_command_preserves_bare_token() {
+    fn resolve_dosemu2_command_preserves_bare_token_and_args() {
+        let working_dir = Path::new("/doors/lord");
+        let resolved = resolve_dosemu2_command(working_dir, "LORD.EXE /N1").expect("resolved");
         assert_eq!(
-            resolve_dosbox_command("LORD.EXE /N1").expect("resolved"),
-            "LORD.EXE /N1"
+            resolved.executable,
+            Path::new("/doors/lord").join("LORD.EXE")
         );
+        assert_eq!(resolved.args, vec!["/N1"]);
     }
 
     #[test]
-    fn resolve_dosbox_command_preserves_path_like_token() {
-        assert_eq!(
-            resolve_dosbox_command("C:\\LORD\\START.BAT").expect("resolved"),
-            "C:\\LORD\\START.BAT"
-        );
-        assert_eq!(
-            resolve_dosbox_command("UTILS\\DOOR.EXE").expect("resolved"),
-            "UTILS\\DOOR.EXE"
-        );
+    fn resolve_dosemu2_command_rejects_path_like_token() {
+        let error = resolve_dosemu2_command(Path::new("/doors/lord"), "C:\\LORD\\START.BAT")
+            .expect_err("expected error");
+        match error {
+            DoorError::InvalidConfig(message) => {
+                assert!(message.contains("path-like DOS commands are not supported"));
+            }
+            _ => panic!("unexpected error variant"),
+        }
     }
 
     #[test]
-    fn resolve_dosbox_command_rejects_quoted_command() {
-        let error = resolve_dosbox_command("\"C:\\LORD\\START.BAT\"").expect_err("expected error");
+    fn resolve_dosemu2_command_rejects_quoted_command() {
+        let error = resolve_dosemu2_command(Path::new("/doors/lord"), "\"START.BAT\"")
+            .expect_err("expected error");
         match error {
             DoorError::InvalidConfig(message) => {
                 assert!(message.contains("quoted DOS commands are not supported"));
@@ -666,8 +697,10 @@ command = "LORD.EXE"
     fn prepare_door_run_writes_dorinfo1_def_into_runtime_dir() {
         let base = temp_path("runtime-dorinfo");
         let runtime_dir = prepare_node_runtime_dir(&base, 1).expect("runtime");
+        let working_dir = base.join("door-files");
+        write_command_fixture(&working_dir, "LORD.EXE");
         let request = DoorRunRequest {
-            door: door("DORINFO1.DEF"),
+            door: door_with_working_dir("DORINFO1.DEF", &working_dir),
             caller: caller(),
             node_number: 1,
             runtime_dir: runtime_dir.clone(),
@@ -684,8 +717,10 @@ command = "LORD.EXE"
     fn prepare_door_run_writes_door_sys_into_runtime_dir() {
         let base = temp_path("runtime-doorsys");
         let runtime_dir = prepare_node_runtime_dir(&base, 1).expect("runtime");
+        let working_dir = base.join("door-files");
+        write_command_fixture(&working_dir, "LORD.EXE");
         let request = DoorRunRequest {
-            door: door("DOOR.SYS"),
+            door: door_with_working_dir("DOOR.SYS", &working_dir),
             caller: caller(),
             node_number: 1,
             runtime_dir: runtime_dir.clone(),

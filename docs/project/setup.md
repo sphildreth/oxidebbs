@@ -127,64 +127,47 @@ cargo run -p oxidebbs-server -- --config config/oxidebbs.toml doors dropfile oxi
 cargo run -p oxidebbs-server -- --config config/oxidebbs.toml doors test oxide-check --user sysop --dry-run
 ```
 
-Dry-run verifies drop-file generation without requiring DOSBox.
+Dry-run verifies drop-file generation without requiring DOSEMU2.
 
 Before first live test:
 
-1. Install DOSBox.
-2. Enable `oxide-check` in the config if it is disabled.
-3. Run:
+1. Install your distribution's DOSEMU2 package on the host. The executable is
+   commonly named `dosemu`, but legacy `dosemu-1.x` is not supported because it
+   does not accept OxideBBS's run-local `pts <path>` COM1 mapping:
+
+```bash
+dosemu --version
+```
+
+2. Confirm `/dev/pts` is available when running in Debian 13 LXC:
+
+```bash
+test -d /dev/pts && ls -ld /dev/pts
+```
+
+3. Enable `oxide-check` in the config if it is disabled.
+4. Run:
 
 ```bash
 cargo run -p oxidebbs-server -- --config config/oxidebbs.toml check
 ```
 
-4. Run live smoke test after starting `serve` and connecting as a caller:
+5. Start `serve`, connect as a caller, and launch the test door from the `Doors`
+menu.
 
-```bash
-cargo run -p oxidebbs-server -- --config config/oxidebbs.toml serve
-```
-
-From a BBS caller session: navigate to the Doors menu and launch the test door.
 The corrected v1 model is:
 
 ```text
 caller telnet client
   <-> OxideBBS caller transport
-  <-> run-local 127.0.0.1 TCP bridge
-  <-> DOSBox nullmodem serial backend
-  <-> DOSBox-emulated COM1 UART
+  <-> OxideBBS PTY byte bridge
+  <-> DOSEMU2 COM1 pts backend
+  <-> DOSEMU2-emulated COM1 UART
   <-> DOS door program
 ```
 
-The bridge is local loopback:
-
-```text
-serial1=nullmodem server:127.0.0.1 port:<bridge_port> transparent:1 rxdelay:1000 txdelay:10
-```
-
-The generated DOSBox config is quiet by default:
-
-```ini
-[sdl]
-waitonerror=false
-pause_when_inactive=false
-mute_when_inactive=true
-
-[dosbox]
-startup_verbosity=quiet
-```
-
-These settings suppress DOSBox startup noise and avoid inactive-window pauses,
-but they do not make DOSBox truly headless. For server hosts that should not
-show a DOSBox window, install Xvfb and configure the door runner with an absolute
-path to `scripts/run-dosbox-headless.sh`.
-
-OxideBBS receives caller telnet bytes, writes them to the bridge socket, and
-DOSBox exposes them to the door as COM1 input. Door output follows the same path
-in reverse: the door writes to COM1, DOSBox sends those bytes to the bridge
-socket, and OxideBBS writes them to the caller telnet connection. The caller can
-run the test door only when DOSBox can successfully start the serial endpoint.
+DOSEMU2 uses `$_com1 = "pts <runtime>/OXCOM1.PTY"` and writes per-run settings
+into `OXDOSEMU2.CONF` in the node runtime directory.
 
 Success criteria for the live smoke test:
 
@@ -195,7 +178,8 @@ Success criteria for the live smoke test:
 
 Notes:
 
-- Maintainership-only rebuild of `OXIDECHK.EXE` requires Free Pascal and the
-  staged `i8086-msdos` toolchain.
-- Normal sysop validation, dry-run validation, and live sysop testing do **not** require
-  Free Pascal or `i8086-msdos`.
+- Maintainers only need Free Pascal and the staged `i8086-msdos` toolchain when
+generating `tools/doors/oxide-door-check/src/oxidechk.pas`.
+- Normal sysop validation, dry-run validation, and live sysop testing do **not**
+require Free Pascal or `i8086-msdos`.
+- This DOSEMU2 model requires no GUI server, display server, or SDL window.

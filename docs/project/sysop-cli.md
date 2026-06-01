@@ -23,8 +23,8 @@ Global options:
 JSON outputs are stable objects for `--json`:
 
 - `status`
-- `users list`
 - `nodes list`
+- `users list`
 - `messages areas list`
 - `doors list`
 - `db stats`
@@ -93,7 +93,8 @@ cargo run -p oxidebbs-server -- --config config/oxidebbs.toml serve
 - local control socket listener at `runtime/oxidebbs-control.sock` (Unix only)
 
 When `runtime/oxidebbs-control.sock` already exists and is actively bound by a
-running process, startup exits with a clear error instead of entering offline mode.
+running process, startup exits with a clear error instead of entering offline
+mode.
 
 ## Local control socket behavior (Unix)
 
@@ -148,12 +149,12 @@ Meaning:
 - `--dry-run` generates drop files and validates input without launching a child.
 - Live interactive DOS door testing requires a caller session. Start `serve`,
   connect over telnet, and launch the door from the caller `Doors` menu.
-- The bundled test door is `oxide-check` (`OXIDECHK.EXE`) for validating the DOSBox
-  path and door runtime contract.
+- The bundled test door is `oxide-check` (`OXIDECHK.EXE`) for validating the
+  DOSEMU2 serial runtime bridge.
 - Enabled configured doors are the only ones selectable by live caller menu.
-- Live launch writes drop files in the node runtime directory, tracks `door_runs`,
-  records `door_started`/`door_finished`/`door_timed_out` events, and returns
-  the caller to menu on completion or timeout.
+- Live launch writes drop files in the node runtime directory, tracks
+  `door_started`/`door_finished`/`door_timed_out` events, and returns the caller
+  to the menu on completion or timeout.
 
 Recommended smoke-test flow:
 
@@ -165,18 +166,16 @@ cargo run -p oxidebbs-server -- --config config/oxidebbs.example.toml doors test
 
 Live test expectation:
 
-- DOSBox receives a run-local config with
-  `serial1=nullmodem server:127.0.0.1 port:<bridge_port> transparent:1 rxdelay:1000 txdelay:10`.
-- DOSBox also receives quiet runtime settings:
-  `startup_verbosity=quiet`, `waitonerror=false`, `pause_when_inactive=false`,
-  and `mute_when_inactive=true`.
+- DOSEMU2 receives run-local `OXDOSEMU2.CONF` containing `$_com1 =
+  "pts <runtime>/node-001/OXCOM1.PTY"`.
+- DOSEMU2 receives container-safe runtime settings in the generated config.
 - The door believes it is reading and writing `COM1`; it is not reading from
-  DOSBox console stdin/stdout.
-- OxideBBS receives caller telnet bytes and forwards them to the run-local TCP
-  bridge. DOSBox converts those bridge bytes into COM1 input for the door.
-- Door output follows the reverse path: COM1 output becomes DOSBox nullmodem TCP
-  bytes, OxideBBS reads them from the bridge, and OxideBBS writes them to the
-  caller's telnet connection.
+  DOSEMU2 console stdio.
+- OxideBBS receives caller telnet bytes and forwards them to the PTY bridge. DOSEMU2
+  converts those bridge bytes into COM1 UART input for the door.
+- Door output follows the reverse path: COM1 output goes through the DOSEMU2 PTY,
+  OxideBBS reads it from the bridge, and writes to the caller's telnet
+  connection.
 - On a clean run, `OXNODE.TXT` and `OXIDECHK.RPT` should be written to the node
   runtime directory and include matching node metadata.
 
@@ -185,23 +184,23 @@ Byte path:
 ```text
 caller telnet client
   <-> OxideBBS caller transport
-  <-> run-local 127.0.0.1 TCP bridge
-  <-> DOSBox nullmodem serial backend
-  <-> DOSBox-emulated COM1 UART
+  <-> OxideBBS PTY byte bridge
+  <-> DOSEMU2 COM1 pts backend
+  <-> DOSEMU2-emulated COM1 UART
   <-> DOS door program
 ```
 
-- `doors dropfile ...` and `doors test ... --dry-run` generate `DORINFO1.DEF`,
-  `DOOR.SYS` when requested by command, and the Oxide diagnostic `OXNODE.TXT`
-  beside the drop files.
-- Live execution requires DOSBox and the serial bridge; it should return a clear missing-runner
-  or bridge-start error when either component is unavailable.
-- To run DOSBox without a visible SDL window, install Xvfb and configure the
-  door runner as an absolute path to `scripts/run-dosbox-headless.sh`, or put
-  that wrapper on `PATH`.
+Live execution requires DOSEMU2 and the PTY bridge; it should return a clear
+missing-runner or bridge-start error when unavailable.
 
-`nodes disconnect <n>` also closes an active door bridge for that node before
-normal disconnect cleanup.
+If caller sessions should exit a running door on system restart, use `nodes
+disconnect <n>` which closes an active bridge before normal disconnect cleanup.
+
+Optional DOSEMU2 smoke script:
+
+```bash
+OXIDE_DOOR_INTERACTIVE=1 ./scripts/test-oxide-door-dosemu2.sh
+```
 
 ## Database operations
 

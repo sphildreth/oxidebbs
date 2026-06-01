@@ -27,27 +27,27 @@ cargo run -p oxidebbs-server -- --config /etc/oxidebbs/oxidebbs.toml check
 cargo run -p oxidebbs-server -- --config /etc/oxidebbs/oxidebbs.toml serve
 ```
 
-4. Install DOSBox on hosts that will launch DOS doors:
+4. Install your distribution's DOSEMU2 package on hosts that will launch DOS
+   doors. The executable is commonly named `dosemu`, but legacy `dosemu-1.x` is
+   not supported because it does not accept OxideBBS's run-local
+   `pts <path>` COM1 mapping:
 
 ```bash
-sudo apt-get install -y dosbox
+dosemu --version
 ```
 
-For hosts that should run DOSBox without a visible SDL window, also install
-Xvfb and configure door definitions to use the headless wrapper:
+`DOSEMU2` in the v1 path is headless and does not need SDL or a display server.
+
+In Debian 13 Proxmox LXC deployments:
+
+- ensure `/dev/pts` is mounted and writable in the container,
+- verify DOSEMU2 sees a PTY path by checking `/dev/pts`,
+- prefer unprivileged LXC when policy allows it, because DOSEMU2 is not tied to
+  privileged-only settings for this model.
 
 ```bash
-sudo apt-get install -y xvfb
+test -d /dev/pts && ls -ld /dev/pts
 ```
-
-```toml
-runner = "/path/to/oxidebbs/scripts/run-dosbox-headless.sh"
-```
-
-Use an absolute wrapper path or place the wrapper on `PATH`; live door processes
-run from the node runtime directory. The wrapper still launches DOSBox, but does
-so under `xvfb-run` with dummy SDL audio. OxideBBS continues to pass the same
-run-local DOSBox config and COM1 bridge arguments.
 
 5. Validate and dry-run the bundled test door:
 
@@ -57,34 +57,27 @@ cargo run -p oxidebbs-server -- --config /etc/oxidebbs/oxidebbs.toml doors dropf
 cargo run -p oxidebbs-server -- --config /etc/oxidebbs/oxidebbs.toml doors test oxide-check --user sysop --dry-run
 ```
 
-6. To run a live smoke test, keep DOSBox installed, enable `oxide-check` in the
-   active config, start the server, and launch `oxide-check` from the caller
-   `Doors` menu.
-
-Confirm the process uses the local COM1 serial bridge path:
-
-- `DOSBox` starts with
-  `serial1=nullmodem server:127.0.0.1 port:<bridge_port> transparent:1 rxdelay:1000 txdelay:10`
-  for this run.
-- DOSBox receives quiet runtime settings:
-  `startup_verbosity=quiet`, `waitonerror=false`, `pause_when_inactive=false`,
-  and `mute_when_inactive=true`.
-- the Rust TCP bridge accepts the local bridge connection,
-- caller telnet bytes are forwarded by OxideBBS to the bridge socket and appear
-  to the door as COM1 input, and
-- door output written to COM1 returns through DOSBox and OxideBBS to the caller's
-  telnet session.
+6. To run a live smoke test, keep DOSEMU2 installed, enable `oxide-check` in the
+active config, start the server, and launch `oxide-check` from the caller `Doors`
+menu.
 
 The deployed byte path is:
 
 ```text
 caller telnet client
   <-> OxideBBS caller transport
-  <-> run-local 127.0.0.1 TCP bridge
-  <-> DOSBox nullmodem serial backend
-  <-> DOSBox-emulated COM1 UART
+  <-> OxideBBS PTY byte bridge
+  <-> DOSEMU2 COM1 pts backend
+  <-> DOSEMU2-emulated COM1 UART
   <-> DOS door program
 ```
+
+Live launch should produce per-node runtime data and report files under
+`runtime/node-001/`:
+
+- `OXDOSEMU2.CONF` is generated with `$_com1 = "pts .../node-001/OXCOM1.PTY"`
+- `OXCOM1.PTY` appears while the door is active
+- bridge ownership remains with OxideBBS, not by a serial daemon
 
 7. Verify health:
 
@@ -93,9 +86,13 @@ cargo run -p oxidebbs-server -- --config /etc/oxidebbs/oxidebbs.toml status
 cargo run -p oxidebbs-server -- --config /etc/oxidebbs/oxidebbs.toml nodes list
 ```
 
-Live launch requires DOSBox and a functioning serial bridge listener. If DOSBox or
-the bridge endpoint cannot start, the launch fails with a clear external-runner or
-bridge-start error rather than a hidden internal panic.
+Live launch fails clearly when:
+
+- `dosemu` is missing,
+- the per-node PTY path never appears,
+- the node runtime directory is not writable,
+- the caller disconnects before the door exits,
+- or the runtime timeout triggers and closes the child.
 
 ## Native build prerequisites
 
@@ -139,8 +136,8 @@ systemctl start oxidebbs
   `stale`.
 - `nodes reset-stale` asks the live runtime to disconnect stale nodes through the
   local control socket.
-- `status` reports uptime from the live listener when available; otherwise marks
-  it unavailable.
+- `status` reports uptime from the live listener when available; otherwise marks it
+  unavailable.
 
 ## Service layout examples
 
@@ -167,8 +164,8 @@ WantedBy=multi-user.target
 
 ## Documentation site deployment
 
-The documentation site is independent of the runtime. Build and publish with VitePress
-using existing GitHub workflow configuration:
+The documentation site is independent of the runtime. Build and publish with
+VitePress using existing GitHub workflow configuration:
 
 ```bash
 npm ci

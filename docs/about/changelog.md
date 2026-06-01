@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Added Oxide-owned DOS test door documentation and example configuration:
   `oxide-check` (`OXIDECHK.EXE`) in `config/doors.example.toml` and
-  disabled by default in `config/oxidebbs.example.toml` to avoid requiring DOSBox
+  disabled by default in `config/oxidebbs.example.toml` to avoid requiring DOSEMU2
   for untouched setups.
 - Added live caller door launching from the configured `Doors` menu, including
   enabled-door listing, key/number selection, selected-door validation, drop-file
@@ -20,8 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added runtime submenu menu navigation for configured `submenu` menu entries so
   callers can move into nested menus without placeholder fallback text.
 - Added a server-side interactive door bridge that forwards caller bytes through
-  a run-local TCP serial bridge to DOSBox `COM1`, enforces timeouts, handles
-  sysop disconnects, cleans node runtime directories, and reports live nodes as
+  a run-local DOSEMU2 COM1 PTY bridge, enforces timeouts, handles sysop
+  disconnects, cleans node runtime directories, and reports live nodes as
   `in_door` while active.
 - Added graceful server lifecycle handling in `oxidebbs-server::run`: startup and
   shutdown signals now stop listener acceptance and request active caller disconnects
@@ -34,20 +34,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Documented and enforced `db compact` explicit unsupported behavior in this
   release because DecentDB exposes no safe production compaction API.
 - Added a documentation-first Oxide Door Check validation flow (`doors check`,
-  `doors dropfile`, and `doors test --dry-run`) and live testing guidance via DOSBox
+  `doors dropfile`, and `doors test --dry-run`) and live testing guidance via DOSEMU2
   for the caller `Doors` menu path.
-- Clarified v1 door test modeling to validate `OXIDECHK.EXE` through a local
-  per-door Rust TCP serial bridge using DOSBox
-  `serial1=nullmodem server:127.0.0.1 port:<bridge_port> transparent:1 rxdelay:1000 txdelay:10` and
+- Clarified v1 door test modeling to validate `OXIDECHK.EXE` through a
+  per-door DOSEMU2 `COM1` PTY bridge using `$_com1 = "pts .../OXCOM1.PTY"` and
   COM1 UART-style I/O.
-- Added an opt-in `scripts/test-oxide-door-dosbox.sh` smoke test for maintainers
-  that drives `OXIDECHK.EXE` over the DOSBox COM1 bridge and verifies
+- Added an opt-in `scripts/test-oxide-door-dosemu2.sh` smoke test for maintainers
+  that drives `OXIDECHK.EXE` over the DOSEMU2 COM1 PTY bridge and verifies
   `OXIDECHK.RPT` creation.
-- Added `scripts/run-dosbox-headless.sh` as an optional Xvfb wrapper for sysops
-  who want live DOS doors to run without a visible DOSBox window.
-- Added a phased DOSBox-to-DOSEMU2 refactor plan and ADRs documenting DOSEMU2 as
-  the intended v1 DOS door runtime, including the decision to remove DOSBox
-  before v1 instead of carrying parallel runners.
+- Added ADRs and a phased refactor plan documenting DOSEMU2 as the v1 DOS door
+  runtime.
 
 ### Changed
 
@@ -73,7 +69,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added authoritative live node runtime states, heartbeat ages, stale detection,
   and live `nodes reset-stale` handling through the control socket.
 - Door run finalization now persists byte counters, and door command planning
-  uses the configured runner executable instead of hard-coding `dosbox`.
+  uses the configured runner executable instead of hard-coding a runner.
 - Hardened CLI automation by normalizing `--json` output for:
   `status`, `users list`, `nodes list`, `messages areas list`, `doors list`, and
   `db stats` into stable top-level objects.
@@ -92,18 +88,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CLI `doors test <key> --user <alias>` now requires `--dry-run`; live
   interactive DOS door validation runs through a real caller session so the
   COM1 serial bridge is exercised.
-- Clarified that normal Rust build and validation remain independent of DOSBox and
+- Clarified that normal Rust build and validation remain independent of DOSEMU2 and
   maintainer-only Free Pascal rebuild tooling.
 - Clarified user-facing door documentation with the exact telnet-to-OxideBBS-to-
-  DOSBox-COM1 byte path used by live DOS door sessions.
-- Live DOSBox door runs now receive quiet runtime settings
-  (`startup_verbosity=quiet`, `waitonerror=false`, `pause_when_inactive=false`,
-  and `mute_when_inactive=true`) in the generated per-node DOSBox config.
+  DOSEMU2-COM1 byte path used by live DOS door sessions.
+- Live DOSEMU2 door runs now receive container-safe runtime settings
+  (`$_cpu_vm = "emulated"`, `$_cpu_vm_dpmi = "emulated"`, sound disabled, and
+  network packet/TCP drivers disabled) in the generated per-node
+  `OXDOSEMU2.CONF`.
+- The optional DOSEMU2 smoke test now detects legacy `dosemu-1.x` and skips with
+  a clear message instead of timing out while waiting for a COM1 PTY path that
+  legacy DOSEMU cannot create.
+- DOSEMU2 door command planning now stages the configured DOS executable into
+  the node runtime directory and launches it by DOS filename so drop files and
+  report files stay in the per-node runtime. Headless DOSEMU2 launches keep
+  stdin open to avoid `-dumb` keyboard EOF shutdown.
 
 ### Removed
 
 - Removed the legacy top-level `admin` CLI alias group during early development;
   use the direct top-level sysop command groups instead.
+- Removed the temporary DOSBox runner, serial TCP bridge, smoke script, and
+  headless wrapper before v1 in favor of DOSEMU2-only DOS door execution.
 
 ## [0.2.0] - 2026-06-01
 

@@ -61,13 +61,25 @@ Validation checks:
 `check` errors on missing/invalid configuration and reports warnings for optional
 but missing directories or assets.
 
-Install DOSBox before live door testing:
+Install your distribution's DOSEMU2 package before live door testing. The
+runtime executable is commonly named `dosemu`, but legacy `dosemu-1.x` is not
+supported because it does not accept OxideBBS's run-local `pts <path>` COM1
+mapping.
 
 ```bash
-sudo apt-get install -y dosbox
+dosemu --version
 ```
 
-Validate the bundled test door without DOSBox:
+The version output should identify DOSEMU2, not `dosemu-1.x`.
+
+For Debian 13 LXC hosts, verify PTYs are present and writable by the runtime
+user; DOSEMU2 uses this for `COM1` bridging:
+
+```bash
+test -d /dev/pts && ls -ld /dev/pts
+```
+
+Validate the bundled test door without DOSEMU2:
 
 ```bash
 cargo run -p oxidebbs-server -- --config config/oxidebbs.example.toml doors check oxide-check
@@ -79,44 +91,50 @@ Free Pascal (`i8086-msdos`) is only needed when maintaining
 `tools/doors/oxide-door-check/src/oxidechk.pas`. `check`, `dropfile`, and
 `--dry-run` validation do not need it.
 
-The v1 live model does not use DOSBox console I/O. During a caller door session,
+The v1 live model does not use DOS console I/O. During a caller door session,
 OxideBBS pauses normal menu parsing and forwards raw bytes through this path:
 
 ```text
 caller telnet client
   <-> OxideBBS caller transport
-  <-> run-local 127.0.0.1 TCP bridge
-  <-> DOSBox nullmodem serial backend
-  <-> DOSBox-emulated COM1 UART
+  <-> OxideBBS PTY byte bridge
+  <-> DOSEMU2 COM1 pts backend
+  <-> DOSEMU2-emulated COM1 UART
   <-> DOS door program
 ```
 
-OxideBBS starts DOSBox with `COM1` mapped to the run-local bridge:
+OxideBBS starts DOSEMU2 with `COM1` mapped to the per-node PTY path:
 
 ```text
-serial1=nullmodem server:127.0.0.1 port:<bridge_port> transparent:1 rxdelay:1000 txdelay:10
+$_com1 = "pts <absolute/path/to/runtime/node-001/OXCOM1.PTY>"
 ```
 
-OxideBBS also writes quiet DOSBox settings into the run-local config:
-`startup_verbosity=quiet`, `waitonerror=false`, `pause_when_inactive=false`, and
-`mute_when_inactive=true`. These settings keep DOSBox logs and inactive-window
-behavior out of the caller path, but plain DOSBox still creates an SDL window on
-desktop systems.
+Per-run DOSEMU2 config is written to `OXDOSEMU2.CONF` and includes:
 
-For no visible DOSBox window, install Xvfb and point the door runner at the
-headless wrapper. Use an absolute path or put the wrapper on `PATH`, because door
-processes run from the node runtime directory:
-
-```toml
-runner = "/path/to/oxidebbs/scripts/run-dosbox-headless.sh"
+```text
+$_cpu_vm = "emulated"
+$_cpu_vm_dpmi = "emulated"
+$_sound = (off)
+$_mouse_internal = (off)
+$_joy_device = ""
+$_pktdriver = (off)
+$_tcpdriver = (off)
+$_ttylocks = ""
 ```
 
-When the caller presses a key, OxideBBS reads that byte from the telnet session
-and writes it to the bridge socket. DOSBox receives it and presents it as COM1
-input to the door. When the door writes to COM1, DOSBox sends those bytes back to
-the bridge socket, and OxideBBS writes them to the caller's telnet connection.
-That means an end-to-end smoke test validates both launch and serial transport
-behavior, not just console I/O.
+When the caller presses a key, OxideBBS reads that byte from telnet and writes it
+to the PTY bridge. DOSEMU2 receives it on `COM1` and passes it to the door. When
+the door writes to COM1, DOSEMU2 emits those bytes on the PTY bridge, and
+OxideBBS writes them to the caller's telnet connection. That means an end-to-end
+smoke test validates both launch and serial transport behavior, not just console
+I/O.
+
+DOSEMU2 maps `COM1` directly to the host PTY, so this is not a Rust-hosted
+FOSSIL driver. The host bridge is byte transport only. A DOS-side FOSSIL TSR can
+be loaded inside DOSEMU2 if a specific door explicitly requires FOSSIL APIs.
+
+In this model there is no SDL window and no display-server requirement for door
+runtime.
 
 ## 3) Start serving
 
@@ -167,14 +185,20 @@ cargo run -p oxidebbs-server -- doors test oxide-check --user sysop --dry-run
 ```
 
 Caller `Doors` menu launch uses live door execution in the caller path and records
-`door_runs` rows with timeout and byte counters. With DOSBox installed and
+door run rows with timeout and byte counters. With DOSEMU2 configured and
 `oxide-check` enabled, run the door from the caller `Doors` menu to complete an
 end-to-end live test and confirm:
 
-- caller keystrokes reach the door through DOSBox COM1,
-- door output written to COM1 reaches the caller's telnet session,
+- caller keystrokes reach the door through DOSEMU2 COM1,
+- door output written to COM1 reaches the caller telnet session,
 - the door responds to keyboard input,
 - and `OXIDECHK.RPT`/`OXNODE.TXT` are created under the node runtime directory.
+
+Optional live smoke test command:
+
+```bash
+OXIDE_DOOR_INTERACTIVE=1 ./scripts/test-oxide-door-dosemu2.sh
+```
 
 ## 7) Backup, export, and restore
 

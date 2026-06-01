@@ -105,12 +105,12 @@ action = "logoff"
 
 [doors]
 enabled = true
-default_runner = "dosbox"
+default_runner = "dosemu"
 
 [[doors.definitions]]
 key = "oxide-check"
 name = "Oxide Door Check"
-runner = "dosbox"
+runner = "dosemu"
 working_dir = "./tools/doors/oxide-door-check/dist"
 command = "OXIDECHK.EXE"
 drop_file = "DORINFO1.DEF"

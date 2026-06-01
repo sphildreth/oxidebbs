@@ -1041,7 +1041,7 @@ mod tests {
             id: "00000000-0000-4000-8000-000000000401".to_string(),
             key: "echo".to_string(),
             name: "Echo".to_string(),
-            runner: "dosbox".to_string(),
+            runner: "dosemu".to_string(),
             working_dir: "/tmp".to_string(),
             command: "ECHO.EXE".to_string(),
             drop_file: "DOOR.SYS".to_string(),

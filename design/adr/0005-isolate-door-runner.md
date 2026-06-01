@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-DOS door execution will be one of the hardest parts of OxideBBS. It involves drop files, runtime directories, DOSBox/DOSEMU behavior, time limits, I/O bridging, and cleanup.
+DOS door execution will be one of the hardest parts of OxideBBS. It involves drop files, runtime directories, DOSEMU2 behavior, time limits, I/O bridging, and cleanup.
 
 ## Decision
 
