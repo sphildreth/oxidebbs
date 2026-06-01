@@ -53,6 +53,8 @@ This is intended for a local coding agent to work from.
 - [x] Add `oxidebbs-db` repository traits.
 - [x] Add database open/init routine.
 - [x] Add schema version record.
+- [x] Add sequential schema migration runner.
+- [x] Add schema `2 -> 3` migration for `message_areas.enabled`.
 - [x] Add user repository.
 - [x] Add audit event repository.
 - [x] Add test database fixture.

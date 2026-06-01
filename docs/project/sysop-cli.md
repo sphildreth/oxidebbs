@@ -65,5 +65,6 @@ semantics are specified for DecentDB.
 ## Schema Compatibility
 
 The sysop CLI adds a message-area `enabled` flag and bumps the pre-alpha
-DecentDB schema marker to `3`. Existing development databases with schema `2`
-must be recreated.
+DecentDB schema marker to `3`. Current builds migrate supported schema `2`
+development databases to `3` before opening them, and refuse missing, malformed,
+or future markers with a clear error.

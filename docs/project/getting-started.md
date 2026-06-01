@@ -57,9 +57,10 @@ Live door sessions bridge caller bytes to the configured runner, record
 `door_runs`, enforce timeouts, and return normal exits or timeouts to the main
 menu.
 
-The pre-alpha schema is versioned. If you have an older development database at
-`data/oxidebbs.ddb`, recreate it after schema changes; the server refuses to run
-against a stale schema marker rather than silently using incompatible tables.
+The pre-alpha schema is versioned. Supported older development databases at
+`data/oxidebbs.ddb` are migrated before startup; unsupported stale, missing, or
+future schema markers are refused rather than silently using incompatible
+tables.
 
 ## Local Admin Commands
 

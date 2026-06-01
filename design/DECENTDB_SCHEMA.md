@@ -6,10 +6,20 @@ string store.
 
 Current schema version: `3`
 
-Schema version `3` is still pre-alpha. The initializer refuses to open a
-database with an older OxideBBS schema marker instead of silently running against
-stale tables. Until migrations exist, recreate development databases when the
-schema version changes.
+Schema version `3` is still pre-alpha. The initializer now upgrades supported
+compatible pre-alpha databases and keeps development upgrades safe:
+
+- schema `2 -> 3` is migratable. The migration adds `message_areas.enabled` with
+  default `TRUE`, preserves message rows and reply links, then updates
+  `system_config.schema_version` to `3`.
+- the pinned DecentDB rejects direct `ALTER TABLE ... ADD COLUMN` on checked
+  tables, so `2 -> 3` uses a table-rebuild strategy. Renamed schema-2
+  `message_areas` and `messages` tables are retained under
+  `oxidebbs_schema2_*` archive names because DecentDB cannot drop the renamed
+  self-referencing `messages` table.
+- if the schema marker is missing, malformed, or absent on an existing database,
+  OxideBBS reports a clear error.
+- newer schema versions are rejected until this software understands them.
 
 ## Type Rules
 

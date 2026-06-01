@@ -23,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Extracted sysop CLI command handlers into `oxidebbs-server::commands`
   modules as a no-behavior-change structural refactor before live control
   socket work.
+- Added DecentDB schema migration support in `oxidebbs-db` for upgrade path
+  `2 -> 3`, including `message_areas.enabled` backfill, preserved messages and
+  replies, schema-2 archive tables for DecentDB's self-referential table
+  limitation, and marker update.
 - Added a local Unix-domain control socket at `runtime/oxidebbs-control.sock`
   for live `status`, `nodes list`, `nodes show`, `nodes disconnect`,
   `nodes message`, and `nodes broadcast` operations from `oxidebbs-server`.

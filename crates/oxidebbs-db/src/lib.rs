@@ -7,6 +7,7 @@ pub use decentdb::{Db, DbConfig, DbError, QueryResult, QueryRow, Value};
 mod audit_repo;
 mod door_repo;
 mod message_repo;
+mod migrations;
 mod schema;
 mod session_repo;
 mod user_repo;
@@ -27,6 +28,7 @@ pub use message_repo::{
     move_message_to_area, update_message_area_enabled, update_message_area_levels,
     update_message_visibility,
 };
+pub use migrations::migrate_to_current;
 pub use schema::schema_version as read_schema_version;
 pub use session_repo::{
     SessionRecord, end_session, find_active_session_by_node, insert_session, list_active_sessions,

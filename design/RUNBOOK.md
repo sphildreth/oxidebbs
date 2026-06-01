@@ -6,6 +6,16 @@
 cargo run -p oxidebbs-server -- serve
 ```
 
+`oxidebbs-server setup` and `db init` create schema `3`. When an existing
+DecentDB uses supported older schema version `2`, startup runs the upgrade
+before serving callers. The `2 -> 3` migration rebuilds the message-area and
+message tables so every message area receives `enabled = TRUE` while preserving
+messages and replies. Because DecentDB cannot drop the renamed schema-2
+self-referencing `messages` table, the old tables remain as
+`oxidebbs_schema2_*` archives and are not used by runtime queries. Databases with
+a future marker, missing marker, or unmarked existing tables are refused with a
+clear error and should be opened only with compatible OxideBBS software.
+
 The CLI uses `config/oxidebbs.toml` when it exists, otherwise it falls back to
 `config/oxidebbs.example.toml`. Pass `--config <path>` to force a file.
 

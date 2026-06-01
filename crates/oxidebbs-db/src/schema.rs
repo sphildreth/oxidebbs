@@ -1,16 +1,82 @@
-use decentdb::{Db, Value};
+use std::cmp::Ordering;
+
+use decentdb::{Db, DbError, Value};
 
 use super::SCHEMA_VERSION;
+use super::migrations;
 
 pub fn init_schema(db: &Db) -> decentdb::Result<()> {
-    if let Some(version) = existing_schema_version(db)?
-        && version != SCHEMA_VERSION
-    {
-        return Err(decentdb::DbError::sql(format!(
-            "OxideBBS database schema version {version} cannot be opened by schema version {SCHEMA_VERSION}; run a migration or recreate the development database"
-        )));
+    let version = existing_schema_version(db)?;
+
+    match version {
+        Some(version) => match version.cmp(&SCHEMA_VERSION) {
+            Ordering::Less => {
+                migrations::migrate_to_current(db)?;
+                create_full_schema(db)
+            }
+            Ordering::Equal => Ok(()),
+            Ordering::Greater => Err(DbError::sql(format!(
+                "OxideBBS database schema version {version} is newer than supported version {SCHEMA_VERSION}"
+            ))),
+        },
+        None => {
+            if has_system_config_table(db)? {
+                Err(DbError::sql(
+                    "OxideBBS system_config table exists but schema_version marker is missing",
+                ))
+            } else if has_any_user_table(db)? {
+                Err(DbError::sql(
+                    "OxideBBS schema_version marker is missing; found existing database tables",
+                ))
+            } else {
+                create_full_schema(db)
+            }
+        }
+    }
+}
+
+fn has_any_user_table(db: &Db) -> decentdb::Result<bool> {
+    let table_result = db.execute("SELECT name FROM sqlite_schema WHERE type = 'table'")?;
+    Ok(!table_result.rows().is_empty())
+}
+
+fn has_system_config_table(db: &Db) -> decentdb::Result<bool> {
+    let table_result = db.execute(
+        "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'system_config'",
+    )?;
+    Ok(!table_result.rows().is_empty())
+}
+
+pub(crate) fn existing_schema_version(db: &Db) -> decentdb::Result<Option<i64>> {
+    if !has_system_config_table(db)? {
+        return Ok(None);
     }
 
+    let result = db.execute_with_params(
+        "SELECT value FROM system_config WHERE key = $1",
+        &[Value::Text("schema_version".to_string())],
+    )?;
+    let Some(value) = result.rows().first().and_then(|row| row.values().first()) else {
+        return Ok(None);
+    };
+
+    parse_schema_version(value).map(Some)
+}
+
+pub(crate) fn set_schema_version(db: &Db, version: i64) -> decentdb::Result<()> {
+    db.execute_with_params(
+        "INSERT INTO system_config (key, value)
+         VALUES ($1, $2)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP",
+        &[
+            Value::Text("schema_version".to_string()),
+            Value::Text(version.to_string()),
+        ],
+    )?;
+    Ok(())
+}
+
+fn create_full_schema(db: &Db) -> decentdb::Result<()> {
     db.execute_batch(
         "CREATE TABLE IF NOT EXISTS system_config (
             key TEXT PRIMARY KEY,
@@ -122,36 +188,8 @@ pub fn init_schema(db: &Db) -> decentdb::Result<()> {
         CREATE INDEX IF NOT EXISTS idx_door_runs_user_id ON door_runs (user_id);
         CREATE INDEX IF NOT EXISTS idx_door_runs_started_at ON door_runs (started_at);",
     )?;
-
-    db.execute_with_params(
-        "INSERT INTO system_config (key, value)
-         VALUES ($1, $2)
-         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = CURRENT_TIMESTAMP",
-        &[
-            Value::Text("schema_version".to_string()),
-            Value::Text(SCHEMA_VERSION.to_string()),
-        ],
-    )?;
+    set_schema_version(db, SCHEMA_VERSION)?;
     Ok(())
-}
-
-fn existing_schema_version(db: &Db) -> decentdb::Result<Option<i64>> {
-    let table_result = db.execute(
-        "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'system_config'",
-    )?;
-    if table_result.rows().is_empty() {
-        return Ok(None);
-    }
-
-    let result = db.execute_with_params(
-        "SELECT value FROM system_config WHERE key = $1",
-        &[Value::Text("schema_version".to_string())],
-    )?;
-    let Some(value) = result.rows().first().and_then(|row| row.values().first()) else {
-        return Ok(None);
-    };
-
-    parse_schema_version(value).map(Some)
 }
 
 pub fn schema_version(db: &Db) -> decentdb::Result<i64> {
@@ -184,10 +222,78 @@ mod tests {
     use super::*;
     use decentdb::DbConfig;
 
+    fn init_schema_2_probe_db(db: &Db) {
+        db.execute_batch(
+            "CREATE TABLE system_config (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE users (
+                id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+                alias TEXT NOT NULL UNIQUE CHECK (LENGTH(TRIM(alias)) > 0),
+                real_name TEXT NOT NULL CHECK (LENGTH(TRIM(real_name)) > 0),
+                email TEXT,
+                password_hash TEXT NOT NULL,
+                security_level INT NOT NULL DEFAULT 10 CHECK (security_level >= 0 AND security_level <= 255),
+                is_sysop BOOL NOT NULL DEFAULT FALSE,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                last_login_at TIMESTAMPTZ,
+                total_calls INT NOT NULL DEFAULT 0 CHECK (total_calls >= 0),
+                time_bank_minutes INT NOT NULL DEFAULT 0 CHECK (time_bank_minutes >= 0),
+                status TEXT NOT NULL DEFAULT 'active'
+                    CHECK (status = 'active' OR status = 'locked' OR status = 'disabled')
+            );
+
+            CREATE TABLE message_areas (
+                id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+                key TEXT NOT NULL UNIQUE CHECK (LENGTH(TRIM(key)) > 0),
+                name TEXT NOT NULL CHECK (LENGTH(TRIM(name)) > 0),
+                description TEXT NOT NULL DEFAULT '',
+                kind TEXT NOT NULL DEFAULT 'local',
+                network_id TEXT,
+                read_security_level INT NOT NULL DEFAULT 0 CHECK (read_security_level >= 0 AND read_security_level <= 255),
+                post_security_level INT NOT NULL DEFAULT 10 CHECK (post_security_level >= 0 AND post_security_level <= 255),
+                moderated BOOL NOT NULL DEFAULT FALSE,
+                CHECK (kind = 'local' OR kind = 'echomail' OR kind = 'netmail')
+            );
+
+            CREATE TABLE messages (
+                id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+                area_id UUID NOT NULL REFERENCES message_areas(id) ON DELETE CASCADE,
+                author_user_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+                to_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+                subject TEXT NOT NULL CHECK (LENGTH(TRIM(subject)) > 0),
+                body TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                reply_to_id UUID REFERENCES messages(id) ON DELETE SET NULL,
+                network_message_id TEXT,
+                visibility TEXT NOT NULL DEFAULT 'normal'
+                    CHECK (visibility = 'normal' OR visibility = 'deleted' OR visibility = 'hidden')
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_messages_area_created_at ON messages (area_id, created_at);
+            CREATE INDEX IF NOT EXISTS idx_messages_author_user_id ON messages (author_user_id);
+            CREATE INDEX IF NOT EXISTS idx_messages_to_user_id ON messages (to_user_id);",
+        )
+        .expect("create schema-2 probe tables");
+
+        db.execute_with_params(
+            "INSERT INTO system_config (key, value) VALUES ($1, $2)",
+            &[
+                Value::Text("schema_version".to_string()),
+                Value::Text("2".to_string()),
+            ],
+        )
+        .expect("seed schema version 2");
+    }
+
     #[test]
-    fn schema_creates_all_tables() {
+    fn schema_initializes_to_current_version() {
         let db = Db::open_or_create(":memory:", DbConfig::default()).expect("open DecentDB");
         init_schema(&db).expect("init schema");
+        assert_eq!(schema_version(&db).expect("schema version"), SCHEMA_VERSION);
 
         let tables = [
             "system_config",
@@ -212,7 +318,103 @@ mod tests {
         let db = Db::open_or_create(":memory:", DbConfig::default()).expect("open DecentDB");
         init_schema(&db).expect("first init");
         init_schema(&db).expect("second init");
-        assert_eq!(schema_version(&db).expect("read schema version"), 3);
+        assert_eq!(
+            schema_version(&db).expect("read schema version"),
+            SCHEMA_VERSION
+        );
+    }
+
+    #[test]
+    fn schema_init_rejects_missing_schema_marker() {
+        let db = Db::open_or_create(":memory:", DbConfig::default()).expect("open DecentDB");
+        db.execute_batch(
+            "CREATE TABLE system_config (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );",
+        )
+        .expect("create system_config");
+
+        let err = init_schema(&db).expect_err("init should reject missing marker");
+        assert!(err.to_string().contains("schema_version marker is missing"));
+    }
+
+    #[test]
+    fn schema_init_rejects_tables_without_schema_marker() {
+        let db = Db::open_or_create(":memory:", DbConfig::default()).expect("open DecentDB");
+        db.execute_batch(
+            "CREATE TABLE users (
+                id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+                alias TEXT NOT NULL UNIQUE CHECK (LENGTH(TRIM(alias)) > 0),
+                real_name TEXT NOT NULL CHECK (LENGTH(TRIM(real_name)) > 0),
+                password_hash TEXT NOT NULL
+            );",
+        )
+        .expect("create user table");
+
+        let err = init_schema(&db).expect_err("init should reject unmarked existing tables");
+        assert!(err.to_string().contains("found existing database tables"));
+    }
+
+    #[test]
+    fn schema_init_rejects_newer_schema_marker() {
+        let db = Db::open_or_create(":memory:", DbConfig::default()).expect("open DecentDB");
+        db.execute_batch(
+            "CREATE TABLE system_config (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );",
+        )
+        .expect("create system_config");
+        db.execute_with_params(
+            "INSERT INTO system_config (key, value) VALUES ($1, $2)",
+            &[
+                Value::Text("schema_version".to_string()),
+                Value::Text("999".to_string()),
+            ],
+        )
+        .expect("seed future schema marker");
+
+        let err = init_schema(&db).expect_err("init should reject future marker");
+        assert!(err.to_string().contains("newer than supported version"));
+    }
+
+    #[test]
+    fn schema_init_migrates_schema_2_to_current() {
+        let db = Db::open_or_create(":memory:", DbConfig::default()).expect("open DecentDB");
+
+        init_schema_2_probe_db(&db);
+        db.execute_with_params(
+            "INSERT INTO message_areas (key, name, kind) VALUES ($1, $2, $3)",
+            &[
+                Value::Text("general".to_string()),
+                Value::Text("General".to_string()),
+                Value::Text("local".to_string()),
+            ],
+        )
+        .expect("seed schema-2 area");
+
+        init_schema(&db).expect("apply migrations");
+        assert_eq!(schema_version(&db).expect("schema version"), SCHEMA_VERSION);
+
+        let enabled = {
+            let key = Value::Text("general".to_string());
+            let result = db
+                .execute_with_params("SELECT enabled FROM message_areas WHERE key = $1", &[key])
+                .expect("enabled value");
+            let row = result
+                .rows()
+                .first()
+                .and_then(|row| row.values().first())
+                .expect("enabled column");
+            match row {
+                Value::Bool(enabled) => *enabled,
+                _ => false,
+            }
+        };
+        assert!(enabled);
     }
 
     #[test]

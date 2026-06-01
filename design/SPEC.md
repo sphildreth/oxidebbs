@@ -150,6 +150,11 @@ sessions, messages, message areas, doors, door runs, and audit events must be
 enforced with DecentDB foreign keys instead of application-only conventions.
 Bounded numeric and label fields should have `CHECK` constraints.
 
+The database records an OxideBBS schema marker in `system_config`. Fresh
+databases are initialized at the current schema, compatible older pre-alpha
+schemas are migrated sequentially before runtime use, and missing, malformed, or
+newer markers are refused with clear operator-facing errors.
+
 Do not introduce SQLite, PostgreSQL, MySQL, Redis, or an ORM.
 
 ## 7. Write model

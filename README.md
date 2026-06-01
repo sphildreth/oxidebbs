@@ -126,8 +126,8 @@ message reading/posting are wired into DecentDB-backed sessions. The caller
 the configured runner, bridges caller/process bytes, records `door_runs`, and
 returns normal exits or timeouts to the main menu.
 
-During pre-alpha, delete or recreate old development `.ddb` files after schema
-version changes; OxideBBS refuses to run against stale schema markers.
+During pre-alpha, OxideBBS migrates supported older development `.ddb` schemas
+before startup and refuses unsupported stale, missing, or future schema markers.
 
 ## Sysop CLI
 

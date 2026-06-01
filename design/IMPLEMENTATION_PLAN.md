@@ -21,7 +21,7 @@ Status values:
 | Phase 1 — Local Server Control Plane | COMPLETE | Let sysop CLI commands control a running local server process. | Local control socket, command protocol, node command integration. |
 | Phase 2 — Live Node Heartbeats And State | COMPLETE | Make node status authoritative while the server is running. | Node registry, heartbeat timestamps, stale detection, status output. |
 | Phase 3 — Live Door Launch Integration | COMPLETE | Replace caller-facing door placeholder with controlled door execution. | Door menu launch path, run records, drop files, timeout cleanup. |
-| Phase 4 — DecentDB Schema Migrations | TODO | Upgrade compatible pre-alpha databases instead of requiring recreation. | Migration runner and schema `2 -> 3` migration. |
+| Phase 4 — DecentDB Schema Migrations | COMPLETE | Upgrade compatible pre-alpha databases instead of requiring recreation. | Migration runner and schema `2 -> 3` migration. |
 | Phase 5 — DecentDB Restore And Compact Semantics | TODO | Make `db import` and `db compact` real, safe commands. | Restore design, import command, compaction command or documented unsupported state. |
 | Phase 6 — Sysop CLI Hardening | TODO | Make CLI output, error behavior, and smoke coverage production-friendly. | CLI integration tests, stable JSON contracts, help ordering tests. |
 | Phase 7 — Documentation And Runbook Completion | TODO | Bring operator docs to parity with implemented runtime behavior. | Updated docs site, runbook, changelog, and design docs. |
@@ -974,7 +974,7 @@ Update:
 
 ## Phase 4 — DecentDB Schema Migrations
 
-Status: `TODO`
+Status: `COMPLETE`
 
 ### Objective
 
@@ -1015,7 +1015,7 @@ First task: verify DecentDB DDL support with a focused test or local probe.
 Do not assume `ALTER TABLE ADD COLUMN` works until a test demonstrates it
 against the pinned DecentDB dependency.
 
-Migration `2 -> 3`:
+Initial desired migration `2 -> 3`:
 
 ```sql
 ALTER TABLE message_areas ADD COLUMN enabled BOOL NOT NULL DEFAULT TRUE;
@@ -1038,6 +1038,14 @@ paths:
    - leave migration framework for future supported migrations
 
 The selected path must be documented in `design/DECENTDB_SCHEMA.md`.
+
+Selected implementation: DecentDB rejects direct `ALTER TABLE ADD COLUMN` on
+checked tables, so Phase 4 uses the DecentDB-supported table-rebuild path. It
+renames schema-2 `message_areas` and `messages` to `oxidebbs_schema2_*` archive
+tables, creates replacement v3 tables, copies message-area and message rows,
+restores reply links, recreates message indexes, renames the v3 tables into the
+canonical names, and updates `system_config.schema_version` to `3` only after
+the rebuild succeeds.
 
 ### Init Flow
 
@@ -1086,6 +1094,22 @@ Update:
 - A schema `2` test DB migrates to schema `3`.
 - Fresh DB behavior remains unchanged.
 - `./scripts/dev-check.sh` passes.
+
+### Phase 4 Completion Notes
+
+- Added `crates/oxidebbs-db/src/migrations.rs` with `migrate_to_current` and a
+  sequential migration runner.
+- Confirmed with a focused test that the pinned DecentDB rejects direct
+  `ALTER TABLE ... ADD COLUMN` on checked tables, so the selected `2 -> 3` path
+  rebuilds `message_areas` and `messages` through replacement tables.
+- Preserved schema-2 message areas, messages, message replies, and foreign-key
+  relationships in the canonical schema-3 tables. Because DecentDB cannot drop
+  the renamed schema-2 self-referencing `messages` table, the migration keeps
+  the old tables under `oxidebbs_schema2_*` archive names outside runtime query
+  paths.
+- Updated schema open/init flow to create current schema when absent, migrate
+  older schemas, refuse missing/unmarked existing tables, and refuse newer
+  marker versions.
 
 ## Phase 5 — DecentDB Restore And Compact Semantics
 
