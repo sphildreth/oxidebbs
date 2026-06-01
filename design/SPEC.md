@@ -96,6 +96,11 @@ Implementations:
 - `SerialTransport` later
 - `LoopbackTransport` for tests
 
+The `serve` runtime binds the configured telnet address, opens DecentDB before
+accepting callers, assigns node slots up to the configured node and connection
+limits, records session/audit lifecycle rows, and closes sessions on caller
+disconnect, logoff, or idle timeout.
+
 ## 5. ANSI/CP437 design
 
 OxideBBS must not treat remote caller output as normal Unicode UI.

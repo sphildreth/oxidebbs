@@ -6,4 +6,4 @@ pub use telnet::{
     TelnetCommand, TelnetEvent, TelnetLifecycleHooks, TelnetOptionPolicy, TelnetParser,
     TelnetSession,
 };
-pub use transport::{LoopbackTransport, Transport, TransportError};
+pub use transport::{LoopbackTransport, TcpTransport, Transport, TransportError};

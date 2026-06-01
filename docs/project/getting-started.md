@@ -37,6 +37,19 @@ cargo run -p oxidebbs-server -- setup
 The default output is `config/oxidebbs.toml`. See the [Setup Wizard](./setup)
 guide for the prompts and generated paths.
 
+## Run the Telnet Server
+
+Start the listener:
+
+```bash
+cargo run -p oxidebbs-server -- --config config/oxidebbs.toml serve
+```
+
+The first server runtime accepts telnet callers, assigns node slots, records
+session/audit rows in DecentDB, renders configured login and main menu screens,
+and routes menu hotkeys. Login, new-user, messages, and doors currently respond
+with placeholders while those full workflows are wired into sessions.
+
 ## Local Admin Commands
 
 The starter server binary includes a local `admin` command group:

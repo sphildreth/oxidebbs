@@ -18,8 +18,8 @@ The project is intentionally retro in user experience and modern in implementati
 
 This is a starter implementation with tested Rust crates for configuration,
 terminal assets, telnet negotiation, DecentDB repositories, menu routing, local
-message commands, door drop files, and local sysop tooling. The long-running
-telnet session server is still being assembled.
+message commands, door drop files, local sysop tooling, and a first telnet
+`serve` runtime that accepts callers and routes the configured starter menus.
 
 ## Repository layout
 
@@ -105,6 +105,19 @@ cargo run -p oxidebbs-server -- setup
 
 The wizard writes `config/oxidebbs.toml` by default and creates the starter
 paths for data, assets, doors, runtime files, and logs.
+
+## Run the server
+
+Start the telnet listener with:
+
+```bash
+cargo run -p oxidebbs-server -- --config config/oxidebbs.toml serve
+```
+
+The current runtime accepts telnet callers, assigns node slots, writes session
+and audit records to DecentDB, renders configured login/main menu screens, and
+routes starter menu keys. Authentication, message reading/posting, and real door
+launching still use placeholder responses.
 
 ## Documentation site
 

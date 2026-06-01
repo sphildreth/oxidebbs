@@ -34,6 +34,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added an interactive `oxidebbs-server setup` command that writes a starter
   board config, prepares local directories, and can include a placeholder door
   definition without bundling door binaries.
+- Added the first real `oxidebbs-server serve` runtime with a telnet listener,
+  node-slot allocation, DecentDB session/audit records, configured screen
+  rendering, starter menu routing, NAWS width updates, idle timeout handling,
+  and placeholder responses for auth, messages, and doors.
 
 ### Changed
 

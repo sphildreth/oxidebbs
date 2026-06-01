@@ -37,10 +37,13 @@ This is intended for a local coding agent to work from.
 ## Phase 4 — Telnet
 
 - [x] Define `Transport` trait.
+- [x] Add telnet listener and `serve` runtime.
 - [x] Add telnet parser for IAC sequences.
 - [x] Support basic WILL/WONT/DO/DONT.
 - [x] Add terminal type negotiation later.
 - [x] Add NAWS/window-size support later.
+- [x] Add node assignment and idle timeout handling.
+- [x] Add clean disconnect handling.
 - [x] Add session lifecycle logging.
 - [x] Add integration test with loopback transport.
 

@@ -19,13 +19,13 @@
 
 ## Milestone 2 — Telnet sessions
 
-- [ ] Telnet listener
+- [x] Telnet listener
 - [x] Telnet negotiation parser
 - [x] Transport trait
 - [x] Session task lifecycle
-- [ ] Node assignment
-- [ ] Idle timeout
-- [ ] Clean disconnect
+- [x] Node assignment
+- [x] Idle timeout
+- [x] Clean disconnect
 
 ## Milestone 3 — Users and menus
 

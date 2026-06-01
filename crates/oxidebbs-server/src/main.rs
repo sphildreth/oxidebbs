@@ -1,4 +1,5 @@
 mod config;
+mod serve;
 mod setup;
 
 use std::path::PathBuf;
@@ -83,7 +84,8 @@ enum AdminCommand {
     ConsolePreview,
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let cli = Cli::parse();
     let command = cli.command.unwrap_or(Command::Serve);
 
@@ -130,13 +132,15 @@ fn main() {
                 Command::Admin { command } => run_admin(command, &config),
                 Command::Serve => {
                     info!(board = %config.board.name, "starting OxideBBS");
-                    info!(bind = %config.telnet.bind, "telnet listener");
                     info!(nodes = config.nodes.count, "node slots");
                     println!(
                         "OxideBBS \"{}\" — telnet {} with {} node(s)",
                         config.board.name, config.telnet.bind, config.nodes.count
                     );
-                    println!("Server startup is not yet implemented. Config loading works.");
+                    if let Err(error) = serve::run(&config).await {
+                        eprintln!("error: {error}");
+                        std::process::exit(1);
+                    }
                 }
                 Command::Setup { .. } => unreachable!("setup handled above"),
             }
