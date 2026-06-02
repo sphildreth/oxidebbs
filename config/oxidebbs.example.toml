@@ -108,11 +108,6 @@ label = "Messages"
 action = "messages"
 
 [[menus.main.items]]
-key = "N"
-label = "New User"
-action = "new_user"
-
-[[menus.main.items]]
 key = "G"
 label = "Goodbye"
 action = "logoff"

@@ -89,7 +89,7 @@ fn print_nodes_fallback(db: &oxidebbs_db::OxideDb, ctx: &AppContext) -> CliResul
         let node_number = i64::from(number);
         if let Some(session) = by_node.get(&node_number) {
             println!(
-                "node {}\tactive\t{}\t{}",
+                "node {}\toffline\t{}\t{}",
                 node_number, session.transport, session.remote_address
             );
         } else {
@@ -263,7 +263,7 @@ pub fn run_nodes(command: NodesCommand, ctx: &AppContext) -> CliResult<()> {
                     "session": session.as_ref().map(session_json)
                 }))?;
             } else if let Some(session) = session {
-                println!("node {node_number}: active");
+                println!("node {node_number}: offline");
                 print_session(&session);
             } else {
                 println!("node {node_number}: available");

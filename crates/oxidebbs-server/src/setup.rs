@@ -402,11 +402,6 @@ pub fn build_setup_toml(answers: &SetupAnswers) -> io::Result<String> {
                     action: "messages".to_string(),
                 },
                 GeneratedMenuItemConfig {
-                    key: "N".to_string(),
-                    label: "New User".to_string(),
-                    action: "new_user".to_string(),
-                },
-                GeneratedMenuItemConfig {
                     key: "G".to_string(),
                     label: "Goodbye".to_string(),
                     action: "logoff".to_string(),
@@ -794,6 +789,13 @@ mod tests {
         assert_default_menu_asset_contains_items(
             include_str!("../../../assets/screens/menus/main/main.txt"),
             &parsed.menus["main"].items,
+        );
+        assert!(
+            parsed.menus["main"]
+                .items
+                .iter()
+                .all(|item| item.action != "new_user"),
+            "default main menu should not include registration action"
         );
     }
 

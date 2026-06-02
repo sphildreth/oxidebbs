@@ -12,11 +12,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added a GitHub release-artifact workflow that builds and uploads Linux,
   macOS, and Windows `oxidebbs-server` packages plus SHA-256 checksums when a
   release is published, with manual dispatch support for existing releases.
+- Added a sysop-facing caller command reference covering current default menu
+  keys, door/message prompt commands, supported menu actions, and future/reserved
+  command notes.
 
 ### Changed
 
+- Removed the starter registration option from the post-login main menu and
+  bundled welcome/main-menu assets so account creation is advertised only from
+  the login screen.
+- Removed command lists from starter welcome assets; command prompts now live on
+  the active login and main menu screens only.
 - Updated GitHub workflow action versions for checkout and Node setup to current
   Node 24-backed majors.
+
+### Fixed
+
+- DecentDB schema initialization now uses DecentDB catalog metadata instead of
+  non-DecentDB metadata SQL, preventing valid DecentDB files from failing
+  OxideBBS startup or CLI commands during schema detection.
+- `db stats` and offline `status`/`nodes` fallbacks no longer report stale
+  unclosed session rows as active live sessions when the server is not running.
+  `db stats` now keeps those rows visible as `open_sessions` diagnostics.
+- Screen and terminal assets now normalize bare line feeds to CRLF before
+  sending bytes to telnet callers, preventing plain clients from rendering each
+  line farther to the right.
 
 ## [1.0.0] - 2026-06-02
 

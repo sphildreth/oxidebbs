@@ -652,16 +652,14 @@ mod tests {
         assert_eq!(count, Some(Value::Int64(2)));
 
         let archive_count = db
-            .execute(
-                "SELECT COUNT(*) FROM sqlite_schema
-                 WHERE type = 'table'
-                   AND name IN ('oxidebbs_schema2_message_areas', 'oxidebbs_schema2_messages')",
-            )
-            .expect("count archive tables")
-            .rows()
-            .first()
-            .and_then(|row| row.values().first())
-            .cloned();
-        assert_eq!(archive_count, Some(Value::Int64(2)));
+            .list_tables()
+            .expect("list tables")
+            .into_iter()
+            .filter(|table| {
+                table.name == "oxidebbs_schema2_message_areas"
+                    || table.name == "oxidebbs_schema2_messages"
+            })
+            .count();
+        assert_eq!(archive_count, 2);
     }
 }

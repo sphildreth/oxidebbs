@@ -6,7 +6,10 @@ use clap::Subcommand;
 use serde::Deserialize;
 use serde_json::Value as JsonValue;
 
-use crate::sysop_cli::{AppContext, CliError, CliResult, emit_ok, open_database, print_json};
+use crate::{
+    control::{ControlResponse, request_status},
+    sysop_cli::{AppContext, CliError, CliResult, emit_ok, open_database, print_json},
+};
 use oxidebbs_db::{
     AuditEventRecord, AuthAttemptRecord, Db, DoorDefinitionRecord, DoorRunRecord,
     MessageAreaRecord, MessageRecord, SessionRecord, UserRecord, Value,
@@ -486,19 +489,41 @@ fn door_run_json(run: &oxidebbs_db::DoorRunRecord) -> JsonValue {
     })
 }
 
-fn db_stats(db: &Db) -> CliResult<JsonValue> {
+fn db_stats(db: &Db, active_sessions: i64) -> CliResult<JsonValue> {
+    let open_sessions = db_scalar_i64(db, "SELECT COUNT(*) FROM sessions WHERE ended_at IS NULL")?;
     Ok(serde_json::json!({
         "schema_version": read_schema_version(db)?,
         "users": db_scalar_i64(db, "SELECT COUNT(*) FROM users")?,
         "message_areas": db_scalar_i64(db, "SELECT COUNT(*) FROM message_areas")?,
         "messages": db_scalar_i64(db, "SELECT COUNT(*) FROM messages")?,
         "sessions": db_scalar_i64(db, "SELECT COUNT(*) FROM sessions")?,
-        "active_sessions": db_scalar_i64(db, "SELECT COUNT(*) FROM sessions WHERE ended_at IS NULL")?,
+        "active_sessions": active_sessions,
+        "open_sessions": open_sessions,
         "auth_attempts": db_scalar_i64(db, "SELECT COUNT(*) FROM auth_attempts")?,
         "doors": db_scalar_i64(db, "SELECT COUNT(*) FROM doors")?,
         "door_runs": db_scalar_i64(db, "SELECT COUNT(*) FROM door_runs")?,
         "audit_events": db_scalar_i64(db, "SELECT COUNT(*) FROM audit_events")?
     }))
+}
+
+fn live_active_session_count(ctx: &AppContext) -> CliResult<i64> {
+    match request_status(&ctx.config.paths.runtime) {
+        Ok(ControlResponse::Status { status, .. }) => Ok(i64::try_from(status.active_nodes)
+            .map_err(|error| {
+                CliError::Message(format!("active node count is out of range: {error}"))
+            })?),
+        Ok(ControlResponse::Error { error, .. }) => Err(CliError::Message(format!(
+            "control socket reported error: {error}"
+        ))),
+        Ok(ControlResponse::Ok { .. }) => Err(CliError::Message(
+            "control socket returned unexpected response to status request".to_string(),
+        )),
+        Ok(ControlResponse::Nodes { .. }) => Err(CliError::Message(
+            "control socket returned unexpected response to status request".to_string(),
+        )),
+        Err(error) if error.is_unreachable() => Ok(0),
+        Err(error) => Err(CliError::Message(format!("status request failed: {error}"))),
+    }
 }
 
 fn print_stats(stats: &JsonValue) {
@@ -866,7 +891,7 @@ pub fn run_db(command: DbCommand, ctx: &AppContext) -> CliResult<()> {
         DbCommand::Doctor | DbCommand::Verify => {
             let db = open_database(&ctx.config)?;
             let version = db.schema_version()?;
-            let stats = db_stats(db.db())?;
+            let stats = db_stats(db.db(), live_active_session_count(ctx)?)?;
             if ctx.json {
                 print_json(
                     &serde_json::json!({"ok": true, "schema_version": version, "stats": stats}),
@@ -880,7 +905,7 @@ pub fn run_db(command: DbCommand, ctx: &AppContext) -> CliResult<()> {
         }
         DbCommand::Stats => {
             let db = open_database(&ctx.config)?;
-            let stats = db_stats(db.db())?;
+            let stats = db_stats(db.db(), live_active_session_count(ctx)?)?;
             if ctx.json {
                 print_json(&stats)?;
             } else {
@@ -1218,7 +1243,7 @@ mod tests {
     #[test]
     fn db_stats_json_shape_matches_contract() {
         let db = test_db();
-        let stats = db_stats(db.db()).expect("stats");
+        let stats = db_stats(db.db(), 0).expect("stats");
         let obj = stats.as_object().expect("stats object");
         assert!(obj.contains_key("schema_version"));
         assert!(obj.contains_key("users"));
@@ -1226,10 +1251,40 @@ mod tests {
         assert!(obj.contains_key("messages"));
         assert!(obj.contains_key("sessions"));
         assert!(obj.contains_key("active_sessions"));
+        assert!(obj.contains_key("open_sessions"));
         assert!(obj.contains_key("auth_attempts"));
         assert!(obj.contains_key("doors"));
         assert!(obj.contains_key("door_runs"));
         assert!(obj.contains_key("audit_events"));
+    }
+
+    #[test]
+    fn db_stats_distinguishes_live_active_from_open_session_rows() {
+        let db = test_db();
+        let user = seed_user("00000000-0000-4000-8000-000000000701", "sysop", true);
+        insert_user(db.db(), &user).expect("seed user");
+        insert_session(
+            db.db(),
+            &SessionRecord {
+                id: "00000000-0000-4000-8000-000000000702".to_string(),
+                node_number: 1,
+                user_id: Some(user.id),
+                transport: "telnet".to_string(),
+                remote_address: "127.0.0.1:2323".to_string(),
+                remote_ip: Some("127.0.0.1".to_string()),
+                remote_port: Some(2323),
+                started_at: "2026-01-01T00:00:00.000000Z".to_string(),
+                ended_at: None,
+                disconnect_reason: None,
+            },
+        )
+        .expect("seed open session");
+
+        let stats = db_stats(db.db(), 0).expect("stats");
+        let obj = stats.as_object().expect("stats object");
+
+        assert_eq!(obj.get("active_sessions"), Some(&JsonValue::from(0)));
+        assert_eq!(obj.get("open_sessions"), Some(&JsonValue::from(1)));
     }
 
     #[test]

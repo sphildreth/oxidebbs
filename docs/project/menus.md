@@ -5,6 +5,10 @@ OxideBBS separates caller-facing screen art from safe menu actions.
 Screen files draw what the caller sees. Menu config decides which single key
 invokes which internal action.
 
+Terminal welcome art should stay informational: branding, system identity, and
+status only. Command lists belong on the active menu screen whose configured
+items are being routed at that prompt.
+
 ## Caller Flow
 
 The configured starter flow is:
@@ -56,6 +60,10 @@ actions include `login`, `new_user`, `doors`, `messages`, `logoff`, `noop`,
 
 `submenu` actions are now runtime-capable: when selected, the caller moves into
 the referenced menu and continues from that menu context.
+
+See the [Caller Command Reference](./caller-commands.md) for the current
+sysop-facing list of default caller keys, prompt commands, and future/reserved
+command notes.
 
 ## Asset Layout
 

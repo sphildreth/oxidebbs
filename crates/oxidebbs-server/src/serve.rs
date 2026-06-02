@@ -1116,7 +1116,7 @@ async fn run_new_user_flow(
     let disconnect_reason = &mut *state.disconnect_reason;
     let authenticated_user = &mut *state.authenticated_user;
 
-    send_text(transport, "\r\n-- New User Registration --\r\n").await?;
+    send_text(transport, "\r\n-- Registration --\r\n").await?;
 
     let alias = match prompt_for_line(
         transport,
@@ -2330,7 +2330,7 @@ fn load_terminal_asset_payload(
     if !capabilities.supports_ansi
         && let Some(payload) = load_plain_terminal_asset_payload(config, asset_name)?
     {
-        return Ok(payload);
+        return Ok(normalize_caller_line_endings(&payload));
     }
 
     let asset_path = config.paths.ansi.join(asset_name);
@@ -2342,9 +2342,11 @@ fn load_terminal_asset_payload(
     })?;
 
     if capabilities.supports_ansi {
-        Ok(bytes)
+        Ok(normalize_caller_line_endings(&bytes))
     } else {
-        Ok(encode_text(&oxidebbs_term::render_plain_text(&bytes)))
+        Ok(normalize_caller_line_endings(&encode_text(
+            &oxidebbs_term::render_plain_text(&bytes),
+        )))
     }
 }
 
@@ -2416,8 +2418,8 @@ fn load_screen_payload(
     };
 
     match term_screen.load(&config.paths.screens, capabilities) {
-        Ok(LoadedScreen::Ansi(bytes)) => Ok(bytes),
-        Ok(LoadedScreen::PlainText(text)) => Ok(encode_text(&text)),
+        Ok(LoadedScreen::Ansi(bytes)) => Ok(normalize_caller_line_endings(&bytes)),
+        Ok(LoadedScreen::PlainText(text)) => Ok(normalize_caller_line_endings(&encode_text(&text))),
         Err(error) => Err(error.to_string()),
     }
 }
@@ -2427,7 +2429,22 @@ fn fallback_screen_payload(screen_key: &str, details: &str) -> Vec<u8> {
     let _ = writeln!(&mut message, "[{}]", screen_key);
     let _ = write!(&mut message, "{details}");
     message.push_str(PROMPT_TERMINATOR);
-    encode_text(&message)
+    normalize_caller_line_endings(&encode_text(&message))
+}
+
+fn normalize_caller_line_endings(bytes: &[u8]) -> Vec<u8> {
+    let mut output = Vec::with_capacity(bytes.len());
+    let mut previous_was_cr = false;
+
+    for byte in bytes {
+        if *byte == b'\n' && !previous_was_cr {
+            output.push(b'\r');
+        }
+        output.push(*byte);
+        previous_was_cr = *byte == b'\r';
+    }
+
+    output
 }
 
 async fn send_text_buffered<T: Transport>(
@@ -3226,6 +3243,74 @@ mod tests {
             load_terminal_asset_payload(&config, "welcome.ans", TerminalCapabilities::plain_text())
                 .expect("load plain welcome");
         assert_eq!(plain_payload, b"Welcome\r\n");
+
+        let _ = std::fs::remove_dir_all(base_dir);
+    }
+
+    #[test]
+    fn terminal_asset_payload_normalizes_bare_lf_for_telnet_callers() {
+        let base_dir = temp_dir("terminal-asset-line-endings");
+        let db_path = base_dir.join("oxidebbs.ddb");
+        let bind_addr = free_loopback_addr();
+        let config = smoke_config(bind_addr, &base_dir, &db_path);
+        std::fs::create_dir_all(&config.paths.ansi).expect("create ANSI dir");
+        std::fs::write(
+            config.paths.ansi.join("welcome.ans"),
+            b"\x1b[1mWelcome\nNext\n",
+        )
+        .expect("write welcome asset");
+        std::fs::write(
+            config.paths.ansi.join("welcome.asc"),
+            b"ASCII welcome\nNext\n",
+        )
+        .expect("write plain welcome asset");
+
+        let ansi_payload =
+            load_terminal_asset_payload(&config, "welcome.ans", TerminalCapabilities::ansi_80())
+                .expect("load ANSI welcome");
+        assert_eq!(ansi_payload, b"\x1b[1mWelcome\r\nNext\r\n");
+
+        let plain_payload =
+            load_terminal_asset_payload(&config, "welcome.ans", TerminalCapabilities::plain_text())
+                .expect("load plain welcome");
+        assert_eq!(plain_payload, b"ASCII welcome\r\nNext\r\n");
+
+        let _ = std::fs::remove_dir_all(base_dir);
+    }
+
+    #[test]
+    fn screen_payload_normalizes_bare_lf_for_telnet_callers() {
+        let base_dir = temp_dir("screen-payload-line-endings");
+        let db_path = base_dir.join("oxidebbs.ddb");
+        let bind_addr = free_loopback_addr();
+        let mut config = smoke_config(bind_addr, &base_dir, &db_path);
+        config.screens.insert(
+            "line_endings".to_string(),
+            crate::config::ScreenConfig {
+                ansi: Some("line-endings/screen.ans".to_string()),
+                ansi_40: None,
+                ascii: Some("line-endings/screen.asc".to_string()),
+                text: None,
+                pause: false,
+            },
+        );
+
+        let screen_dir = config.paths.screens.join("line-endings");
+        std::fs::create_dir_all(&screen_dir).expect("create screen dir");
+        std::fs::write(screen_dir.join("screen.ans"), b"\x1b[1mANSI\nNext\n")
+            .expect("write ANSI screen");
+        std::fs::write(screen_dir.join("screen.asc"), b"ASCII\nNext\n")
+            .expect("write ASCII screen");
+
+        let ansi_payload =
+            load_screen_payload(&config, "line_endings", TerminalCapabilities::ansi_80())
+                .expect("load ANSI screen");
+        assert_eq!(ansi_payload, b"\x1b[1mANSI\r\nNext\r\n");
+
+        let plain_payload =
+            load_screen_payload(&config, "line_endings", TerminalCapabilities::plain_text())
+                .expect("load plain screen");
+        assert_eq!(plain_payload, b"ASCII\r\nNext\r\n");
 
         let _ = std::fs::remove_dir_all(base_dir);
     }

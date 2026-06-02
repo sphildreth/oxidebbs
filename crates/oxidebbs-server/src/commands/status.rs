@@ -5,7 +5,6 @@ use crate::{
     control::{ControlResponse, request_status},
     sysop_cli::{AppContext, CliError, CliResult, open_database, print_json},
 };
-use oxidebbs_db::list_active_sessions;
 use oxidebbs_db::list_message_areas;
 
 fn request_live_status(
@@ -35,7 +34,6 @@ fn request_live_status(
 pub fn run_status(ctx: &AppContext) -> CliResult<()> {
     let db = open_database(&ctx.config)?;
     doors::sync_configured_doors(&db, &ctx.config)?;
-    let active = list_active_sessions(db.db())?;
     let doors = doors::effective_doors(&db, &ctx.config)?;
     let enabled_doors = doors.iter().filter(|door| door.enabled).count();
     let message_areas = list_message_areas(db.db())?;
@@ -49,7 +47,7 @@ pub fn run_status(ctx: &AppContext) -> CliResult<()> {
     let active_nodes = live_status
         .as_ref()
         .and_then(|status| status.get("active_nodes").and_then(|count| count.as_u64()))
-        .unwrap_or(active.len() as u64);
+        .unwrap_or(0);
     let uptime_seconds = live_status.as_ref().and_then(|status| {
         status
             .get("uptime_seconds")

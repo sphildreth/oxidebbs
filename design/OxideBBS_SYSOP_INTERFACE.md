@@ -464,8 +464,10 @@ transactionally.
 expose a production-safe compaction API.
 
 `db stats --json` is a stable object contract with counts for schema version,
-users, message areas, messages, sessions, active sessions, doors, door runs, and
-audit events.
+users, message areas, messages, sessions, live active sessions, open session
+rows, doors, door runs, and audit events. `active_sessions` reflects live
+runtime state from the control socket and is `0` when the server is unreachable;
+`open_sessions` reports database rows whose `ended_at` value is still null.
 
 ## Log and audit commands
 

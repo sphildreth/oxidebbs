@@ -36,15 +36,14 @@ pub fn init_schema(db: &Db) -> decentdb::Result<()> {
 }
 
 fn has_any_user_table(db: &Db) -> decentdb::Result<bool> {
-    let table_result = db.execute("SELECT name FROM sqlite_schema WHERE type = 'table'")?;
-    Ok(!table_result.rows().is_empty())
+    Ok(!db.list_tables()?.is_empty())
 }
 
 fn has_system_config_table(db: &Db) -> decentdb::Result<bool> {
-    let table_result = db.execute(
-        "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'system_config'",
-    )?;
-    Ok(!table_result.rows().is_empty())
+    Ok(db
+        .list_tables()?
+        .iter()
+        .any(|table| table.name == "system_config"))
 }
 
 pub(crate) fn existing_schema_version(db: &Db) -> decentdb::Result<Option<i64>> {

@@ -15,6 +15,12 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 
 Always pass all four before considering a change done. Use `--locked` because `Cargo.lock` is committed.
 
+## Git write approval
+
+Agents must never create commits, create tags, push branches, merge pull requests,
+or publish releases without explicit approval from the user in the current
+conversation. Leave completed work in the worktree until approval is given.
+
 ## Native build prerequisite
 
 DecentDB requires `clang` and `libclang-dev`. Install before building:

@@ -305,6 +305,16 @@ prompt = "Command? "
 key = "D"
 label = "Doors"
 action = "doors"
+
+[[menus.main.items]]
+key = "M"
+label = "Messages"
+action = "messages"
+
+[[menus.main.items]]
+key = "G"
+label = "Goodbye"
+action = "logoff"
 ```
 
 Menu item actions must resolve to safe internal actions such as login, new user,
@@ -320,7 +330,9 @@ while generic telnet clients such as `xterm`/`vt100` receive ASCII or text
 assets. NAWS column width can select 40-column ANSI variants for ANSI callers.
 
 Current v1 runtime behavior supports login, new user, doors, messages, logoff,
-show screen, submenu, and no-op. `submenu` actions now resolve to the configured
+show screen, submenu, and no-op. The starter config exposes new-user
+registration from the login menu only; the post-login starter main menu exposes
+Doors, Messages, and Goodbye. `submenu` actions now resolve to the configured
 target menu and remain in the resulting menu context at runtime; nested submenu
 navigation is supported. Guest access is not enabled by default in v1: callers
 must create or use an account before reaching the main menu.

@@ -23,6 +23,7 @@ export default defineConfig({
       { text: 'Setup', link: '/project/setup' },
       { text: 'Architecture', link: '/project/architecture' },
       { text: 'Menus', link: '/project/menus' },
+      { text: 'Caller Commands', link: '/project/caller-commands' },
       { text: 'Sysop CLI', link: '/project/sysop-cli' },
       { text: 'Versioning', link: '/project/versioning' },
       { text: 'Changelog', link: '/about/changelog' }
@@ -38,6 +39,7 @@ export default defineConfig({
           { text: 'DOSEMU2 On Fedora', link: '/project/dosemu2-fedora' },
           { text: 'Architecture', link: '/project/architecture' },
           { text: 'Menu System', link: '/project/menus' },
+          { text: 'Caller Commands', link: '/project/caller-commands' },
           { text: 'Sysop CLI', link: '/project/sysop-cli' },
           { text: 'Versioning', link: '/project/versioning' },
           { text: 'Deployment', link: '/project/deployment' }
