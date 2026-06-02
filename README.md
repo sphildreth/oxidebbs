@@ -41,7 +41,6 @@ menus.
 │   ├── DECENTDB_SCHEMA.md
 │   ├── DOORS.md
 │   ├── FTN_NETWORKING.md
-│   ├── LICENSING.md
 │   ├── PRD.md
 │   ├── ROADMAP.md
 │   ├── RUNBOOK.md
@@ -186,4 +185,6 @@ A Codeberg mirror may be added later if the project wants a secondary FOSS-commu
 
 ## License
 
-OxideBBS is licensed under the Apache License, Version 2.0. See `LICENSE` and `design/LICENSING.md`.
+OxideBBS is licensed under the Apache License, Version 2.0. See `LICENSE`.
+The repository licensing decision and contribution/asset policy are recorded in
+`design/adr/0007-use-github-and-apache-2.md`.
