@@ -13,6 +13,27 @@ pub struct AuditEventRecord {
 pub fn insert_audit_event(db: &Db, event: &AuditEventRecord) -> decentdb::Result<()> {
     db.execute_with_params(
         "INSERT INTO audit_events (id, created_at, event_type, user_id, node_number, details)
+         VALUES (GEN_RANDOM_UUID(), CURRENT_TIMESTAMP, $1, UUID_PARSE($2), $3, $4)",
+        &[
+            Value::Text(event.event_type.clone()),
+            event
+                .user_id
+                .as_ref()
+                .map(|u| Value::Text(u.clone()))
+                .unwrap_or(Value::Null),
+            event.node_number.map(Value::Int64).unwrap_or(Value::Null),
+            Value::Text(event.details.clone()),
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn insert_audit_event_preserving_record(
+    db: &Db,
+    event: &AuditEventRecord,
+) -> decentdb::Result<()> {
+    db.execute_with_params(
+        "INSERT INTO audit_events (id, created_at, event_type, user_id, node_number, details)
          VALUES (UUID_PARSE($1), $2, $3, UUID_PARSE($4), $5, $6)",
         &[
             Value::Text(event.id.clone()),
@@ -50,6 +71,29 @@ pub fn list_audit_events_for_user(
         &[Value::Text(user_id.to_string()), Value::Int64(limit)],
     )?;
     Ok(result.rows().iter().map(row_to_audit_event).collect())
+}
+
+pub fn purge_audit_events_older_than(db: &Db, cutoff_timestamp: &str) -> decentdb::Result<i64> {
+    let before = audit_event_count(db)?;
+    db.execute_with_params(
+        "DELETE FROM audit_events WHERE created_at < CAST($1 AS TIMESTAMPTZ)",
+        &[Value::Text(cutoff_timestamp.to_string())],
+    )?;
+    let after = audit_event_count(db)?;
+    Ok(before.saturating_sub(after))
+}
+
+fn audit_event_count(db: &Db) -> decentdb::Result<i64> {
+    let result = db.execute("SELECT COUNT(*) FROM audit_events")?;
+    Ok(result
+        .rows()
+        .first()
+        .and_then(|row| row.values().first())
+        .and_then(|value| match value {
+            Value::Int64(count) => Some(*count),
+            _ => None,
+        })
+        .unwrap_or(0))
 }
 
 fn row_to_audit_event(row: &decentdb::QueryRow) -> AuditEventRecord {
@@ -174,10 +218,41 @@ mod tests {
                 node_number: None,
                 details: "test".to_string(),
             };
-            insert_audit_event(&db, &event).expect("insert");
+            insert_audit_event_preserving_record(&db, &event).expect("insert");
         }
 
         let events = list_audit_events(&db, 3).expect("list");
         assert_eq!(events.len(), 3);
+    }
+
+    #[test]
+    fn purge_audit_events_older_than_deletes_only_old_rows() {
+        let db = test_db();
+        let old = AuditEventRecord {
+            id: "00000000-0000-4000-9000-000000000201".to_string(),
+            created_at: "2025-01-01T00:00:00.000000Z".to_string(),
+            event_type: "old".to_string(),
+            user_id: None,
+            node_number: None,
+            details: "old event".to_string(),
+        };
+        let new = AuditEventRecord {
+            id: "00000000-0000-4000-9000-000000000202".to_string(),
+            created_at: "2026-01-01T00:00:00.000000Z".to_string(),
+            event_type: "new".to_string(),
+            user_id: None,
+            node_number: None,
+            details: "new event".to_string(),
+        };
+        insert_audit_event_preserving_record(&db, &old).expect("insert old");
+        insert_audit_event_preserving_record(&db, &new).expect("insert new");
+
+        let deleted =
+            purge_audit_events_older_than(&db, "2025-06-01T00:00:00.000000Z").expect("purge");
+
+        assert_eq!(deleted, 1);
+        let events = list_audit_events(&db, 10).expect("list");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, "new");
     }
 }

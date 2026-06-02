@@ -126,6 +126,10 @@ This socket enables:
 - live node messaging/disconnect/broadcast/reset-stale
 - stale node detection visibility
 
+On Unix, the runtime directory is mode `0700`, the socket is mode `0600`, and
+incoming control clients are rejected unless their peer UID matches the server
+process UID.
+
 If the socket path already exists and is active, startup fails instead of silently
 falling back to offline behavior.
 
@@ -148,6 +152,8 @@ systemctl start oxidebbs
   local control socket.
 - `status` reports uptime from the live listener when available; otherwise marks it
   unavailable.
+- Live `status --json` includes `audit_write_failures`, the count of best-effort
+  audit writes that failed during the current server run.
 
 ## Service layout examples
 
@@ -171,6 +177,14 @@ Restart=on-failure
 [Install]
 WantedBy=multi-user.target
 ```
+
+Keep the configured telnet bind on `127.0.0.1:2323` unless you are deliberately
+exposing a plaintext telnet service. Public binds send credentials and caller
+traffic without encryption.
+
+Before public exposure, run a connection limit smoke test with
+`max_connections + 1` callers. The extra caller should receive the busy message
+while accepted nodes remain visible and stable through `nodes list`.
 
 ## Documentation site deployment
 

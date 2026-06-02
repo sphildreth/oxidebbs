@@ -2,7 +2,7 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 
 use argon2::password_hash::{PasswordHash, PasswordHasher, SaltString};
-use argon2::{Argon2, PasswordVerifier as Argon2PasswordVerifier};
+use argon2::{Algorithm, Argon2, Params, PasswordVerifier as Argon2PasswordVerifier, Version};
 use clap::{Parser, Subcommand};
 use rand_core::OsRng;
 use serde_json::{Value as JsonValue, json};
@@ -262,7 +262,7 @@ pub(crate) fn current_timestamp(db: &OxideDb) -> CliResult<String> {
 
 pub(crate) fn hash_password(password: &str) -> CliResult<String> {
     let salt = SaltString::generate(&mut OsRng);
-    let password_hash = Argon2::default()
+    let password_hash = default_argon2()?
         .hash_password(password.as_bytes(), &salt)
         .map_err(|error| CliError::Message(format!("password hashing failed: {error}")))?;
     Ok(password_hash.to_string())
@@ -273,9 +273,18 @@ pub(crate) fn verify_password(password: &str, password_hash: &str) -> bool {
     let Ok(parsed_hash) = PasswordHash::new(password_hash) else {
         return false;
     };
-    Argon2::default()
+    let Ok(argon2) = default_argon2() else {
+        return false;
+    };
+    argon2
         .verify_password(password.as_bytes(), &parsed_hash)
         .is_ok()
+}
+
+fn default_argon2() -> CliResult<Argon2<'static>> {
+    let params = Params::new(19_456, 2, 1, None)
+        .map_err(|error| CliError::Message(format!("invalid Argon2 parameters: {error}")))?;
+    Ok(Argon2::new(Algorithm::Argon2id, Version::V0x13, params))
 }
 
 pub(crate) fn audit(

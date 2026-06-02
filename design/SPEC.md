@@ -101,6 +101,11 @@ accepting callers, assigns node slots up to the configured node and connection
 limits, records session/audit lifecycle rows, and closes sessions on caller
 disconnect, logoff, or idle timeout.
 
+The telnet transport reads from the socket into an internal 4096-byte buffer and
+serves caller input one byte at a time to the parser. Telnet negotiation replies
+are batched and flushed before caller-visible output, before blocking for more
+input when replies are pending, and before hangup.
+
 ## 5. ANSI/CP437 design
 
 OxideBBS must not treat remote caller output as normal Unicode UI.
@@ -121,6 +126,13 @@ The default caller profile may be 80x25, but 40-column callers are a supported
 target, not an edge case. Screen assets should either have width-specific
 variants or render through layouts that can fit within 40 columns without
 truncating commands or corrupting ANSI/CP437 art.
+
+Caller-entered text that will be echoed or rendered remotely must be
+CP437-compatible before it is stored. If it is not, the caller sees exactly:
+`This BBS only accepts CP437-compatible text here.` Password input is hidden and
+is not subject to CP437 rejection. Server-generated fallback/diagnostic output
+may replace unencodable characters with `?`; caller-authored message subjects
+and bodies must not be silently rewritten.
 
 Avoid using Ratatui for remote caller UI. Ratatui is appropriate for local sysop/admin TUI only.
 
@@ -249,7 +261,18 @@ Example top-level sections:
 name = "OxideBBS"
 
 [telnet]
-bind = "0.0.0.0:2323"
+bind = "127.0.0.1:2323"
+
+[auth]
+failed_login_threshold = 5
+failed_login_window_minutes = 10
+failed_login_lockout_minutes = 15
+new_user_security_level = 10
+
+[auth.argon2]
+memory_cost_kib = 19456
+iterations = 2
+parallelism = 1
 
 [database]
 path = "./data/oxidebbs.ddb"
@@ -303,7 +326,9 @@ navigation is supported. Guest access is not enabled by default in v1: callers
 must create or use an account before reaching the main menu.
 
 The runtime sends `terminal.welcome_screen` from the configured ANSI asset path
-on connect, then uses `flow.login_screen`, `flow.post_login_screens`, and
+on connect. ANSI callers receive the configured asset; plain text callers first
+probe sibling `.asc` and `.txt` assets before falling back to stripped ANSI
+text. The runtime then uses `flow.login_screen`, `flow.post_login_screens`, and
 `flow.main_menu` for caller screen routing. The `terminal.logoff_screen` field
 remains configuration metadata for future dedicated logoff rendering; logoff
 currently sends a plain goodbye line.
@@ -412,6 +437,11 @@ arguments, runtime directory, generated drop file, DOSEMU2 COM1 PTY path, and
 per-run runner stdout/stderr log paths when available. A door runner that exits
 before the COM1 PTY appears must be distinguishable from a bridged door session
 that exits normally.
+
+Door audit writes are best-effort. Failed audit writes increment the live
+runtime `audit_write_failures` counter, which is included in control status
+responses. Audit row ids and timestamps are generated inline by DecentDB for
+normal runtime inserts.
 
 ## 15. Error handling
 

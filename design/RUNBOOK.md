@@ -51,15 +51,15 @@ cargo run -p oxidebbs-server -- status
 cargo run -p oxidebbs-server -- nodes list
 ```
 
-`oxidebbs-server setup` and `db init` create schema `3`. When an existing
-DecentDB uses supported older schema version `2`, startup runs the upgrade
-before serving callers. The `2 -> 3` migration rebuilds the message-area and
-message tables so every message area receives `enabled = TRUE` while preserving
-messages and replies. Because DecentDB cannot drop the renamed schema-2
-self-referencing `messages` table, the old tables remain as
-`oxidebbs_schema2_*` archives and are not used by runtime queries. Databases with
-a future marker, missing marker, or unmarked existing tables are refused with a
-clear error and should be opened only with compatible OxideBBS software.
+`oxidebbs-server setup` and `db init` create schema `4`. When an existing
+DecentDB uses supported older schema versions `2` or `3`, startup runs the
+upgrade before serving callers. The migration chain preserves local users,
+messages, replies, sessions, doors, runs, and audit rows while adding
+`message_areas.enabled`, `users.alias_normalized`, and persistent
+`auth_attempts`. Renamed pre-upgrade tables remain as `oxidebbs_schema*_*`
+archives and are not used by runtime queries. Databases with a future marker,
+missing marker, or unmarked existing tables are refused with a clear error and
+should be opened only with compatible OxideBBS software.
 
 The CLI uses `config/oxidebbs.toml` when it exists, otherwise it falls back to
 `config/oxidebbs.example.toml`. Pass `--config <path>` to force a file.
@@ -78,6 +78,9 @@ The socket is local-only. On Unix, startup removes a stale
 `runtime/oxidebbs-control.sock` only when no process is listening on it. If
 another server is still accepting connections on that socket, `serve` reports a
 startup error instead of falling back to offline control behavior.
+The runtime directory is created with mode `0700`, the control socket is chmoded
+to `0600`, and Unix clients are accepted only when their peer UID matches the
+server process UID.
 
 If cleanup ever remains necessary, stop the managed service or development
 process first, then remove only the socket file:
@@ -217,6 +220,17 @@ UUIDs with full foreign-key-aware insertion order and transactionality.
 
 `db compact` is intentionally unsupported in this release because DecentDB does
 not expose a safe compaction API contract.
+
+Audit retention is configured with `[audit].retention_days` and defaults to
+`365`. Runtime inserts do not auto-delete old audit rows; scheduled maintenance
+should call the DecentDB repository purge helper or a future CLI wrapper.
+
+## Load-test note
+
+Before exposing a board beyond a local development listener, run a connection
+limit smoke test with `max_connections + 1` callers. The extra caller should
+receive `System is busy. Please try again later.` while all accepted node slots
+remain stable and controllable through `nodes list`.
 
 ## DOSEMU2 smoke path
 

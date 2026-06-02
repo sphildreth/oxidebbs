@@ -120,6 +120,9 @@ Connect to `localhost:2323` with telnet or SyncTERM. The Docker image includes
 DOSEMU2 and the bundled Oxide-owned `oxide-check` DOS test door, so host systems
 do not need a native DOSEMU2 install for Docker deployment.
 Use `OXIDEBBS_HOST_TELNET_PORT` to publish a different host port.
+The generated and example configs bind OxideBBS to `127.0.0.1:2323` by default;
+binding telnet to a public interface is an operator choice because telnet sends
+credentials and caller traffic in plaintext.
 
 See `docs/project/docker.md` for volume, reset, and door-testing details.
 

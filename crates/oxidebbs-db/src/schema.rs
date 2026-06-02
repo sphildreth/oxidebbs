@@ -87,6 +87,7 @@ fn create_full_schema(db: &Db) -> decentdb::Result<()> {
         CREATE TABLE IF NOT EXISTS users (
             id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
             alias TEXT NOT NULL UNIQUE CHECK (LENGTH(TRIM(alias)) > 0),
+            alias_normalized TEXT NOT NULL UNIQUE CHECK (LENGTH(TRIM(alias_normalized)) > 0),
             real_name TEXT NOT NULL CHECK (LENGTH(TRIM(real_name)) > 0),
             email TEXT,
             password_hash TEXT NOT NULL,
@@ -98,6 +99,16 @@ fn create_full_schema(db: &Db) -> decentdb::Result<()> {
             time_bank_minutes INT NOT NULL DEFAULT 0 CHECK (time_bank_minutes >= 0),
             status TEXT NOT NULL DEFAULT 'active'
                 CHECK (status = 'active' OR status = 'locked' OR status = 'disabled')
+        );
+
+        CREATE TABLE IF NOT EXISTS auth_attempts (
+            scope TEXT NOT NULL CHECK (scope = 'ip' OR scope = 'alias'),
+            scope_key TEXT NOT NULL CHECK (LENGTH(TRIM(scope_key)) > 0),
+            failed_count INT NOT NULL DEFAULT 0 CHECK (failed_count >= 0),
+            first_failed_at TIMESTAMPTZ,
+            last_failed_at TIMESTAMPTZ,
+            locked_until TIMESTAMPTZ,
+            PRIMARY KEY (scope, scope_key)
         );
 
         CREATE TABLE IF NOT EXISTS audit_events (
@@ -298,6 +309,7 @@ mod tests {
         let tables = [
             "system_config",
             "users",
+            "auth_attempts",
             "audit_events",
             "message_areas",
             "messages",

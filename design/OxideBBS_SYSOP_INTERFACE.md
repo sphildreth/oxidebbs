@@ -127,7 +127,7 @@ Useful options:
 
 ```bash
 oxidebbs serve --config config/oxidebbs.toml
-oxidebbs serve --bind 0.0.0.0:2323
+oxidebbs serve --bind 0.0.0.0:2323  # explicit plaintext public bind
 oxidebbs serve --dry-run
 ```
 
@@ -217,7 +217,7 @@ OxideBBS Status
 Board:        Blackboard BBS
 Version:      0.2.0
 Database:     ./data/oxidebbs.ddb
-Telnet:       0.0.0.0:2323
+Telnet:       127.0.0.1:2323
 Nodes:        4 total, 1 active
 Doors:        3 enabled
 Messages:     5 areas
@@ -296,6 +296,10 @@ The node commands are backed by a local Unix control socket at:
 <runtime>/oxidebbs-control.sock
 ```
 
+The control socket is local-only and only accepts callers whose Unix peer UID matches
+the server process effective UID; it also uses local filesystem permissions for
+additional isolation.
+
 `nodes list`, `nodes show`, `nodes watch`, `nodes disconnect`, `nodes message`,
 `nodes broadcast`, and `nodes reset-stale` attempt live runtime state first.
 When the socket is unavailable they fall back to DecentDB session rows (for status)
@@ -312,6 +316,9 @@ server is running, these states come from the local runtime registry and include
 heartbeat age for stale-session diagnosis. `nodes reset-stale` should use the
 live control channel when available and fall back to audited intent when the
 server is unreachable.
+
+Future web-based admin interfaces are not in v1 and, if introduced, must not
+proceed until CSRF and replay protections are in place.
 
 ## Message commands
 

@@ -1,6 +1,8 @@
 //! Door definitions, drop files, and runners.
 
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::thread;
@@ -167,6 +169,8 @@ pub fn prepare_node_runtime_dir(
 ) -> Result<PathBuf, DoorError> {
     let dir = node_runtime_dir(base, node_number);
     fs::create_dir_all(&dir)?;
+    #[cfg(unix)]
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))?;
     Ok(dir)
 }
 
@@ -505,6 +509,15 @@ command = "LORD.EXE"
 
         assert_eq!(path, base.join("node-002"));
         assert!(path.is_dir());
+        #[cfg(unix)]
+        {
+            let mode = fs::metadata(&path)
+                .expect("dir metadata")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o700);
+        }
 
         cleanup_node_runtime_dir(&base).expect("cleanup");
     }

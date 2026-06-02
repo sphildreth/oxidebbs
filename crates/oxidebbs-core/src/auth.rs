@@ -13,6 +13,7 @@ pub struct NewUserInput {
     pub real_name: String,
     pub email: Option<String>,
     pub password_hash: String,
+    pub security_level: i32,
     pub created_at: String,
 }
 
@@ -44,6 +45,9 @@ pub enum AuthFlowError {
 
     #[error("password verification failed")]
     PasswordRejected,
+
+    #[error("security level must be between 0 and 255")]
+    InvalidSecurityLevel,
 }
 
 pub trait PasswordVerifier {
@@ -67,6 +71,9 @@ pub fn create_new_user(input: NewUserInput) -> Result<User, AuthFlowError> {
     if input.password_hash.trim().is_empty() {
         return Err(AuthFlowError::MissingPasswordHash);
     }
+    if !(0..=255).contains(&input.security_level) {
+        return Err(AuthFlowError::InvalidSecurityLevel);
+    }
 
     Ok(User {
         id: input.id,
@@ -74,7 +81,7 @@ pub fn create_new_user(input: NewUserInput) -> Result<User, AuthFlowError> {
         real_name: input.real_name.trim().to_string(),
         email: input.email.and_then(normalize_optional_email),
         password_hash: input.password_hash,
-        security_level: 10,
+        security_level: input.security_level,
         is_sysop: false,
         created_at: input.created_at,
         last_login_at: None,
@@ -158,6 +165,7 @@ mod tests {
             real_name: "Test User".to_string(),
             email: Some(" test@example.com ".to_string()),
             password_hash: "$argon2id$v=19$hash".to_string(),
+            security_level: 10,
             created_at: "2026-01-01T00:00:00Z".to_string(),
         }
     }
@@ -171,6 +179,26 @@ mod tests {
         assert_eq!(user.security_level, 10);
         assert_eq!(user.status, UserStatus::Active);
         assert_eq!(user.total_calls, 0);
+    }
+
+    #[test]
+    fn new_user_flow_uses_configured_security_level() {
+        let mut input = new_user_input("starter");
+        input.security_level = 20;
+
+        let user = create_new_user(input).expect("create user");
+
+        assert_eq!(user.security_level, 20);
+    }
+
+    #[test]
+    fn new_user_flow_rejects_out_of_range_security_level() {
+        let mut input = new_user_input("starter");
+        input.security_level = 256;
+
+        let error = create_new_user(input).expect_err("invalid level");
+
+        assert_eq!(error, AuthFlowError::InvalidSecurityLevel);
     }
 
     #[test]

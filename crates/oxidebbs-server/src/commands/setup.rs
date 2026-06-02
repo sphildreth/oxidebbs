@@ -36,8 +36,12 @@ pub struct SetupArgs {
     pub sysop_password: Option<String>,
 
     /// Telnet port for non-interactive setup
-    #[arg(long)]
+    #[arg(long, conflicts_with = "telnet_bind")]
     pub telnet_port: Option<u16>,
+
+    /// Full telnet bind address for non-interactive setup
+    #[arg(long)]
+    pub telnet_bind: Option<String>,
 
     /// Node count for non-interactive setup
     #[arg(long)]
@@ -91,6 +95,7 @@ fn setup_answers(args: SetupArgs) -> CliResult<setup::SetupAnswers> {
         || args.sysop_alias.is_some()
         || args.sysop_password.is_some()
         || args.telnet_port.is_some()
+        || args.telnet_bind.is_some()
         || args.nodes.is_some()
         || args.no_sample_ansi
         || args.enable_example_door;
@@ -114,7 +119,10 @@ fn setup_answers(args: SetupArgs) -> CliResult<setup::SetupAnswers> {
         ));
     }
     if let Some(port) = args.telnet_port {
-        answers.telnet_bind = format!("0.0.0.0:{port}");
+        answers.telnet_bind = format!("127.0.0.1:{port}");
+    }
+    if let Some(bind) = args.telnet_bind {
+        answers.telnet_bind = bind;
     }
     if let Some(nodes) = args.nodes {
         if nodes == 0 {
@@ -210,6 +218,7 @@ mod tests {
             sysop_alias: Some("sysop".to_string()),
             sysop_password: Some("passw0rd".to_string()),
             telnet_port: Some(2324),
+            telnet_bind: None,
             nodes: Some(4),
             no_sample_ansi: true,
             enable_example_door: false,

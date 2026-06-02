@@ -22,9 +22,11 @@ Suggested asset paths:
 
 ```text
 assets/ansi/welcome.ans
+assets/ansi/welcome.asc
 assets/ansi/welcome-40.ans
 assets/ansi/logon.ans
 assets/ansi/logoff.ans
+assets/ansi/logoff.asc
 assets/ansi/main-menu.ans
 assets/ansi/main-menu-40.ans
 assets/ansi/sysop-menu.ans

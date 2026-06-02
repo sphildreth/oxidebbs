@@ -6,30 +6,30 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use argon2::password_hash::{PasswordHash, PasswordHasher, SaltString};
-use argon2::{Argon2, PasswordVerifier as Argon2PasswordVerifier};
+use argon2::{Algorithm, Argon2, Params, PasswordVerifier as Argon2PasswordVerifier, Version};
 use rand_core::OsRng;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 #[cfg(unix)]
 use tokio::signal::unix::{SignalKind, signal};
+use tokio::sync::oneshot;
 use tokio::time::{sleep, timeout};
 use tracing::{error, info, warn};
 
-use oxidebbs_core::auth::{
-    LoginAttempt, NewUserInput, PasswordVerifier as CorePasswordVerifier, create_new_user,
-    login_user,
-};
+use oxidebbs_core::auth::{NewUserInput, create_new_user};
 use oxidebbs_core::menu::{Menu, MenuAction};
 use oxidebbs_core::message::{
     AreaKind, Message, MessageArea, MessageVisibility, PostMessageCommand, ReplyMessageCommand,
-    post_message, readable_messages, reply_message,
+    post_message, reply_message,
 };
 use oxidebbs_core::user::{User, UserStatus};
 use oxidebbs_db::{
-    AuditEventRecord, MessageAreaRecord, MessageRecord, OxideDb, SessionRecord, UserRecord,
-    end_session, find_message_area_by_key, find_user_by_alias_ci, find_user_by_id,
-    insert_audit_event, insert_message, insert_message_area, insert_session, insert_user,
-    list_message_areas, list_messages_in_area, update_session_user, update_user_login,
+    AuditEventRecord, MessageAreaRecord, MessageRecord, OxideDb, SessionRecord, UserInsertError,
+    UserRecord, clear_auth_attempt, end_session, find_user_by_alias_ci, insert_audit_event,
+    insert_message, insert_message_area, insert_session, insert_user_if_alias_available,
+    is_auth_scope_locked, list_message_areas, list_user_aliases_by_ids,
+    list_visible_messages_in_area, normalize_alias, record_auth_failure, update_session_user,
+    update_user_login,
 };
 use oxidebbs_telnet::telnet::{
     DO, IAC, SB, SE, TELOPT_ECHO, TELOPT_SUPPRESS_GO_AHEAD, TELOPT_TTYPE_SEND, WILL,
@@ -42,7 +42,7 @@ use oxidebbs_term::{
     LoadedScreen, ScreenAsset as TermScreenAsset, TerminalCapabilities, encode_cp437,
 };
 
-use crate::config::OxideConfig;
+use crate::config::{Argon2Config, AuthConfig, OxideConfig};
 use crate::control::{
     ControlError, NodeAllocation, RuntimeNodeCommands, ServerRuntime, start_control_listener,
 };
@@ -71,9 +71,16 @@ pub enum ServeError {
 pub(crate) type ServeResult<T> = Result<T, ServeError>;
 
 const REJECTION_MESSAGE: &str = "System is busy. Please try again later.\r\n";
+const INVALID_LOGIN_MESSAGE: &str = "Invalid alias or password. Please try again.\r\n";
+const LOGIN_LOCKOUT_MESSAGE: &str = "Too many login attempts. Try again later.\r\n";
+const CP437_INPUT_REJECT_MESSAGE: &str = "This BBS only accepts CP437-compatible text here.";
+const CP437_INPUT_REJECT_LINE: &str = "This BBS only accepts CP437-compatible text here.\r\n";
+const DUMMY_PASSWORD_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$b3hpZGViYnMtZHVtbXktYXV0aC1zYWx0$CNvsc4yCQyC6gccREXpHZ6l9604svk9VP98AyAVSMtY";
 const PROMPT_TERMINATOR: &str = "\r\n";
 const MAIN_MENU_POST_LOGIN: &str = "Please choose from the menu.\r\n";
 const TERMINAL_CAPABILITY_NEGOTIATION_TIMEOUT: Duration = Duration::from_millis(300);
+#[cfg(unix)]
+const STALE_NODE_SWEEP_INTERVAL: Duration = Duration::from_secs(30);
 
 pub async fn run(config: &OxideConfig, config_path: &Path) -> ServeResult<()> {
     run_until_shutdown(config, config_path, wait_for_shutdown_signal()).await
@@ -112,6 +119,7 @@ where
         config.telnet.max_connections,
         config.telnet.idle_timeout_seconds.saturating_add(30),
     ));
+    let shared_config = Arc::new(config.clone());
 
     let mut resolved_menus: HashMap<String, Arc<Menu>> = HashMap::new();
     for menu_id in config.menus.keys() {
@@ -146,6 +154,24 @@ where
                 )));
             }
         };
+
+    #[cfg(unix)]
+    let (mut stale_node_shutdown, stale_node_sweeper) = {
+        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+        (
+            Some(shutdown_tx),
+            Some(start_stale_node_sweeper(
+                Arc::clone(&runtime),
+                STALE_NODE_SWEEP_INTERVAL,
+                shutdown_rx,
+            )),
+        )
+    };
+    #[cfg(not(unix))]
+    let (mut stale_node_shutdown, stale_node_sweeper): (
+        Option<oneshot::Sender<()>>,
+        Option<tokio::task::JoinHandle<()>>,
+    ) = (None, None);
 
     let listener = TcpListener::bind(&config.telnet.bind).await?;
     emit_audit_event(
@@ -190,7 +216,7 @@ where
                     );
                     let resources = CallerResources {
                         db: Arc::clone(&db),
-                        config: Arc::new(config.clone()),
+                        config: Arc::clone(&shared_config),
                         login_menu: Arc::clone(&login_menu),
                         main_menu: Arc::clone(&main_menu),
                         menus: Arc::clone(&menus),
@@ -246,6 +272,15 @@ where
         }
     }
 
+    if let Some(shutdown_tx) = stale_node_shutdown.take() {
+        let _ = shutdown_tx.send(());
+    }
+    if let Some(handle) = stale_node_sweeper
+        && let Err(error) = handle.await
+    {
+        warn!("stale node sweeper shutdown failed: {error}");
+    }
+
     if let Some(handle) = control_listener {
         handle.abort();
     }
@@ -273,6 +308,26 @@ async fn reject_connection(mut stream: TcpStream) -> ServeResult<()> {
     stream.write_all(&bytes).await?;
     stream.shutdown().await?;
     Ok(())
+}
+
+#[cfg(unix)]
+fn start_stale_node_sweeper(
+    runtime: Arc<ServerRuntime>,
+    interval: Duration,
+    mut shutdown: oneshot::Receiver<()>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                _ = sleep(interval) => {
+                    let _ = runtime.request_stale_disconnects("stale_node_timeout");
+                }
+                _ = &mut shutdown => {
+                    break;
+                }
+            }
+        }
+    })
 }
 
 struct CallerResources {
@@ -315,7 +370,7 @@ async fn handle_caller(
             user_id: None,
             transport: "telnet".to_string(),
             remote_address: peer.address.clone(),
-            remote_ip: Some(peer.ip),
+            remote_ip: Some(peer.ip.clone()),
             remote_port: Some(peer.port),
             started_at: connected_at.clone(),
             ended_at: None,
@@ -330,6 +385,7 @@ async fn handle_caller(
             "insert_session",
             &error,
             "failed to open caller session",
+            Some(&runtime),
         );
         error!("failed to insert session record: {error}");
         ServeError::Database(error)
@@ -441,7 +497,10 @@ async fn handle_caller(
                         Some(MenuAction::Login) => {
                             let mut auth_state = AuthFlowState {
                                 db: db.as_ref(),
+                                config: &config,
+                                runtime: runtime.as_ref(),
                                 node_number,
+                                remote_ip: &peer.ip,
                                 session_id: &session_id,
                                 authenticated_user: &mut authenticated_user,
                                 idle_timeout,
@@ -484,7 +543,10 @@ async fn handle_caller(
                         Some(MenuAction::NewUser) => {
                             let mut auth_state = AuthFlowState {
                                 db: db.as_ref(),
+                                config: &config,
+                                runtime: runtime.as_ref(),
                                 node_number,
+                                remote_ip: &peer.ip,
                                 session_id: &session_id,
                                 authenticated_user: &mut authenticated_user,
                                 idle_timeout,
@@ -654,6 +716,9 @@ async fn handle_caller(
     }
 
     runtime.mark_node_disconnecting(node_number_u16);
+    if let Err(error) = flush_pending_replies(&mut transport, &mut input).await {
+        warn!("failed to flush pending negotiation replies: {error}");
+    }
     if let Err(error) = transport.hangup().await {
         warn!("failed to hang up telnet transport: {error}");
     }
@@ -668,6 +733,7 @@ async fn handle_caller(
             "end_session",
             &error,
             "failed to close session",
+            Some(&runtime),
         );
     }
     runtime.mark_node_disconnected(node_number_u16);
@@ -713,6 +779,7 @@ enum MessageIndexPromptResult {
 #[derive(Debug)]
 enum PromptLineResult {
     Value(String),
+    Rejected,
     Disconnected,
     IdleTimeout,
 }
@@ -723,6 +790,8 @@ async fn negotiate_terminal_capabilities<T: Transport>(
     negotiation_timeout: Duration,
 ) -> ServeResult<TerminalCapabilities> {
     let mut capabilities = TerminalCapabilities::plain_text();
+    let mut terminal_type_evaluated = false;
+    let mut naws_seen = false;
     transport.write_all(&terminal_capability_requests()).await?;
 
     let Ok(result) = timeout(negotiation_timeout, async {
@@ -735,7 +804,15 @@ async fn negotiate_terminal_capabilities<T: Transport>(
                     return Ok(()) as ServeResult<()>;
                 }
                 CallerInput::Event(event) => {
-                    if apply_capability_event(transport, &mut capabilities, event).await? {
+                    if apply_capability_event(
+                        transport,
+                        &mut capabilities,
+                        &mut terminal_type_evaluated,
+                        &mut naws_seen,
+                        event,
+                    )
+                    .await?
+                    {
                         return Ok(()) as ServeResult<()>;
                     }
                 }
@@ -779,6 +856,8 @@ fn terminal_capability_requests() -> [u8; 15] {
 async fn apply_capability_event<T: Transport>(
     transport: &mut T,
     capabilities: &mut TerminalCapabilities,
+    terminal_type_evaluated: &mut bool,
+    naws_seen: &mut bool,
     event: TelnetEvent,
 ) -> ServeResult<bool> {
     match event {
@@ -793,9 +872,11 @@ async fn apply_capability_event<T: Transport>(
         }
         TelnetEvent::TerminalType(terminal_type) => {
             capabilities.supports_ansi = terminal_type_supports_ansi(&terminal_type);
+            *terminal_type_evaluated = true;
         }
         TelnetEvent::WindowSize { columns, .. } if columns > 0 => {
             capabilities.width = columns;
+            *naws_seen = true;
         }
         TelnetEvent::Data(_) => return Ok(true),
         TelnetEvent::Negotiation { .. }
@@ -804,7 +885,7 @@ async fn apply_capability_event<T: Transport>(
         | TelnetEvent::Subnegotiation { .. } => {}
     }
 
-    Ok(false)
+    Ok(*terminal_type_evaluated && *naws_seen)
 }
 
 fn terminal_type_supports_ansi(terminal_type: &[u8]) -> bool {
@@ -822,7 +903,10 @@ fn terminal_type_supports_ansi(terminal_type: &[u8]) -> bool {
 
 struct AuthFlowState<'a> {
     db: &'a OxideDb,
+    config: &'a OxideConfig,
+    runtime: &'a ServerRuntime,
     node_number: i64,
+    remote_ip: &'a str,
     session_id: &'a str,
     authenticated_user: &'a mut Option<User>,
     idle_timeout: Duration,
@@ -872,6 +956,9 @@ async fn run_login_flow(
                 send_text(transport, "Idle timeout. Goodbye.\r\n").await?;
                 return Ok(AuthFlowResult::Exit);
             }
+            PromptLineResult::Rejected => {
+                unreachable!("prompt_for_line handles rejected input internally");
+            }
         };
 
     let password =
@@ -886,56 +973,79 @@ async fn run_login_flow(
                 send_text(transport, "Idle timeout. Goodbye.\r\n").await?;
                 return Ok(AuthFlowResult::Exit);
             }
+            PromptLineResult::Rejected => {
+                unreachable!("prompt_for_line handles rejected input internally");
+            }
         };
 
     let login_at = current_timestamp(db)?;
-    let user_record = match find_user_by_alias_ci(db.db(), &alias)? {
-        Some(record) => record,
-        None => {
-            let event_error = format!("login failed for alias {alias}");
-            emit_audit_event(
-                db,
-                "login_failure",
-                None,
-                Some(node_number),
-                event_error.clone(),
-            );
+    let alias_scope_key = normalize_alias(&alias);
+    if is_auth_scope_locked(db.db(), "ip", state.remote_ip, &login_at)?
+        || is_auth_scope_locked(db.db(), "alias", &alias_scope_key, &login_at)?
+    {
+        send_text(transport, LOGIN_LOCKOUT_MESSAGE).await?;
+        return Ok(AuthFlowResult::Retry);
+    }
 
-            send_text(
-                transport,
-                "Invalid alias or password. Please try again.\r\n",
-            )
-            .await?;
-            return Ok(AuthFlowResult::Retry);
-        }
+    let user_record = find_user_by_alias_ci(db.db(), &alias)?;
+    let Some(user_record) = user_record else {
+        run_dummy_password_verify(&password, &state.config.auth.argon2)?;
+        record_login_failure_scopes(
+            db,
+            state.remote_ip,
+            &alias_scope_key,
+            &login_at,
+            &state.config.auth,
+        )?;
+        emit_audit_event(
+            db,
+            "login_failure",
+            None,
+            Some(node_number),
+            format!("login failed for alias {alias_scope_key}"),
+        );
+        send_text(transport, INVALID_LOGIN_MESSAGE).await?;
+        return Ok(AuthFlowResult::Retry);
     };
 
-    let user = user_from_record(&user_record)?;
-    let attempt = LoginAttempt {
-        alias,
-        password,
-        login_at: login_at.clone(),
-    };
-    let user = match login_user(&user, &attempt, &ServerPasswordVerifier) {
-        Ok(success) => success.user,
-        Err(error) => {
-            let event_error = format!("login failed for user {}: {error}", user.alias);
-            emit_audit_event(
-                db,
-                "login_failure",
-                Some(user.id.clone()),
-                Some(node_number),
-                event_error,
-            );
+    let mut user = user_from_record(&user_record)?;
+    let verification =
+        verify_stored_password(&password, &user.password_hash, &state.config.auth.argon2)?;
+    if verification == PasswordVerification::HashParseFailure {
+        emit_audit_event(
+            db,
+            "password_hash_parse_failure",
+            Some(user.id.clone()),
+            Some(node_number),
+            format!(
+                "stored password hash could not be parsed for {}",
+                user.alias
+            ),
+        );
+    }
+    let rejected =
+        user.status != UserStatus::Active || verification != PasswordVerification::Accepted;
+    if rejected {
+        record_login_failure_scopes(
+            db,
+            state.remote_ip,
+            &alias_scope_key,
+            &login_at,
+            &state.config.auth,
+        )?;
+        emit_audit_event(
+            db,
+            "login_failure",
+            Some(user.id.clone()),
+            Some(node_number),
+            format!("login failed for user {}", user.alias),
+        );
+        send_text(transport, INVALID_LOGIN_MESSAGE).await?;
+        return Ok(AuthFlowResult::Retry);
+    }
 
-            send_text(
-                transport,
-                "Invalid alias or password. Please try again.\r\n",
-            )
-            .await?;
-            return Ok(AuthFlowResult::Retry);
-        }
-    };
+    user.last_login_at = Some(login_at.clone());
+    user.total_calls += 1;
 
     if let Err(error) = update_user_login(db.db(), &user.id, &login_at) {
         emit_db_write_failed_event(
@@ -945,12 +1055,16 @@ async fn run_login_flow(
             "update_user_login",
             &error,
             "failed to update user login counters",
+            Some(state.runtime),
         );
         warn!(
             "failed to update user login counters for {}: {error}",
             user.alias
         );
     }
+
+    clear_auth_attempt(db.db(), "ip", state.remote_ip)?;
+    clear_auth_attempt(db.db(), "alias", &alias_scope_key)?;
 
     if let Err(error) = update_session_user(db.db(), session_id, &user.id) {
         emit_db_write_failed_event(
@@ -960,6 +1074,7 @@ async fn run_login_flow(
             "update_session_user",
             &error,
             "failed to associate user with session",
+            Some(state.runtime),
         );
         warn!(
             "failed to associate user {} with session {}: {error}",
@@ -1014,6 +1129,9 @@ async fn run_new_user_flow(
             send_text(transport, "Idle timeout. Goodbye.\r\n").await?;
             return Ok(AuthFlowResult::Exit);
         }
+        PromptLineResult::Rejected => {
+            unreachable!("prompt_for_line handles rejected input internally");
+        }
     };
 
     let real_name =
@@ -1027,6 +1145,9 @@ async fn run_new_user_flow(
                 *disconnect_reason = "idle_timeout".to_string();
                 send_text(transport, "Idle timeout. Goodbye.\r\n").await?;
                 return Ok(AuthFlowResult::Exit);
+            }
+            PromptLineResult::Rejected => {
+                unreachable!("prompt_for_line handles rejected input internally");
             }
         };
 
@@ -1057,12 +1178,10 @@ async fn run_new_user_flow(
             send_text(transport, "Idle timeout. Goodbye.\r\n").await?;
             return Ok(AuthFlowResult::Exit);
         }
+        PromptLineResult::Rejected => {
+            unreachable!("prompt_for_line handles rejected input internally");
+        }
     };
-
-    if find_user_by_alias_ci(db.db(), &alias)?.is_some() {
-        send_text(transport, "That alias is already in use.\r\n").await?;
-        return Ok(AuthFlowResult::Retry);
-    }
 
     let password = match prompt_for_line(
         transport,
@@ -1083,6 +1202,9 @@ async fn run_new_user_flow(
             *disconnect_reason = "idle_timeout".to_string();
             send_text(transport, "Idle timeout. Goodbye.\r\n").await?;
             return Ok(AuthFlowResult::Exit);
+        }
+        PromptLineResult::Rejected => {
+            unreachable!("prompt_for_line handles rejected input internally");
         }
     };
 
@@ -1106,6 +1228,9 @@ async fn run_new_user_flow(
             send_text(transport, "Idle timeout. Goodbye.\r\n").await?;
             return Ok(AuthFlowResult::Exit);
         }
+        PromptLineResult::Rejected => {
+            unreachable!("prompt_for_line handles rejected input internally");
+        }
     };
 
     if password != password_confirmation {
@@ -1114,13 +1239,14 @@ async fn run_new_user_flow(
     }
 
     let created_at = current_timestamp(db)?;
-    let password_hash = server_hash_password(&password)?;
+    let password_hash = server_hash_password(&password, &state.config.auth.argon2)?;
     let user = match create_new_user(NewUserInput {
         id: generated_uuid(db)?,
         alias,
         real_name,
         email,
         password_hash,
+        security_level: state.config.auth.new_user_security_level,
         created_at: created_at.clone(),
     }) {
         Ok(user) => user,
@@ -1144,16 +1270,25 @@ async fn run_new_user_flow(
         time_bank_minutes: user.time_bank_minutes,
         status: user_status_to_db(&user.status),
     };
-    if let Err(error) = insert_user(db.db(), &record) {
-        emit_db_write_failed_event(
-            db,
-            Some(node_number),
-            Some(user.id.clone()),
-            "insert_user",
-            &error,
-            "failed to create new user record",
-        );
-        return Ok(AuthFlowResult::Retry);
+    if let Err(error) = insert_user_if_alias_available(db.db(), &record) {
+        match error {
+            UserInsertError::DuplicateAlias { .. } => {
+                send_text(transport, "That alias is already in use.\r\n").await?;
+                return Ok(AuthFlowResult::Retry);
+            }
+            UserInsertError::Db(error) => {
+                emit_db_write_failed_event(
+                    db,
+                    Some(node_number),
+                    Some(user.id.clone()),
+                    "insert_user",
+                    &error,
+                    "failed to create new user record",
+                    Some(state.runtime),
+                );
+                return Ok(AuthFlowResult::Retry);
+            }
+        }
     }
 
     if let Err(error) = update_user_login(db.db(), &user.id, &created_at) {
@@ -1164,6 +1299,7 @@ async fn run_new_user_flow(
             "update_user_login",
             &error,
             "failed to update new user login counters",
+            Some(state.runtime),
         );
         warn!(
             "failed to update new user login counters for {}: {error}",
@@ -1182,6 +1318,7 @@ async fn run_new_user_flow(
             "update_session_user",
             &error,
             "failed to associate new user with session",
+            Some(state.runtime),
         );
         warn!(
             "failed to associate user {} with session {}: {error}",
@@ -1249,6 +1386,9 @@ async fn run_doors_flow(
                 *state.disconnect_reason = "idle_timeout".to_string();
                 send_text(transport, "Idle timeout. Goodbye.\r\n").await?;
                 return Ok(MenuFlowResult::Exit);
+            }
+            PromptLineResult::Rejected => {
+                unreachable!("prompt_for_line handles rejected input internally");
             }
         };
 
@@ -1340,14 +1480,16 @@ async fn run_messages_flow(
     };
 
     ensure_default_message_area(db, transport).await?;
+    let area_records = list_message_areas(db.db())?
+        .into_iter()
+        .filter(|area| area.enabled)
+        .collect::<Vec<_>>();
+    if area_records.is_empty() {
+        send_text(transport, "No message areas are configured.\r\n").await?;
+        return Ok(MenuFlowResult::Continue);
+    }
 
     loop {
-        let area_records = list_message_areas(db.db())?;
-        if area_records.is_empty() {
-            send_text(transport, "No message areas are configured.\r\n").await?;
-            return Ok(MenuFlowResult::Continue);
-        }
-
         send_text(transport, "\r\nMessage areas:\r\n").await?;
         for area in &area_records {
             send_text(
@@ -1377,25 +1519,30 @@ async fn run_messages_flow(
                 send_text(transport, "Idle timeout. Goodbye.\r\n").await?;
                 return Ok(MenuFlowResult::Exit);
             }
+            PromptLineResult::Rejected => {
+                unreachable!("prompt_for_line handles rejected input internally");
+            }
         };
 
         if selected_area_key.is_empty() {
             return Ok(MenuFlowResult::Continue);
         }
 
-        let area_record = match find_message_area_by_key(db.db(), &selected_area_key)? {
+        let area_record = match area_records
+            .iter()
+            .find(|area| area.key.eq_ignore_ascii_case(&selected_area_key))
+        {
             Some(area) => area,
             None => {
                 send_text(transport, "Unknown area.\r\n").await?;
                 continue;
             }
         };
-        let area = message_area_from_record(&area_record)?;
+        let area = message_area_from_record(area_record)?;
 
         loop {
             runtime.mark_node_reading_messages(node_number);
-            let visible =
-                visible_messages_for_user(db, &area, user.security_level, transport).await?;
+            let visible = visible_messages_for_user(db, &area, user.security_level)?;
             display_message_list(transport, db, &area, &visible).await?;
 
             let action = match prompt_for_line(
@@ -1417,6 +1564,9 @@ async fn run_messages_flow(
                     *disconnect_reason = "idle_timeout".to_string();
                     send_text(transport, "Idle timeout. Goodbye.\r\n").await?;
                     return Ok(MenuFlowResult::Exit);
+                }
+                PromptLineResult::Rejected => {
+                    unreachable!("prompt_for_line handles rejected input internally");
                 }
             };
             let action = action
@@ -1466,7 +1616,14 @@ async fn run_messages_flow(
                             send_text(transport, "Idle timeout. Goodbye.\r\n").await?;
                             return Ok(MenuFlowResult::Exit);
                         }
+                        PromptLineResult::Rejected => {
+                            unreachable!("prompt_for_line handles rejected input internally");
+                        }
                     };
+                    if validate_caller_cp437_text(&subject).is_err() {
+                        send_text(transport, CP437_INPUT_REJECT_LINE).await?;
+                        continue;
+                    }
 
                     let body = match prompt_for_message_body(transport, input, idle_timeout).await?
                     {
@@ -1480,7 +1637,16 @@ async fn run_messages_flow(
                             send_text(transport, "Idle timeout. Goodbye.\r\n").await?;
                             return Ok(MenuFlowResult::Exit);
                         }
+                        PromptLineResult::Rejected => {
+                            unreachable!(
+                                "prompt_for_message_body only returns rejection on CP437 validation"
+                            );
+                        }
                     };
+                    if validate_caller_cp437_text(&body).is_err() {
+                        send_text(transport, CP437_INPUT_REJECT_LINE).await?;
+                        continue;
+                    }
 
                     let draft = PostMessageCommand {
                         id: generated_uuid(db)?,
@@ -1509,6 +1675,7 @@ async fn run_messages_flow(
                             "insert_message",
                             &error,
                             "failed to save posted message",
+                            Some(state.runtime),
                         );
                         return Err(ServeError::Database(error));
                     }
@@ -1549,7 +1716,16 @@ async fn run_messages_flow(
                             send_text(transport, "Idle timeout. Goodbye.\r\n").await?;
                             return Ok(MenuFlowResult::Exit);
                         }
+                        PromptLineResult::Rejected => {
+                            unreachable!(
+                                "prompt_for_message_body only returns rejection on CP437 validation"
+                            );
+                        }
                     };
+                    if validate_caller_cp437_text(&body).is_err() {
+                        send_text(transport, CP437_INPUT_REJECT_LINE).await?;
+                        continue;
+                    }
 
                     let draft = ReplyMessageCommand {
                         id: generated_uuid(db)?,
@@ -1575,6 +1751,7 @@ async fn run_messages_flow(
                             "insert_message",
                             &error,
                             "failed to save reply",
+                            Some(state.runtime),
                         );
                         return Err(ServeError::Database(error));
                     }
@@ -1605,6 +1782,7 @@ async fn ensure_default_message_area(
             "seed_default_message_area",
             &error,
             "failed to seed default message area",
+            None,
         );
         warn!("failed to seed default message area: {error}");
         send_text(transport, "Messages are not available right now.\r\n").await?;
@@ -1612,29 +1790,22 @@ async fn ensure_default_message_area(
     Ok(())
 }
 
-async fn visible_messages_for_user(
+fn visible_messages_for_user(
     db: &OxideDb,
     area: &MessageArea,
     security_level: i32,
-    transport: &mut TcpTransport,
 ) -> ServeResult<Vec<Message>> {
-    let records = list_messages_in_area(db.db(), &area.id)?;
-    let messages = messages_from_records(&records);
-    match readable_messages(area, &messages, security_level) {
-        Ok(messages) => Ok(messages.into_iter().cloned().collect()),
-        Err(error) => {
-            send_text(transport, &format!("Unable to read messages: {error}\r\n")).await?;
-            Ok(Vec::new())
-        }
-    }
+    let records = list_visible_messages_in_area(db.db(), &area.id, i64::from(security_level))?;
+    Ok(messages_from_records(&records))
 }
 
-async fn display_message_list(
-    transport: &mut TcpTransport,
+async fn display_message_list<T: Transport>(
+    transport: &mut T,
     db: &OxideDb,
     area: &MessageArea,
     messages: &[Message],
 ) -> ServeResult<()> {
+    let author_aliases = message_author_aliases(db, messages);
     send_text(transport, &format!("\r\n{} messages:\r\n", area.name)).await?;
     if messages.is_empty() {
         send_text(transport, "No messages in this area.\r\n").await?;
@@ -1642,7 +1813,7 @@ async fn display_message_list(
     }
 
     for (index, message) in messages.iter().enumerate() {
-        let author = message_author_alias(db, &message.author_user_id);
+        let author = author_alias_from_map(&author_aliases, &message.author_user_id);
         send_text(
             transport,
             &format!("  {}) {} (from {})\r\n", index + 1, message.subject, author),
@@ -1652,12 +1823,13 @@ async fn display_message_list(
     Ok(())
 }
 
-async fn display_message(
-    transport: &mut TcpTransport,
+async fn display_message<T: Transport>(
+    transport: &mut T,
     db: &OxideDb,
     message: &Message,
 ) -> ServeResult<()> {
-    let author = message_author_alias(db, &message.author_user_id);
+    let author_aliases = message_author_aliases(db, std::slice::from_ref(message));
+    let author = author_alias_from_map(&author_aliases, &message.author_user_id);
     send_text(
         transport,
         &format!(
@@ -1697,6 +1869,9 @@ async fn prompt_for_message_index(
                 send_text(transport, "Idle timeout. Goodbye.\r\n").await?;
                 return Ok(MessageIndexPromptResult::Exit);
             }
+            PromptLineResult::Rejected => {
+                unreachable!("prompt_for_line handles rejected input internally");
+            }
         };
 
     match selected.trim().parse::<usize>() {
@@ -1715,9 +1890,11 @@ async fn prompt_for_message_body<T: Transport>(
     input: &mut InputSession,
     idle_timeout: Duration,
 ) -> ServeResult<PromptLineResult> {
-    write_text(
+    let mut output = Vec::new();
+    write_text_buffered(
         transport,
         "Enter message body. End with a single . on its own line.\r\n",
+        &mut output,
     )
     .await?;
     let mut lines = Vec::new();
@@ -1728,15 +1905,38 @@ async fn prompt_for_message_body<T: Transport>(
             PromptLineResult::Value(value) => lines.push(value),
             PromptLineResult::Disconnected => return Ok(PromptLineResult::Disconnected),
             PromptLineResult::IdleTimeout => return Ok(PromptLineResult::IdleTimeout),
+            PromptLineResult::Rejected => {
+                unreachable!("prompt_for_message_body only returns rejection for CP437 validation");
+            }
         }
     }
 
     Ok(PromptLineResult::Value(lines.join("\r\n")))
 }
 
-fn message_author_alias(db: &OxideDb, user_id: &str) -> String {
-    match find_user_by_id(db.db(), user_id) {
-        Ok(Some(author)) if !author.alias.is_empty() => author.alias,
+fn message_author_aliases(db: &OxideDb, messages: &[Message]) -> HashMap<String, String> {
+    let mut user_ids = Vec::new();
+    for message in messages {
+        if !user_ids
+            .iter()
+            .any(|user_id| user_id == &message.author_user_id)
+        {
+            user_ids.push(message.author_user_id.clone());
+        }
+    }
+
+    match list_user_aliases_by_ids(db.db(), &user_ids) {
+        Ok(aliases) => aliases.into_iter().collect(),
+        Err(error) => {
+            warn!("failed to load message author aliases: {error}");
+            HashMap::new()
+        }
+    }
+}
+
+fn author_alias_from_map(author_aliases: &HashMap<String, String>, user_id: &str) -> String {
+    match author_aliases.get(user_id) {
+        Some(alias) if !alias.is_empty() => alias.clone(),
         _ => "Unknown".to_string(),
     }
 }
@@ -1764,8 +1964,16 @@ async fn prompt_for_line<T: Transport>(
     hide_input: bool,
     prompt: &str,
 ) -> ServeResult<PromptLineResult> {
-    write_text(transport, prompt).await?;
-    read_line_input(transport, input, idle_timeout, allow_empty, hide_input).await
+    let mut output = Vec::new();
+    loop {
+        write_text_buffered(transport, prompt, &mut output).await?;
+        match read_line_input(transport, input, idle_timeout, allow_empty, hide_input).await? {
+            PromptLineResult::Rejected => {
+                send_text(transport, CP437_INPUT_REJECT_LINE).await?;
+            }
+            result => return Ok(result),
+        }
+    }
 }
 
 async fn read_line_input<T: Transport>(
@@ -1776,6 +1984,7 @@ async fn read_line_input<T: Transport>(
     hide_input: bool,
 ) -> ServeResult<PromptLineResult> {
     let mut line = Vec::new();
+    let mut output = Vec::new();
 
     loop {
         let event = next_event(transport, input, idle_timeout).await?;
@@ -1787,24 +1996,32 @@ async fn read_line_input<T: Transport>(
                     b'\n' if line.is_empty() => {}
                     b'\r' if line.is_empty() && !allow_empty => {}
                     b'\r' | b'\n' => {
-                        write_text(transport, "\r\n").await?;
+                        write_text_buffered(transport, "\r\n", &mut output).await?;
                         break;
                     }
                     b'\x08' | b'\x7f' => {
                         if line.pop().is_some() {
-                            write_text(transport, "\x08 \x08").await?;
+                            write_text_buffered(transport, "\x08 \x08", &mut output).await?;
                         }
                     }
                     b'\t' => {}
-                    raw if raw.is_ascii_graphic() || raw == b' ' => {
+                    raw => {
                         line.push(raw);
-                        if hide_input {
-                            write_text(transport, "*").await?;
-                        } else {
-                            write_text(transport, &String::from_utf8_lossy(&[raw])).await?;
+                        match raw {
+                            raw if hide_input && (raw.is_ascii_graphic() || raw == b' ') => {
+                                write_text_buffered(transport, "*", &mut output).await?
+                            }
+                            raw if !hide_input && (raw.is_ascii_graphic() || raw == b' ') => {
+                                write_text_buffered(
+                                    transport,
+                                    &String::from_utf8_lossy(&[raw]),
+                                    &mut output,
+                                )
+                                .await?
+                            }
+                            _ => {}
                         }
                     }
-                    _ => {}
                 },
                 TelnetEvent::Negotiation { .. }
                 | TelnetEvent::WindowSize { .. }
@@ -1815,14 +2032,12 @@ async fn read_line_input<T: Transport>(
         }
     }
 
-    Ok(PromptLineResult::Value(
-        String::from_utf8_lossy(&line).to_string(),
-    ))
-}
+    let value = String::from_utf8_lossy(&line).to_string();
+    if !hide_input && !is_cp437_compatible(&value) {
+        return Ok(PromptLineResult::Rejected);
+    }
 
-async fn write_text<T: Transport>(transport: &mut T, message: &str) -> ServeResult<()> {
-    transport.write_all(&encode_text(message)).await?;
-    Ok(())
+    Ok(PromptLineResult::Value(value))
 }
 
 fn seed_default_message_area(db: &OxideDb) -> ServeResult<()> {
@@ -1943,25 +2158,84 @@ fn db_visibility_from_core(visibility: &MessageVisibility) -> String {
     }
 }
 
-fn server_hash_password(password: &str) -> ServeResult<String> {
+fn server_hash_password(password: &str, config: &Argon2Config) -> ServeResult<String> {
     let salt = SaltString::generate(&mut OsRng);
-    let password_hash = Argon2::default()
+    let password_hash = argon2_from_config(config)?
         .hash_password(password.as_bytes(), &salt)
         .map_err(|error| ServeError::Runtime(format!("password hashing failed: {error}")))?;
     Ok(password_hash.to_string())
 }
 
-struct ServerPasswordVerifier;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PasswordVerification {
+    Accepted,
+    Rejected,
+    HashParseFailure,
+}
 
-impl CorePasswordVerifier for ServerPasswordVerifier {
-    fn verify(&self, password: &str, password_hash: &str) -> bool {
-        let Ok(parsed_hash) = PasswordHash::new(password_hash) else {
-            return false;
-        };
-        Argon2::default()
-            .verify_password(password.as_bytes(), &parsed_hash)
-            .is_ok()
+fn verify_stored_password(
+    password: &str,
+    password_hash: &str,
+    config: &Argon2Config,
+) -> ServeResult<PasswordVerification> {
+    let Ok(parsed_hash) = PasswordHash::new(password_hash) else {
+        run_dummy_password_verify(password, config)?;
+        return Ok(PasswordVerification::HashParseFailure);
+    };
+    if argon2_from_config(config)?
+        .verify_password(password.as_bytes(), &parsed_hash)
+        .is_ok()
+    {
+        Ok(PasswordVerification::Accepted)
+    } else {
+        Ok(PasswordVerification::Rejected)
     }
+}
+
+fn run_dummy_password_verify(password: &str, config: &Argon2Config) -> ServeResult<()> {
+    let parsed_hash = PasswordHash::new(DUMMY_PASSWORD_HASH)
+        .map_err(|error| ServeError::Runtime(format!("dummy password hash is invalid: {error}")))?;
+    let _ = argon2_from_config(config)?.verify_password(password.as_bytes(), &parsed_hash);
+    Ok(())
+}
+
+fn argon2_from_config(config: &Argon2Config) -> ServeResult<Argon2<'static>> {
+    let params = Params::new(
+        config.memory_cost_kib,
+        config.iterations,
+        config.parallelism,
+        None,
+    )
+    .map_err(|error| ServeError::Runtime(format!("invalid Argon2 parameters: {error}")))?;
+    Ok(Argon2::new(Algorithm::Argon2id, Version::V0x13, params))
+}
+
+fn record_login_failure_scopes(
+    db: &OxideDb,
+    remote_ip: &str,
+    alias_scope_key: &str,
+    now: &str,
+    config: &AuthConfig,
+) -> ServeResult<()> {
+    record_auth_failure(
+        db.db(),
+        "ip",
+        remote_ip,
+        now,
+        config.failed_login_window_minutes,
+        config.failed_login_lockout_minutes,
+        config.failed_login_threshold,
+    )?;
+    record_auth_failure(
+        db.db(),
+        "alias",
+        alias_scope_key,
+        now,
+        config.failed_login_window_minutes,
+        config.failed_login_lockout_minutes,
+        config.failed_login_threshold,
+    )?;
+    Ok(())
 }
 
 async fn send_login_flow(
@@ -2021,6 +2295,12 @@ fn load_terminal_asset_payload(
     asset_name: &str,
     capabilities: TerminalCapabilities,
 ) -> Result<Vec<u8>, String> {
+    if !capabilities.supports_ansi
+        && let Some(payload) = load_plain_terminal_asset_payload(config, asset_name)?
+    {
+        return Ok(payload);
+    }
+
     let asset_path = config.paths.ansi.join(asset_name);
     let bytes = std::fs::read(&asset_path).map_err(|error| {
         format!(
@@ -2034,6 +2314,44 @@ fn load_terminal_asset_payload(
     } else {
         Ok(encode_text(&oxidebbs_term::render_plain_text(&bytes)))
     }
+}
+
+fn load_plain_terminal_asset_payload(
+    config: &OxideConfig,
+    asset_name: &str,
+) -> Result<Option<Vec<u8>>, String> {
+    for candidate in plain_terminal_asset_candidates(asset_name) {
+        let asset_path = config.paths.ansi.join(&candidate);
+        match std::fs::read(&asset_path) {
+            Ok(bytes) => {
+                let text = String::from_utf8_lossy(&bytes);
+                return Ok(Some(encode_text(&text)));
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "failed to read terminal asset {}: {error}",
+                    asset_path.display()
+                ));
+            }
+        }
+    }
+
+    Ok(None)
+}
+
+fn plain_terminal_asset_candidates(asset_name: &str) -> [String; 2] {
+    let asset_path = Path::new(asset_name);
+    [
+        asset_path
+            .with_extension("asc")
+            .to_string_lossy()
+            .into_owned(),
+        asset_path
+            .with_extension("txt")
+            .to_string_lossy()
+            .into_owned(),
+    ]
 }
 
 async fn send_screen(
@@ -2080,9 +2398,28 @@ fn fallback_screen_payload(screen_key: &str, details: &str) -> Vec<u8> {
     encode_text(&message)
 }
 
-async fn send_text(transport: &mut TcpTransport, message: &str) -> ServeResult<()> {
-    let bytes = encode_text(message);
-    transport.write_all(&bytes).await?;
+async fn send_text_buffered<T: Transport>(
+    transport: &mut T,
+    message: &str,
+    output: &mut Vec<u8>,
+) -> ServeResult<()> {
+    encode_text_into(message, output);
+    transport.write_all(output).await?;
+    output.clear();
+    Ok(())
+}
+
+async fn write_text_buffered<T: Transport>(
+    transport: &mut T,
+    message: &str,
+    output: &mut Vec<u8>,
+) -> ServeResult<()> {
+    send_text_buffered(transport, message, output).await
+}
+
+async fn send_text<T: Transport>(transport: &mut T, message: &str) -> ServeResult<()> {
+    let mut output = Vec::new();
+    send_text_buffered(transport, message, &mut output).await?;
     Ok(())
 }
 
@@ -2091,13 +2428,14 @@ async fn process_runtime_commands(
     commands: RuntimeNodeCommands,
     disconnect_reason: &mut String,
 ) -> ServeResult<bool> {
+    let mut output = Vec::new();
     for message in commands.messages {
-        send_text(transport, &format!("\r\n{message}\r\n")).await?;
+        send_text_buffered(transport, &format!("\r\n{message}\r\n"), &mut output).await?;
     }
 
     if let Some(reason) = commands.disconnect_reason {
         *disconnect_reason = reason;
-        send_text(transport, "\r\nDisconnected by sysop.\r\n").await?;
+        send_text_buffered(transport, "\r\nDisconnected by sysop.\r\n", &mut output).await?;
         return Ok(true);
     }
 
@@ -2105,9 +2443,42 @@ async fn process_runtime_commands(
 }
 
 fn encode_text(text: &str) -> Vec<u8> {
+    let mut output = Vec::new();
+    encode_text_into(text, &mut output);
+    output
+}
+
+fn encode_text_into(text: &str, output: &mut Vec<u8>) {
+    output.clear();
+
     match encode_cp437(text) {
-        Ok(bytes) => bytes,
-        Err(_) => text.as_bytes().to_vec(),
+        Ok(bytes) => output.extend_from_slice(&bytes),
+        Err(_) => encode_text_lossy_into(text, output),
+    }
+}
+
+fn encode_text_lossy_into(text: &str, output: &mut Vec<u8>) {
+    output.clear();
+    output.reserve(text.len());
+    for character in text.chars() {
+        let mut buffer = [0_u8; 4];
+        let encoded = character.encode_utf8(&mut buffer);
+        match encode_cp437(encoded) {
+            Ok(encoded_bytes) => output.extend_from_slice(&encoded_bytes),
+            Err(_) => output.push(b'?'),
+        }
+    }
+}
+
+fn is_cp437_compatible(text: &str) -> bool {
+    encode_cp437(text).is_ok()
+}
+
+fn validate_caller_cp437_text(text: &str) -> Result<(), &'static str> {
+    if is_cp437_compatible(text) {
+        Ok(())
+    } else {
+        Err(CP437_INPUT_REJECT_MESSAGE)
     }
 }
 
@@ -2123,21 +2494,27 @@ async fn drain_line_ending_after_menu_key<T: Transport>(
     transport: &mut T,
     input: &mut InputSession,
 ) -> ServeResult<()> {
-    for _ in 0..2 {
-        let immediate = timeout(
-            Duration::from_millis(5),
-            next_event(transport, input, Duration::from_secs(1)),
-        )
-        .await;
+    let mut reply = Vec::new();
 
-        match immediate {
-            Ok(Ok(CallerInput::Event(TelnetEvent::Data(b'\r' | b'\n')))) => {}
-            Ok(Ok(other)) => {
-                input.pending_inputs.push_front(other);
+    for _ in 0..2 {
+        let immediate = timeout(Duration::ZERO, transport.read_byte()).await;
+        let byte = match immediate {
+            Ok(Ok(Some(byte))) => byte,
+            Ok(Ok(None)) => {
+                input.pending_inputs.push_back(CallerInput::Disconnected);
                 break;
             }
-            Ok(Err(error)) => return Err(error),
+            Ok(Err(error)) => return Err(error.into()),
             Err(_) => break,
+        };
+
+        match parse_next_event(input, &mut reply, byte) {
+            Some(TelnetEvent::Data(b'\r' | b'\n')) => {}
+            Some(event) => {
+                input.pending_inputs.push_front(CallerInput::Event(event));
+                break;
+            }
+            None => {}
         }
     }
 
@@ -2149,29 +2526,80 @@ async fn next_event<T: Transport>(
     input: &mut InputSession,
     idle_timeout: Duration,
 ) -> ServeResult<CallerInput> {
+    if !input.pending_replies.is_empty() {
+        flush_pending_replies(transport, input).await?;
+    }
+
     if let Some(pending) = input.pending_inputs.pop_front() {
         return Ok(pending);
     }
 
+    let mut reply = Vec::new();
     loop {
         let read = timeout(idle_timeout, transport.read_byte()).await;
         let byte = match read {
             Ok(Ok(Some(byte))) => byte,
-            Ok(Ok(None)) => return Ok(CallerInput::Disconnected),
+            Ok(Ok(None)) => {
+                return Ok(CallerInput::Disconnected);
+            }
             Ok(Err(error)) => return Err(error.into()),
             Err(_) => return Ok(CallerInput::IdleTimeout),
         };
 
-        let mut reply = Vec::new();
-        let event = input.parser.feed(byte, &mut reply);
-        if !reply.is_empty() {
-            transport.write_all(&reply).await?;
+        if let Some(event) = parse_next_event(input, &mut reply, byte) {
+            input.pending_inputs.push_back(CallerInput::Event(event));
         }
 
-        if let Some(event) = event {
-            return Ok(CallerInput::Event(event));
+        loop {
+            let immediate = timeout(Duration::ZERO, transport.read_byte()).await;
+            let immediate_byte = match immediate {
+                Ok(Ok(Some(byte))) => byte,
+                Ok(Ok(None)) => {
+                    input.pending_inputs.push_back(CallerInput::Disconnected);
+                    break;
+                }
+                Ok(Err(error)) => return Err(error.into()),
+                Err(_) => break,
+            };
+
+            if let Some(event) = parse_next_event(input, &mut reply, immediate_byte) {
+                input.pending_inputs.push_back(CallerInput::Event(event));
+            }
+        }
+
+        if let Some(front) = input.pending_inputs.pop_front() {
+            flush_pending_replies(transport, input).await?;
+            return Ok(front);
         }
     }
+}
+
+fn parse_next_event(
+    input: &mut InputSession,
+    reply: &mut Vec<u8>,
+    byte: u8,
+) -> Option<TelnetEvent> {
+    if !reply.is_empty() {
+        reply.clear();
+    }
+
+    let event = input.parser.feed(byte, reply);
+    if !reply.is_empty() {
+        input.pending_replies.extend_from_slice(reply);
+    }
+
+    event
+}
+
+async fn flush_pending_replies<T: Transport>(
+    transport: &mut T,
+    input: &mut InputSession,
+) -> ServeResult<()> {
+    if !input.pending_replies.is_empty() {
+        transport.write_all(&input.pending_replies).await?;
+        input.pending_replies.clear();
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -2190,6 +2618,7 @@ enum CallerWait {
 struct InputSession {
     parser: TelnetParser,
     pending_inputs: VecDeque<CallerInput>,
+    pending_replies: Vec<u8>,
 }
 
 struct CallerPeer {
@@ -2233,25 +2662,22 @@ fn emit_audit_event(
     node_number: Option<i64>,
     details: String,
 ) {
-    let event_id = match generated_uuid(db) {
-        Ok(value) => value,
-        Err(error) => {
-            warn!("failed to generate {event_type} audit event id: {error}");
-            return;
-        }
-    };
-    let created_at = match current_timestamp(db) {
-        Ok(value) => value,
-        Err(error) => {
-            warn!("failed to generate {event_type} audit timestamp: {error}");
-            return;
-        }
-    };
+    emit_audit_event_with_runtime(db, event_type, user_id, node_number, details, None);
+}
+
+fn emit_audit_event_with_runtime(
+    db: &OxideDb,
+    event_type: &str,
+    user_id: Option<String>,
+    node_number: Option<i64>,
+    details: String,
+    runtime: Option<&ServerRuntime>,
+) {
     if let Err(error) = insert_audit_event(
         db.db(),
         &AuditEventRecord {
-            id: event_id,
-            created_at,
+            id: String::new(),
+            created_at: String::new(),
             event_type: event_type.to_string(),
             user_id,
             node_number,
@@ -2259,6 +2685,9 @@ fn emit_audit_event(
         },
     ) {
         warn!("failed to insert {event_type} audit event: {error}");
+        if let Some(runtime) = runtime {
+            runtime.record_audit_write_failure();
+        }
     }
 }
 
@@ -2269,13 +2698,15 @@ fn emit_db_write_failed_event(
     operation: &str,
     error: &dyn std::fmt::Display,
     context: &str,
+    runtime: Option<&ServerRuntime>,
 ) {
-    emit_audit_event(
+    emit_audit_event_with_runtime(
         db,
         "db_write_failed",
         user_id,
         node_number,
         format!("{context} during {operation}: {error}"),
+        runtime,
     );
 }
 
@@ -2309,13 +2740,14 @@ mod tests {
     use std::collections::HashSet;
     use std::net::SocketAddr;
     use std::path::{Path, PathBuf};
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::{Duration as TestDuration, Instant, SystemTime, UNIX_EPOCH};
 
+    use oxidebbs_db::insert_user;
     use oxidebbs_telnet::{
         LoopbackTransport,
         telnet::{
-            DO, IAC, SB, SE, TELOPT_NAWS, TELOPT_SUPPRESS_GO_AHEAD, TELOPT_TERMINAL_TYPE,
-            TELOPT_TTYPE_IS, WILL,
+            DO, IAC, SB, SE, TELOPT_ECHO, TELOPT_NAWS, TELOPT_SUPPRESS_GO_AHEAD,
+            TELOPT_TERMINAL_TYPE, TELOPT_TTYPE_IS, WILL,
         },
     };
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -2525,6 +2957,114 @@ mod tests {
         let _ = std::fs::remove_dir_all(base_dir);
     }
 
+    #[tokio::test]
+    async fn capability_negotiation_completes_before_timeout() {
+        let (mut transport, client) = LoopbackTransport::new();
+        let mut input = InputSession::default();
+        client
+            .write_bytes(&[
+                IAC,
+                WILL,
+                TELOPT_TERMINAL_TYPE,
+                IAC,
+                WILL,
+                TELOPT_NAWS,
+                IAC,
+                SB,
+                TELOPT_TERMINAL_TYPE,
+                TELOPT_TTYPE_IS,
+                b'S',
+                b'y',
+                b'n',
+                b'c',
+                b'T',
+                b'E',
+                b'R',
+                b'M',
+                IAC,
+                SE,
+                IAC,
+                SB,
+                TELOPT_NAWS,
+                0,
+                80,
+                0,
+                24,
+                IAC,
+                SE,
+            ])
+            .expect("write negotiation frames");
+
+        let start = Instant::now();
+        let capabilities = negotiate_terminal_capabilities(
+            &mut transport,
+            &mut input,
+            TestDuration::from_millis(120),
+        )
+        .await
+        .expect("negotiate capabilities");
+        let elapsed = start.elapsed();
+
+        assert!(capabilities.supports_ansi);
+        assert_eq!(capabilities.width, 80);
+        assert!(elapsed < TestDuration::from_millis(90));
+    }
+
+    #[tokio::test]
+    async fn capability_negotiation_ends_on_real_data_without_losing_data() {
+        let (mut transport, client) = LoopbackTransport::new();
+        let mut input = InputSession::default();
+        client
+            .write_bytes(&[IAC, WILL, TELOPT_TERMINAL_TYPE, b'X'])
+            .expect("write partial negotiation and data");
+
+        let capabilities = negotiate_terminal_capabilities(
+            &mut transport,
+            &mut input,
+            TestDuration::from_millis(60),
+        )
+        .await
+        .expect("negotiate capabilities");
+        assert_eq!(capabilities, TerminalCapabilities::plain_text());
+
+        let event = next_event(&mut transport, &mut input, TestDuration::from_millis(1))
+            .await
+            .expect("read preserved data");
+
+        match event {
+            CallerInput::Event(TelnetEvent::Data(b'X')) => {}
+            other => panic!("expected preserved data event, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn next_event_flushes_multiple_negotiation_replies_without_blocking() {
+        let (mut transport, mut client) = LoopbackTransport::new();
+        let mut input = InputSession::default();
+        client
+            .write_bytes(&[IAC, WILL, TELOPT_ECHO, IAC, WILL, TELOPT_SUPPRESS_GO_AHEAD])
+            .expect("write two negotiation frames");
+
+        let event = next_event(&mut transport, &mut input, TestDuration::from_millis(100))
+            .await
+            .expect("read event");
+
+        match event {
+            CallerInput::Event(TelnetEvent::Negotiation {
+                command: _,
+                option,
+                accepted: true,
+            }) => assert_eq!(option, TELOPT_ECHO),
+            other => panic!("expected negotiation event, got {other:?}"),
+        }
+
+        let output = client.read_output_bytes();
+        assert_eq!(
+            output,
+            vec![IAC, DO, TELOPT_ECHO, IAC, DO, TELOPT_SUPPRESS_GO_AHEAD]
+        );
+    }
+
     #[test]
     fn resolve_submenu_menu_prefers_configured_menu_entry() {
         let mut menus = HashMap::new();
@@ -2571,6 +3111,8 @@ mod tests {
         std::fs::create_dir_all(&config.paths.ansi).expect("create ANSI dir");
         std::fs::write(config.paths.ansi.join("welcome.ans"), b"\x1b[1mWelcome\r\n")
             .expect("write welcome asset");
+        std::fs::write(config.paths.ansi.join("welcome.asc"), b"ASCII welcome\r\n")
+            .expect("write plain welcome asset");
 
         let ansi_payload =
             load_terminal_asset_payload(&config, "welcome.ans", TerminalCapabilities::ansi_80())
@@ -2580,9 +3122,70 @@ mod tests {
         let plain_payload =
             load_terminal_asset_payload(&config, "welcome.ans", TerminalCapabilities::plain_text())
                 .expect("load plain welcome");
+        assert_eq!(plain_payload, b"ASCII welcome\r\n");
+
+        let _ = std::fs::remove_dir_all(base_dir);
+    }
+
+    #[test]
+    fn terminal_asset_payload_falls_back_to_stripped_ansi_when_plain_asset_is_missing() {
+        let base_dir = temp_dir("terminal-asset-ansi-fallback");
+        let db_path = base_dir.join("oxidebbs.ddb");
+        let bind_addr = free_loopback_addr();
+        let config = smoke_config(bind_addr, &base_dir, &db_path);
+        std::fs::create_dir_all(&config.paths.ansi).expect("create ANSI dir");
+        std::fs::write(config.paths.ansi.join("welcome.ans"), b"\x1b[1mWelcome\r\n")
+            .expect("write welcome asset");
+
+        let plain_payload =
+            load_terminal_asset_payload(&config, "welcome.ans", TerminalCapabilities::plain_text())
+                .expect("load plain welcome");
         assert_eq!(plain_payload, b"Welcome\r\n");
 
         let _ = std::fs::remove_dir_all(base_dir);
+    }
+
+    #[test]
+    fn message_subject_containing_emoji_is_rejected_before_storage() {
+        assert_eq!(
+            validate_caller_cp437_text("Local update 🚀"),
+            Err(CP437_INPUT_REJECT_MESSAGE)
+        );
+    }
+
+    #[test]
+    fn message_body_containing_emoji_is_rejected_before_storage() {
+        assert_eq!(
+            validate_caller_cp437_text("Line one\r\nEmoji 🚀"),
+            Err(CP437_INPUT_REJECT_MESSAGE)
+        );
+    }
+
+    #[test]
+    fn password_hashing_accepts_unencodable_password_text() {
+        let config = Argon2Config::default();
+
+        let hash = server_hash_password("secret 🚀", &config).expect("hash password");
+
+        assert_eq!(
+            verify_stored_password("secret 🚀", &hash, &config).expect("verify"),
+            PasswordVerification::Accepted
+        );
+    }
+
+    #[test]
+    fn cp437_box_drawing_output_still_encodes() {
+        let text = "┌─┐";
+
+        assert_eq!(
+            encode_text(text),
+            encode_cp437(text).expect("box drawing is CP437-compatible")
+        );
+    }
+
+    #[test]
+    fn generated_output_replaces_unencodable_text_with_question_mark() {
+        assert_eq!(encode_text("Diagnostic 🚀"), b"Diagnostic ?");
     }
 
     #[test]
@@ -2614,9 +3217,14 @@ mod tests {
         std::fs::create_dir_all(&config.paths.ansi).expect("create ANSI dir");
         std::fs::write(
             config.paths.ansi.join(&config.terminal.welcome_screen),
-            b"Smoke welcome\r\n",
+            b"\x1b[1mANSI smoke welcome\r\n",
         )
         .expect("write welcome screen");
+        std::fs::write(
+            config.paths.ansi.join("welcome.asc"),
+            b"Plain smoke welcome\r\n",
+        )
+        .expect("write plain welcome screen");
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let server_config = config.clone();
@@ -2631,7 +3239,8 @@ mod tests {
 
         let mut client = connect_with_retry(bind_addr).await;
         let login_output = read_until(&mut client, "Login? ").await;
-        assert!(login_output.contains("Smoke welcome"));
+        assert!(login_output.contains("Plain smoke welcome"));
+        assert!(!login_output.contains("ANSI smoke welcome"));
         client.write_all(b"N\r").await.expect("select new user");
         read_until(&mut client, "Choose an alias: ").await;
         client.write_all(b"SmokeUser\r").await.expect("alias");
@@ -2684,6 +3293,40 @@ mod tests {
         }
 
         let _ = std::fs::remove_dir_all(base_dir);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stale_node_sweeper_marks_nodes_for_disconnect() {
+        let runtime = Arc::new(ServerRuntime::new("test".to_string(), 1, 4, 1));
+        runtime.mark_node_connected(
+            1,
+            "session-1".to_string(),
+            "127.0.0.1:5000".to_string(),
+            "connected".to_string(),
+        );
+        runtime.force_node_heartbeat_age(1, Duration::from_secs(5));
+
+        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+        let sweeper =
+            start_stale_node_sweeper(runtime.clone(), Duration::from_millis(20), shutdown_rx);
+
+        timeout(Duration::from_secs(1), async {
+            loop {
+                if runtime.take_node_commands(1).disconnect_reason.as_deref()
+                    == Some("stale_node_timeout")
+                {
+                    break;
+                }
+                sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("stale-node sweep should trigger");
+
+        let _ = shutdown_tx.send(());
+        assert!(sweeper.await.is_ok());
+        assert_eq!(runtime.node_status(1).expect("node").state, "disconnecting");
     }
 
     #[tokio::test]
@@ -2773,6 +3416,78 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn read_line_input_rejects_non_cp437_text() {
+        let (mut transport, client) = LoopbackTransport::new();
+        let mut input = InputSession::default();
+
+        client
+            .write_bytes("Hello 🚀\r".as_bytes())
+            .expect("write value");
+
+        let value = read_line_input(
+            &mut transport,
+            &mut input,
+            Duration::from_secs(1),
+            false,
+            false,
+        )
+        .await
+        .expect("read");
+
+        assert!(matches!(value, PromptLineResult::Rejected));
+    }
+
+    #[tokio::test]
+    async fn read_line_input_ignores_cp437_policy_for_hidden_input() {
+        let (mut transport, client) = LoopbackTransport::new();
+        let mut input = InputSession::default();
+
+        client
+            .write_bytes("secret 🚀\r".as_bytes())
+            .expect("write value");
+
+        let value = read_line_input(
+            &mut transport,
+            &mut input,
+            Duration::from_secs(1),
+            false,
+            true,
+        )
+        .await
+        .expect("read");
+
+        match value {
+            PromptLineResult::Value(value) => assert_eq!(value, "secret 🚀"),
+            other => panic!("expected value, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn menu_line_ending_drain_single_key_does_not_wait() {
+        let (mut transport, client) = LoopbackTransport::new();
+        let mut input = InputSession::default();
+
+        client.write_bytes(b"N").expect("write menu key");
+
+        let drained = timeout(
+            TestDuration::from_millis(4),
+            drain_line_ending_after_menu_key(&mut transport, &mut input),
+        )
+        .await
+        .expect("menu key drain should not wait");
+        drained.expect("drain should succeed");
+
+        let event = next_event(&mut transport, &mut input, TestDuration::from_millis(1))
+            .await
+            .expect("read preserved key");
+
+        match event {
+            CallerInput::Event(TelnetEvent::Data(b'N')) => {}
+            other => panic!("expected preserved N event, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn read_line_input_ignores_leading_lf_from_crlf() {
         let (mut transport, client) = LoopbackTransport::new();
         let mut input = InputSession::default();
@@ -2814,14 +3529,145 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn alias_miss_and_wrong_password_show_identical_failure_message() {
+        let db = OxideDb::open_memory().expect("open db");
+        let base_dir = temp_dir("auth-visible-failure");
+        let config = smoke_config(free_loopback_addr(), &base_dir, &base_dir.join("auth.ddb"));
+        seed_login_user(&db, &config, "Alice", "secret");
+
+        let missing = run_login_subflow(&db, &config, "Nobody", "bad", "127.0.0.1")
+            .await
+            .1;
+        let wrong = run_login_subflow(&db, &config, "Alice", "bad", "127.0.0.2")
+            .await
+            .1;
+
+        assert!(missing.contains(INVALID_LOGIN_MESSAGE.trim()));
+        assert!(wrong.contains(INVALID_LOGIN_MESSAGE.trim()));
+        assert_eq!(failure_line(&missing), failure_line(&wrong));
+
+        let _ = std::fs::remove_dir_all(base_dir);
+    }
+
+    #[tokio::test]
+    async fn new_user_flow_reports_duplicate_alias_friendly_message() {
+        let db = OxideDb::open_memory().expect("open db");
+        let base_dir = temp_dir("new-user-duplicate");
+        let config = smoke_config(
+            free_loopback_addr(),
+            &base_dir,
+            &base_dir.join("duplicate.ddb"),
+        );
+        seed_login_user(&db, &config, "Alice", "secret");
+
+        let (result, output) =
+            run_new_user_subflow(&db, &config, "alice", "Alice Clone", "secret").await;
+
+        assert!(matches!(result, AuthFlowResult::Retry));
+        assert!(output.contains("That alias is already in use."));
+
+        let _ = std::fs::remove_dir_all(base_dir);
+    }
+
+    #[tokio::test]
+    async fn rate_limiter_bounds_login_failure_audit_writes() {
+        let db = OxideDb::open_memory().expect("open db");
+        let base_dir = temp_dir("auth-audit-bound");
+        let config = smoke_config(free_loopback_addr(), &base_dir, &base_dir.join("auth.ddb"));
+
+        let mut last_output = String::new();
+        for _ in 0..6 {
+            last_output = run_login_subflow(&db, &config, "Nobody", "bad", "127.0.0.1")
+                .await
+                .1;
+        }
+
+        assert!(last_output.contains(LOGIN_LOCKOUT_MESSAGE.trim()));
+        let failure_events = oxidebbs_db::list_audit_events(db.db(), 100)
+            .expect("list audit")
+            .into_iter()
+            .filter(|event| event.event_type == "login_failure")
+            .count();
+        assert_eq!(failure_events, 5);
+
+        let _ = std::fs::remove_dir_all(base_dir);
+    }
+
+    #[tokio::test]
+    async fn successful_login_clears_persistent_auth_attempt_scopes() {
+        let db = OxideDb::open_memory().expect("open db");
+        let base_dir = temp_dir("auth-clear");
+        let config = smoke_config(free_loopback_addr(), &base_dir, &base_dir.join("auth.ddb"));
+        seed_login_user(&db, &config, "Alice", "secret");
+        let now = current_timestamp(&db).expect("timestamp");
+        record_auth_failure(
+            db.db(),
+            "ip",
+            "127.0.0.1",
+            &now,
+            config.auth.failed_login_window_minutes,
+            config.auth.failed_login_lockout_minutes,
+            config.auth.failed_login_threshold,
+        )
+        .expect("record ip failure");
+        record_auth_failure(
+            db.db(),
+            "alias",
+            "alice",
+            &now,
+            config.auth.failed_login_window_minutes,
+            config.auth.failed_login_lockout_minutes,
+            config.auth.failed_login_threshold,
+        )
+        .expect("record alias failure");
+
+        let (result, output, authenticated_user) =
+            run_login_subflow(&db, &config, "Alice", "secret", "127.0.0.1").await;
+
+        assert!(matches!(result, AuthFlowResult::Success));
+        assert!(output.contains("Login successful. Welcome back."));
+        assert_eq!(
+            authenticated_user.as_ref().map(|user| user.alias.as_str()),
+            Some("Alice")
+        );
+        assert!(
+            oxidebbs_db::find_auth_attempt(db.db(), "ip", "127.0.0.1")
+                .expect("find ip")
+                .is_none()
+        );
+        assert!(
+            oxidebbs_db::find_auth_attempt(db.db(), "alias", "alice")
+                .expect("find alias")
+                .is_none()
+        );
+
+        let _ = std::fs::remove_dir_all(base_dir);
+    }
+
     #[test]
     fn server_password_hashes_verify_with_argon2() {
-        let hash = server_hash_password("secret").expect("hash password");
-        let verifier = ServerPasswordVerifier;
+        let config = Argon2Config::default();
+        let hash = server_hash_password("secret", &config).expect("hash password");
 
         assert!(hash.starts_with("$argon2id$"));
-        assert!(verifier.verify("secret", &hash));
-        assert!(!verifier.verify("wrong", &hash));
+        assert_eq!(
+            verify_stored_password("secret", &hash, &config).expect("verify"),
+            PasswordVerification::Accepted
+        );
+        assert_eq!(
+            verify_stored_password("wrong", &hash, &config).expect("verify"),
+            PasswordVerification::Rejected
+        );
+    }
+
+    #[test]
+    fn invalid_password_hash_runs_dummy_verify_and_fails_closed() {
+        let config = Argon2Config::default();
+
+        let result = verify_stored_password("secret", "not-a-phc", &config).expect("verify");
+
+        assert_eq!(result, PasswordVerification::HashParseFailure);
     }
 
     #[test]
@@ -2852,6 +3698,253 @@ mod tests {
             message_visibility_from_db("hidden"),
             MessageVisibility::PendingModeration
         ));
+    }
+
+    #[tokio::test]
+    async fn display_message_list_uses_author_aliases_for_multiple_authors() {
+        let db = OxideDb::open_memory().expect("open db");
+        insert_author_user(&db, "00000000-0000-4000-8000-000000000901", "alice");
+        insert_author_user(&db, "00000000-0000-4000-8000-000000000902", "bob");
+        let area = test_message_area();
+        let messages = vec![
+            test_message(
+                "00000000-0000-4000-8000-000000000301",
+                "00000000-0000-4000-8000-000000000901",
+                "One",
+            ),
+            test_message(
+                "00000000-0000-4000-8000-000000000302",
+                "00000000-0000-4000-8000-000000000902",
+                "Two",
+            ),
+        ];
+        let (mut transport, mut client) = LoopbackTransport::new();
+
+        display_message_list(&mut transport, &db, &area, &messages)
+            .await
+            .expect("display");
+        let output = String::from_utf8_lossy(&client.read_output_bytes()).to_string();
+
+        assert!(output.contains("1) One (from alice)"));
+        assert!(output.contains("2) Two (from bob)"));
+    }
+
+    #[tokio::test]
+    async fn display_message_list_uses_unknown_for_missing_author() {
+        let db = OxideDb::open_memory().expect("open db");
+        let area = test_message_area();
+        let messages = vec![test_message(
+            "00000000-0000-4000-8000-000000000303",
+            "00000000-0000-4000-8000-000000000999",
+            "Missing",
+        )];
+        let (mut transport, mut client) = LoopbackTransport::new();
+
+        display_message_list(&mut transport, &db, &area, &messages)
+            .await
+            .expect("display");
+        let output = String::from_utf8_lossy(&client.read_output_bytes()).to_string();
+
+        assert!(output.contains("1) Missing (from Unknown)"));
+    }
+
+    fn seed_login_user(db: &OxideDb, config: &OxideConfig, alias: &str, password: &str) {
+        let now = current_timestamp(db).expect("timestamp");
+        let user = UserRecord {
+            id: generated_uuid(db).expect("uuid"),
+            alias: alias.to_string(),
+            real_name: format!("{alias} User"),
+            email: None,
+            password_hash: server_hash_password(password, &config.auth.argon2).expect("hash"),
+            security_level: 10,
+            is_sysop: false,
+            created_at: now,
+            last_login_at: None,
+            total_calls: 0,
+            time_bank_minutes: 0,
+            status: "active".to_string(),
+        };
+        insert_user(db.db(), &user).expect("insert login user");
+    }
+
+    fn insert_author_user(db: &OxideDb, id: &str, alias: &str) {
+        insert_user(
+            db.db(),
+            &UserRecord {
+                id: id.to_string(),
+                alias: alias.to_string(),
+                real_name: format!("{alias} User"),
+                email: None,
+                password_hash: "hash".to_string(),
+                security_level: 10,
+                is_sysop: false,
+                created_at: "2026-01-01T00:00:00.000000Z".to_string(),
+                last_login_at: None,
+                total_calls: 0,
+                time_bank_minutes: 0,
+                status: "active".to_string(),
+            },
+        )
+        .expect("insert author");
+    }
+
+    fn test_message_area() -> MessageArea {
+        MessageArea {
+            id: "00000000-0000-4000-8000-000000000101".to_string(),
+            key: "general".to_string(),
+            name: "General".to_string(),
+            description: "General discussion".to_string(),
+            kind: AreaKind::Local,
+            network_id: None,
+            read_security_level: 0,
+            post_security_level: 10,
+            moderated: false,
+        }
+    }
+
+    fn test_message(id: &str, author_user_id: &str, subject: &str) -> Message {
+        Message {
+            id: id.to_string(),
+            area_id: "00000000-0000-4000-8000-000000000101".to_string(),
+            author_user_id: author_user_id.to_string(),
+            to_user_id: None,
+            subject: subject.to_string(),
+            body: "Body".to_string(),
+            created_at: "2026-01-01T00:00:00.000000Z".to_string(),
+            reply_to_id: None,
+            network_message_id: None,
+            visibility: MessageVisibility::Normal,
+        }
+    }
+
+    async fn run_login_subflow(
+        db: &OxideDb,
+        config: &OxideConfig,
+        alias: &str,
+        password: &str,
+        remote_ip: &str,
+    ) -> (AuthFlowResult, String, Option<User>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("listener addr");
+        let alias = alias.to_string();
+        let password = password.to_string();
+        let client_task = tokio::spawn(async move {
+            let mut client = TcpStream::connect(addr).await.expect("connect");
+            client
+                .write_all(format!("{alias}\r{password}\r").as_bytes())
+                .await
+                .expect("write credentials");
+            read_until_any(
+                &mut client,
+                &[
+                    INVALID_LOGIN_MESSAGE.trim(),
+                    LOGIN_LOCKOUT_MESSAGE.trim(),
+                    "Login successful. Welcome back.",
+                ],
+            )
+            .await
+        });
+        let (stream, _) = listener.accept().await.expect("accept");
+        let mut transport = TcpTransport::new(stream);
+        let mut input = InputSession::default();
+        let mut authenticated_user = None;
+        let mut disconnect_reason = "test".to_string();
+        let runtime = ServerRuntime::new("test".to_string(), 1, 1, 60);
+        let mut state = AuthFlowState {
+            db,
+            config,
+            runtime: &runtime,
+            node_number: 1,
+            remote_ip,
+            session_id: "00000000-0000-4000-8000-000000000777",
+            authenticated_user: &mut authenticated_user,
+            idle_timeout: Duration::from_secs(1),
+            disconnect_reason: &mut disconnect_reason,
+        };
+        let result = run_login_flow(&mut transport, &mut input, &mut state)
+            .await
+            .expect("login flow");
+        let output = client_task.await.expect("client task");
+        (result, output, authenticated_user)
+    }
+
+    async fn run_new_user_subflow(
+        db: &OxideDb,
+        config: &OxideConfig,
+        alias: &str,
+        real_name: &str,
+        password: &str,
+    ) -> (AuthFlowResult, String) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("listener addr");
+        let alias = alias.to_string();
+        let real_name = real_name.to_string();
+        let password = password.to_string();
+        let client_task = tokio::spawn(async move {
+            let mut client = TcpStream::connect(addr).await.expect("connect");
+            client
+                .write_all(format!("{alias}\r{real_name}\r\r{password}\r{password}\r").as_bytes())
+                .await
+                .expect("write registration");
+            read_until_any(
+                &mut client,
+                &[
+                    "That alias is already in use.",
+                    "Account created. Welcome.",
+                    "Unable to create account:",
+                ],
+            )
+            .await
+        });
+        let (stream, _) = listener.accept().await.expect("accept");
+        let mut transport = TcpTransport::new(stream);
+        let mut input = InputSession::default();
+        let mut authenticated_user = None;
+        let mut disconnect_reason = "test".to_string();
+        let runtime = ServerRuntime::new("test".to_string(), 1, 1, 60);
+        let mut state = AuthFlowState {
+            db,
+            config,
+            runtime: &runtime,
+            node_number: 1,
+            remote_ip: "127.0.0.1",
+            session_id: "00000000-0000-4000-8000-000000000778",
+            authenticated_user: &mut authenticated_user,
+            idle_timeout: Duration::from_secs(1),
+            disconnect_reason: &mut disconnect_reason,
+        };
+        let result = run_new_user_flow(&mut transport, &mut input, &mut state)
+            .await
+            .expect("new user flow");
+        let output = client_task.await.expect("client task");
+        (result, output)
+    }
+
+    async fn read_until_any(client: &mut TcpStream, needles: &[&str]) -> String {
+        let mut output = Vec::new();
+        timeout(Duration::from_secs(5), async {
+            loop {
+                let mut byte = [0u8; 1];
+                let read = client.read(&mut byte).await.expect("read login output");
+                if read == 0 {
+                    break;
+                }
+                output.push(byte[0]);
+                let text = String::from_utf8_lossy(&output);
+                if needles.iter().any(|needle| text.contains(needle)) {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("login output");
+        String::from_utf8_lossy(&output).to_string()
+    }
+
+    fn failure_line(output: &str) -> Option<&str> {
+        output
+            .lines()
+            .find(|line| line.contains(INVALID_LOGIN_MESSAGE.trim()))
     }
 
     fn free_loopback_addr() -> SocketAddr {

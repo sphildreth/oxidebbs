@@ -1,7 +1,12 @@
 use std::collections::HashMap;
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
+use std::path::Path;
 
 use clap::{Args, Subcommand};
+#[cfg(unix)]
+use nix::unistd::geteuid;
 use serde_json::Value as JsonValue;
 use serde_json::json;
 
@@ -469,7 +474,35 @@ fn require_effective_door(
 
 fn check_door(door: &DoorDefinitionRecord, config: &crate::config::OxideConfig) -> DoorCheck {
     let mut issues = Vec::new();
-    let working_dir = std::path::PathBuf::from(&door.working_dir);
+    let doors_root = match std::path::Path::new(&config.paths.doors).canonicalize() {
+        Ok(root) => root,
+        Err(error) => {
+            issues.push(CheckIssue::warning(format!(
+                "doors path {} is not accessible: {error}",
+                config.paths.doors.display()
+            )));
+            Path::new("/").to_path_buf()
+        }
+    };
+    let working_dir = match std::path::Path::new(&door.working_dir).canonicalize() {
+        Ok(path) => {
+            if !path.starts_with(&doors_root) {
+                issues.push(CheckIssue::error(format!(
+                    "door working directory {} is outside doors path {}",
+                    door.working_dir,
+                    config.paths.doors.display()
+                )));
+            }
+            path
+        }
+        Err(error) => {
+            issues.push(CheckIssue::warning(format!(
+                "door working directory {} does not exist: {error}",
+                door.working_dir
+            )));
+            std::path::PathBuf::from(&door.working_dir)
+        }
+    };
     if !working_dir.is_dir() {
         issues.push(CheckIssue::warning(format!(
             "door working directory {} does not exist",
@@ -513,6 +546,9 @@ fn check_door(door: &DoorDefinitionRecord, config: &crate::config::OxideConfig) 
             door.runner
         )));
     }
+    if let Err(issue) = validate_door_runner(&door.runner, &config.doors.allowed_runners) {
+        issues.push(issue);
+    }
     if !matches!(
         door.drop_file.to_ascii_uppercase().as_str(),
         "DOOR.SYS" | "DORINFO1.DEF"
@@ -522,9 +558,9 @@ fn check_door(door: &DoorDefinitionRecord, config: &crate::config::OxideConfig) 
             door.drop_file
         )));
     }
-    if door.time_limit_minutes <= 0 {
+    if !(1..=240).contains(&door.time_limit_minutes) {
         issues.push(CheckIssue::error(
-            "time limit must be greater than 0".to_string(),
+            "time limit must be in 1..=240 minutes".to_string(),
         ));
     }
     if let Err(error) = std::fs::create_dir_all(&config.paths.runtime) {
@@ -536,6 +572,92 @@ fn check_door(door: &DoorDefinitionRecord, config: &crate::config::OxideConfig) 
     DoorCheck {
         key: door.key.clone(),
         issues,
+    }
+}
+
+fn resolve_runner_path(command: &str) -> Option<std::path::PathBuf> {
+    let path = std::path::Path::new(command);
+    if path.components().count() > 1 {
+        Some(path.to_path_buf())
+    } else {
+        let paths = std::env::var_os("PATH")?;
+        std::env::split_paths(&paths).find_map(|dir| {
+            let candidate = dir.join(command);
+            if candidate.is_file() {
+                Some(candidate)
+            } else {
+                None
+            }
+        })
+    }
+}
+
+fn validate_door_runner(runner: &str, allowed_runners: &[String]) -> Result<(), CheckIssue> {
+    if !allowed_runners.iter().any(|allowed| allowed == runner) {
+        return Err(CheckIssue::error(format!(
+            "door runner {:?} is not allowed. expected one of {:?}",
+            runner, allowed_runners
+        )));
+    }
+    let runner_path = resolve_runner_path(runner).ok_or_else(|| {
+        CheckIssue::warning(format!("door runner {:?} was not found on PATH", runner))
+    })?;
+    let runner_path = runner_path.canonicalize().map_err(|error| {
+        CheckIssue::warning(format!(
+            "door runner {:?} is not accessible: {error}",
+            runner
+        ))
+    })?;
+    if !runner_path.is_file() {
+        return Err(CheckIssue::error(format!(
+            "door runner {:?} is not a regular file",
+            runner_path.display()
+        )));
+    }
+    validate_runner_file_permissions(&runner_path, runner)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn validate_runner_file_permissions(
+    path: &std::path::Path,
+    runner: &str,
+) -> Result<(), CheckIssue> {
+    let metadata = path.metadata().map_err(|error| {
+        CheckIssue::warning(format!("door runner {runner:?} metadata error: {error}"))
+    })?;
+    let mode = metadata.mode();
+    if mode & 0o002 != 0 {
+        return Err(CheckIssue::error(format!(
+            "door runner {runner:?} is world-writable; refused for safety"
+        )));
+    }
+    if mode & 0o020 != 0 {
+        return Err(CheckIssue::error(format!(
+            "door runner {runner:?} is group-writable; refused for safety"
+        )));
+    }
+    let owner = metadata.uid();
+    let server_uid = geteuid().as_raw();
+    if owner != 0 && owner != server_uid {
+        return Err(CheckIssue::error(format!(
+            "door runner {runner:?} is owned by UID {owner}, not root or server UID {server_uid}"
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn validate_runner_file_permissions(
+    path: &std::path::Path,
+    runner: &str,
+) -> Result<(), CheckIssue> {
+    if path.is_file() {
+        Ok(())
+    } else {
+        Err(CheckIssue::error(format!(
+            "door runner {runner:?} is not a regular file"
+        )))
     }
 }
 
@@ -691,6 +813,9 @@ mod tests {
         let mut config: crate::config::OxideConfig =
             toml::from_str("[board]\nname = \"Test\"\n").expect("config");
         config.paths.runtime = temp.join("runtime");
+        config.doors.allowed_runners = vec![door.runner.clone()];
+        let _ = fs::remove_dir_all(config.paths.runtime.clone());
+        fs::create_dir_all(config.paths.runtime.clone()).expect("runtime dir");
 
         let check = check_door(&door, &config);
         assert!(
@@ -726,6 +851,88 @@ mod tests {
                 && issue.message.contains("DOSEMU2")
         }));
 
+        let _ = fs::remove_dir_all(temp);
+    }
+
+    #[test]
+    fn check_door_enforces_runner_allowlist_and_time_limit_cap() {
+        let temp =
+            std::env::temp_dir().join(format!("oxidebbs-door-allowlist-{}", std::process::id()));
+        let working_dir = temp.join("working");
+        let runtime = temp.join("runtime");
+        let runner = temp.join("runners");
+        let runner_path = runner.join("dosemu");
+        let _ = fs::remove_dir_all(&temp);
+        fs::create_dir_all(&working_dir).expect("working");
+        fs::create_dir_all(&runner).expect("runners");
+        fs::create_dir_all(&runtime).expect("runtime");
+        fs::write(working_dir.join("LORD.EXE"), b"").expect("door exe");
+        fs::write(&runner_path, b"#!/bin/sh\necho").expect("runner fixture");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&runner_path, fs::Permissions::from_mode(0o755))
+                .expect("runner mode");
+        }
+
+        let door = DoorDefinitionRecord {
+            id: "00000000-0000-4000-8000-000000000001".to_string(),
+            key: "lord".to_string(),
+            name: "Legend of the Red Dragon".to_string(),
+            runner: runner_path.to_string_lossy().to_string(),
+            working_dir: working_dir.to_string_lossy().to_string(),
+            command: "LORD.EXE".to_string(),
+            drop_file: "DOOR.SYS".to_string(),
+            exclusive: false,
+            time_limit_minutes: 241,
+            enabled: true,
+        };
+        let mut config: crate::config::OxideConfig =
+            toml::from_str("[board]\nname = \"Test\"\n").expect("config");
+        config.paths.runtime = runtime;
+        config.doors.allowed_runners = vec![runner_path.to_string_lossy().to_string()];
+        fs::create_dir_all(&working_dir).expect("working");
+
+        let check = check_door(&door, &config);
+        assert!(check.issues.iter().any(|issue| {
+            issue.level == "error" && issue.message.contains("time limit must be in 1..=240")
+        }));
+
+        let mut good = door;
+        good.time_limit_minutes = 240;
+        let check = check_door(&good, &config);
+        assert!(
+            !check
+                .issues
+                .iter()
+                .any(|issue| issue.level == "error"
+                    && issue.message.contains("time limit must be in"))
+        );
+        let mut disallowed = good.clone();
+        disallowed.runner = "dosbox".to_string();
+        let check = check_door(&disallowed, &config);
+        assert!(
+            check
+                .issues
+                .iter()
+                .any(|issue| issue.level == "error" && issue.message.contains("not allowed"))
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&runner_path)
+                .expect("runner stat")
+                .permissions()
+                .mode();
+            fs::set_permissions(&runner_path, fs::Permissions::from_mode(mode | 0o020))
+                .expect("set group write");
+            let check = check_door(&good, &config);
+            assert!(check
+                .issues
+                .iter()
+                .any(|issue| issue.level == "error" && issue.message.contains("group-writable")));
+        }
         let _ = fs::remove_dir_all(temp);
     }
 

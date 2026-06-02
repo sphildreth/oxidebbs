@@ -1,8 +1,11 @@
 use std::fs;
 use std::io;
 #[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
+#[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::process::Stdio;
 use std::task::{Context, Poll, ready};
@@ -10,6 +13,8 @@ use std::time::Duration;
 
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use nix::sys::termios::{SetArg, cfmakeraw, tcgetattr, tcsetattr};
+#[cfg(unix)]
+use nix::unistd::geteuid;
 use oxidebbs_core::door::DoorDefinition;
 use oxidebbs_core::user::User;
 use oxidebbs_db::{
@@ -95,6 +100,50 @@ struct DoorRunnerLogs {
     stdout: Option<std::path::PathBuf>,
     stderr: Option<std::path::PathBuf>,
     capture_errors: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct DoorFinishOptions<'a> {
+    runtime: Option<&'a ServerRuntime>,
+    note: Option<&'a str>,
+}
+
+struct DoorRuntimeDirectoryGuard {
+    path: PathBuf,
+    disarmed: bool,
+}
+
+impl DoorRuntimeDirectoryGuard {
+    fn armed(path: impl Into<PathBuf>) -> Self {
+        Self {
+            path: path.into(),
+            disarmed: false,
+        }
+    }
+
+    fn prepare(runtime_root: &Path, node_number: u16) -> ServeResult<Self> {
+        let path = prepare_node_runtime_dir(runtime_root, node_number).map_err(door_error)?;
+        Ok(Self::armed(path))
+    }
+
+    #[cfg(test)]
+    fn disarm(&mut self) {
+        self.disarmed = true;
+    }
+}
+
+impl Drop for DoorRuntimeDirectoryGuard {
+    fn drop(&mut self) {
+        if self.disarmed {
+            return;
+        }
+        if let Err(error) = cleanup_node_runtime_dir(&self.path) {
+            warn!(
+                path = %self.path.display(),
+                "failed to clean door runtime directory: {error}"
+            );
+        }
+    }
 }
 
 struct AsyncPty {
@@ -187,7 +236,7 @@ impl<'a> DoorService<'a> {
     pub(crate) fn validate_door(
         &self,
         door: &DoorDefinitionRecord,
-        node_number: u16,
+        _node_number: u16,
     ) -> Result<(), String> {
         if !self.config.doors.enabled {
             return Err("Doors are disabled for this board.".to_string());
@@ -195,17 +244,36 @@ impl<'a> DoorService<'a> {
         if !door.enabled {
             return Err(format!("Door {} is disabled.", door.key));
         }
-        if door.time_limit_minutes <= 0 {
+        if !(1..=240).contains(&door.time_limit_minutes) {
             return Err(format!(
-                "Door {} must have a positive time limit.",
+                "Door {} time limit must be between 1 and 240 minutes.",
                 door.key
             ));
         }
-        if door.time_limit_minutes > i64::from(u32::MAX) {
-            return Err(format!("Door {} time limit is too large.", door.key));
-        }
 
-        let working_dir = Path::new(&door.working_dir);
+        let doors_root = self.config.paths.doors.canonicalize().map_err(|error| {
+            format!(
+                "Door {} could not canonicalize doors path {}: {error}",
+                door.key,
+                self.config.paths.doors.display()
+            )
+        })?;
+        let working_dir = Path::new(&door.working_dir)
+            .canonicalize()
+            .map_err(|error| {
+                format!(
+                    "Door {} working directory {} does not exist: {error}",
+                    door.key, door.working_dir
+                )
+            })?;
+        if !working_dir.starts_with(&doors_root) {
+            return Err(format!(
+                "Door {} working directory {} is outside paths.doors {}",
+                door.key,
+                working_dir.display(),
+                self.config.paths.doors.display()
+            ));
+        }
         if !working_dir.is_dir() {
             return Err(format!(
                 "Door {} working directory {} does not exist.",
@@ -220,6 +288,7 @@ impl<'a> DoorService<'a> {
                 door.key, door.runner
             ));
         }
+        validate_door_runner(&door.runner, &self.config.doors.allowed_runners)?;
         if !command_exists(&door.runner) {
             return Err(format!(
                 "Door {} runner {:?} was not found.",
@@ -255,22 +324,6 @@ impl<'a> DoorService<'a> {
             ));
         }
 
-        let runtime_dir = prepare_node_runtime_dir(&self.config.paths.runtime, node_number)
-            .map_err(|error| {
-                format!(
-                    "Door runtime directory {} is not writable: {error}.",
-                    self.config.paths.runtime.display()
-                )
-            })?;
-        let probe = runtime_dir.join(".oxidebbs-write-test");
-        fs::write(&probe, b"ok").map_err(|error| {
-            format!(
-                "Door runtime directory {} is not writable: {error}.",
-                runtime_dir.display()
-            )
-        })?;
-        let _ = fs::remove_file(probe);
-
         Ok(())
     }
 
@@ -281,10 +334,12 @@ impl<'a> DoorService<'a> {
         user: &User,
         node_number: u16,
         door: &DoorDefinitionRecord,
-        cleanup_runtime: bool,
+        preserve_runtime: bool,
     ) -> ServeResult<DoorExecutionSummary> {
         self.validate_door(door, node_number)
             .map_err(ServeError::Runtime)?;
+        let mut runtime_guard =
+            DoorRuntimeDirectoryGuard::prepare(&self.config.paths.runtime, node_number)?;
         let request = self.build_request(user, node_number, door)?;
         let plan = prepare_door_run(&request).map_err(door_error)?;
         let run_id = generated_uuid(self.db)?;
@@ -293,6 +348,7 @@ impl<'a> DoorService<'a> {
             door,
             user,
             node_number,
+            None,
             format!(
                 "door run {run_id} started for {}; mode=dry_run program={} args={:?} working_dir={} runtime_dir={} drop_file={}",
                 door.key,
@@ -315,14 +371,10 @@ impl<'a> DoorService<'a> {
                 disconnect_forced: result.timed_out,
                 ..DoorBridgeResult::default()
             },
-            None,
+            DoorFinishOptions::default(),
         )?;
-
-        if cleanup_runtime && let Err(error) = cleanup_node_runtime_dir(&request.runtime_dir) {
-            warn!(
-                path = %request.runtime_dir.display(),
-                "failed to clean door runtime directory: {error}"
-            );
+        if preserve_runtime {
+            runtime_guard.disarm();
         }
 
         Ok(DoorExecutionSummary {
@@ -352,6 +404,8 @@ impl<'a> DoorService<'a> {
     ) -> ServeResult<DoorExecutionSummary> {
         self.validate_door(door, node_number)
             .map_err(ServeError::Runtime)?;
+        let _runtime_guard =
+            DoorRuntimeDirectoryGuard::prepare(&self.config.paths.runtime, node_number)?;
         let request = self.build_request(user, node_number, door)?;
         let mut plan = prepare_door_run(&request).map_err(door_error)?;
         let bridge_runtime_dir = plan.working_dir.clone();
@@ -364,6 +418,7 @@ impl<'a> DoorService<'a> {
             door,
             user,
             node_number,
+            Some(runtime),
             door_start_details(&run_id, &request, &plan, &com_bridge, &runner_logs),
         )?;
 
@@ -394,8 +449,17 @@ impl<'a> DoorService<'a> {
             Err(error) => {
                 let message = format!("failed to launch door runner {:?}: {error}", plan.program);
                 let bridge = DoorBridgeResult::default();
-                self.finish_run(&run_id, door, user, node_number, bridge, Some(&message))?;
-                cleanup_runtime_dir(&request);
+                self.finish_run(
+                    &run_id,
+                    door,
+                    user,
+                    node_number,
+                    bridge,
+                    DoorFinishOptions {
+                        runtime: Some(runtime),
+                        note: Some(&message),
+                    },
+                )?;
                 return Ok(DoorExecutionSummary {
                     door_name: door.name.clone(),
                     run_id: Some(run_id),
@@ -438,11 +502,13 @@ impl<'a> DoorService<'a> {
                     user,
                     node_number,
                     forced,
-                    Some("bridge error"),
+                    DoorFinishOptions {
+                        runtime: Some(runtime),
+                        note: Some("bridge error"),
+                    },
                 ) {
                     warn!("failed to finish door run {run_id} after bridge error: {finish_error}");
                 }
-                cleanup_runtime_dir(&request);
                 return Err(error);
             }
         };
@@ -466,9 +532,11 @@ impl<'a> DoorService<'a> {
             user,
             node_number,
             bridge.clone(),
-            Some(&finish_note),
+            DoorFinishOptions {
+                runtime: Some(runtime),
+                note: Some(&finish_note),
+            },
         )?;
-        cleanup_runtime_dir(&request);
 
         Ok(DoorExecutionSummary {
             door_name: door.name.clone(),
@@ -525,6 +593,7 @@ impl<'a> DoorService<'a> {
         door: &DoorDefinitionRecord,
         user: &User,
         node_number: u16,
+        runtime: Option<&ServerRuntime>,
         details: String,
     ) -> ServeResult<String> {
         let started_at = current_timestamp(self.db)?;
@@ -546,7 +615,7 @@ impl<'a> DoorService<'a> {
         )
         .map_err(ServeError::Database)?;
 
-        self.audit_door_event("door_started", door, user, node_number, details);
+        self.audit_door_event("door_started", door, user, node_number, runtime, details);
 
         Ok(run_id.to_string())
     }
@@ -558,7 +627,7 @@ impl<'a> DoorService<'a> {
         user: &User,
         node_number: u16,
         bridge: DoorBridgeResult,
-        note: Option<&str>,
+        options: DoorFinishOptions<'_>,
     ) -> ServeResult<()> {
         let ended_at = current_timestamp(self.db)?;
         finish_door_run(
@@ -588,11 +657,18 @@ impl<'a> DoorService<'a> {
             bridge.bytes_in,
             bridge.bytes_out
         );
-        if let Some(note) = note {
+        if let Some(note) = options.note {
             details.push_str("; ");
             details.push_str(note);
         }
-        self.audit_door_event(event_type, door, user, node_number, details);
+        self.audit_door_event(
+            event_type,
+            door,
+            user,
+            node_number,
+            options.runtime,
+            details,
+        );
         Ok(())
     }
 
@@ -602,33 +678,14 @@ impl<'a> DoorService<'a> {
         door: &DoorDefinitionRecord,
         user: &User,
         node_number: u16,
+        runtime: Option<&ServerRuntime>,
         details: String,
     ) {
-        let event_id = match generated_uuid(self.db) {
-            Ok(id) => id,
-            Err(error) => {
-                warn!(
-                    "failed to generate {event_type} audit id for {}: {error}",
-                    door.key
-                );
-                return;
-            }
-        };
-        let created_at = match current_timestamp(self.db) {
-            Ok(value) => value,
-            Err(error) => {
-                warn!(
-                    "failed to generate {event_type} audit timestamp for {}: {error}",
-                    door.key
-                );
-                return;
-            }
-        };
         if let Err(error) = insert_audit_event(
             self.db.db(),
             &AuditEventRecord {
-                id: event_id,
-                created_at,
+                id: String::new(),
+                created_at: String::new(),
                 event_type: event_type.to_string(),
                 user_id: Some(user.id.clone()),
                 node_number: Some(i64::from(node_number)),
@@ -639,6 +696,9 @@ impl<'a> DoorService<'a> {
                 "failed to insert {event_type} audit event for {}: {error}",
                 door.key
             );
+            if let Some(runtime) = runtime {
+                runtime.record_audit_write_failure();
+            }
         }
     }
 
@@ -766,7 +826,12 @@ fn door_runner_stdio(
 }
 
 fn capture_stdio_file(path: &Path, stream: &str, logs: &mut DoorRunnerLogs) -> Stdio {
-    match fs::File::create(path) {
+    let mut options = fs::OpenOptions::new();
+    options.create(true).truncate(true).write(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+
+    match options.open(path) {
         Ok(file) => {
             match stream {
                 "stdout" => logs.stdout = Some(path.to_path_buf()),
@@ -861,7 +926,7 @@ pub(crate) async fn run_door_bridge<T: Transport>(
 ) -> ServeResult<DoorBridgeResult> {
     let deadline = TokioInstant::now() + timeout;
     let mut result = DoorBridgeResult::default();
-    let serial = wait_for_com1_pty(
+    let serial = match wait_for_com1_pty(
         transport,
         runtime,
         node_number,
@@ -870,12 +935,21 @@ pub(crate) async fn run_door_bridge<T: Transport>(
         deadline,
         &mut result,
     )
-    .await?;
+    .await
+    {
+        Ok(serial) => serial,
+        Err(error) => {
+            if let Err(kill_error) = terminate_child(&mut child).await {
+                warn!("failed to terminate door child after bridge startup error: {kill_error}");
+            }
+            return Err(error);
+        }
+    };
     let Some(serial) = serial else {
         return Ok(result);
     };
 
-    bridge_connected_serial(
+    if let Err(error) = bridge_connected_serial(
         transport,
         runtime,
         node_number,
@@ -884,7 +958,13 @@ pub(crate) async fn run_door_bridge<T: Transport>(
         deadline,
         &mut result,
     )
-    .await?;
+    .await
+    {
+        if let Err(kill_error) = terminate_child(&mut child).await {
+            warn!("failed to terminate door child after bridge I/O error: {kill_error}");
+        }
+        return Err(error);
+    }
 
     Ok(result)
 }
@@ -1079,6 +1159,77 @@ fn command_exists(command: &str) -> bool {
     std::env::split_paths(&paths).any(|dir| dir.join(command).is_file())
 }
 
+fn validate_door_runner(runner: &str, allowed_runners: &[String]) -> Result<(), String> {
+    if !allowed_runners.iter().any(|allowed| allowed == runner) {
+        return Err(format!(
+            "door runner {:?} is not allowed. expected one of {:?}",
+            runner, allowed_runners
+        ));
+    }
+    let runner_path = resolve_runner_path(runner)
+        .ok_or_else(|| format!("door runner {:?} was not found on PATH", runner))?;
+    let runner_path = runner_path
+        .canonicalize()
+        .map_err(|error| format!("door runner {:?} is not accessible: {error}", runner))?;
+    if !runner_path.is_file() {
+        return Err(format!(
+            "door runner {:?} is not a regular file",
+            runner_path.display()
+        ));
+    }
+    validate_door_runner_security(&runner_path, runner)?;
+    Ok(())
+}
+
+fn validate_door_runner_security(path: &Path, runner: &str) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        let metadata = path
+            .metadata()
+            .map_err(|error| format!("door runner {runner:?} metadata error: {error}"))?;
+        let mode = metadata.mode();
+        if mode & 0o002 != 0 {
+            return Err(format!(
+                "door runner {runner:?} is world-writable; refused for safety"
+            ));
+        }
+        if mode & 0o020 != 0 {
+            return Err(format!(
+                "door runner {runner:?} is group-writable; refused for safety"
+            ));
+        }
+        let owner = metadata.uid();
+        let server_uid = geteuid().as_raw();
+        if owner != 0 && owner != server_uid {
+            return Err(format!(
+                "door runner {runner:?} is owned by UID {owner}, not root or server UID {server_uid}"
+            ));
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = runner;
+    }
+    Ok(())
+}
+
+fn resolve_runner_path(command: &str) -> Option<PathBuf> {
+    let path = Path::new(command);
+    if path.components().count() > 1 {
+        Some(path.to_path_buf())
+    } else {
+        let paths = std::env::var_os("PATH")?;
+        std::env::split_paths(&paths).find_map(|dir| {
+            let candidate = dir.join(command);
+            if candidate.is_file() {
+                Some(candidate)
+            } else {
+                None
+            }
+        })
+    }
+}
+
 fn first_command_token(command: &str) -> Option<&str> {
     command.trim().split_ascii_whitespace().next()
 }
@@ -1111,15 +1262,6 @@ fn door_caller(user: &User) -> DoorCaller {
         location: "Local".to_string(),
         security_level: user.security_level,
         minutes_remaining: 30,
-    }
-}
-
-fn cleanup_runtime_dir(request: &DoorRunRequest) {
-    if let Err(error) = cleanup_node_runtime_dir(&request.runtime_dir) {
-        warn!(
-            path = %request.runtime_dir.display(),
-            "failed to clean door runtime directory: {error}"
-        );
     }
 }
 
@@ -1169,7 +1311,11 @@ async fn terminate_child(child: &mut Child) -> ServeResult<Option<i32>> {
             match time::timeout(DOOR_KILL_WAIT, child.wait()).await {
                 Ok(Ok(status)) => Ok(status.code()),
                 Ok(Err(error)) => Err(ServeError::Network(error)),
-                Err(_) => Ok(None),
+                Err(_) => {
+                    child.start_kill()?;
+                    let status = child.wait().await.map_err(ServeError::Network)?.code();
+                    Ok(status)
+                }
             }
         }
     }
@@ -1206,8 +1352,21 @@ fn db_scalar_text(db: &OxideDb, sql: &str) -> ServeResult<String> {
 fn encode_text(text: &str) -> Vec<u8> {
     match encode_cp437(text) {
         Ok(bytes) => bytes,
-        Err(_) => text.as_bytes().to_vec(),
+        Err(_) => encode_text_lossy(text),
     }
+}
+
+fn encode_text_lossy(text: &str) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(text.len());
+    for character in text.chars() {
+        let mut buffer = [0_u8; 4];
+        let encoded = character.encode_utf8(&mut buffer);
+        match encode_cp437(encoded) {
+            Ok(encoded_bytes) => bytes.extend_from_slice(&encoded_bytes),
+            Err(_) => bytes.push(b'?'),
+        }
+    }
+    bytes
 }
 
 #[cfg(test)]
@@ -1222,8 +1381,9 @@ mod tests {
 
     use super::*;
     use crate::config::{
-        BoardConfig, DatabaseConfig, DoorDefConfig, DoorsConfig, FlowConfig, FtnConfig, MenuConfig,
-        NodesConfig, PathsConfig, ScreenConfig, TelnetConfig, TerminalConfig,
+        AuditConfig, AuthConfig, BoardConfig, DatabaseConfig, DoorDefConfig, DoorsConfig,
+        FlowConfig, FtnConfig, MenuConfig, NodesConfig, PathsConfig, ScreenConfig, TelnetConfig,
+        TerminalConfig,
     };
 
     const USER_ID: &str = "00000000-0000-4000-8000-000000000701";
@@ -1242,6 +1402,10 @@ mod tests {
         fs::write(working_dir.join("TEST.EXE"), b"").expect("create test command");
         fs::write(working_dir.join("dosemu"), b"").expect("create test runner");
         let runner = supported_runner_path(&working_dir);
+        let doors_root = working_dir
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| working_dir.clone());
         OxideConfig {
             board: BoardConfig {
                 name: "Test BBS".to_string(),
@@ -1250,11 +1414,13 @@ mod tests {
                 timezone: "UTC".to_string(),
             },
             telnet: TelnetConfig::default(),
+            auth: AuthConfig::default(),
+            audit: AuditConfig::default(),
             database: DatabaseConfig::default(),
             paths: PathsConfig {
                 ansi: runtime.join("ansi"),
                 screens: runtime.join("screens"),
-                doors: runtime.join("doors"),
+                doors: doors_root,
                 runtime: runtime.clone(),
                 logs: working_dir.join("logs"),
             },
@@ -1266,6 +1432,7 @@ mod tests {
             doors: DoorsConfig {
                 enabled: true,
                 default_runner: runner.clone(),
+                allowed_runners: vec![runner.clone()],
                 definitions: vec![DoorDefConfig {
                     key: "test".to_string(),
                     name: "Test Door".to_string(),
@@ -1360,6 +1527,44 @@ mod tests {
     }
 
     #[test]
+    fn failed_door_audit_write_increments_runtime_counter() {
+        let db = OxideDb::open_memory().expect("open db");
+        let runtime_dir = temp_dir("audit-runtime");
+        let working_dir = temp_dir("audit-working");
+        let config = test_config(runtime_dir.clone(), working_dir.clone());
+        let service = DoorService::new(&db, &config);
+        let door = DoorDefinitionRecord {
+            id: "00000000-0000-4000-8000-000000000802".to_string(),
+            key: "test".to_string(),
+            name: "Test Door".to_string(),
+            runner: current_runner(),
+            working_dir: working_dir.to_string_lossy().to_string(),
+            command: "TEST.EXE".to_string(),
+            drop_file: "DOOR.SYS".to_string(),
+            exclusive: false,
+            time_limit_minutes: 1,
+            enabled: true,
+        };
+        let mut user = test_user();
+        user.id = "not-a-uuid".to_string();
+        let runtime = ServerRuntime::new("test".to_string(), 1, 1, 60);
+
+        service.audit_door_event(
+            "door_started",
+            &door,
+            &user,
+            1,
+            Some(&runtime),
+            "forced audit failure".to_string(),
+        );
+
+        assert_eq!(runtime.audit_write_failures(), 1);
+
+        let _ = fs::remove_dir_all(runtime_dir);
+        let _ = fs::remove_dir_all(working_dir);
+    }
+
+    #[test]
     fn dosemu2_serial_config_maps_com1_to_pty_bridge() {
         let config = dosemu2_serial_config(Path::new("/tmp/node-001/OXCOM1.PTY"));
 
@@ -1435,6 +1640,22 @@ mod tests {
         );
         assert!(stdout.is_file());
         assert!(stderr.is_file());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&stdout)
+                .expect("stdout metadata")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o600);
+            let mode = fs::metadata(&stderr)
+                .expect("stderr metadata")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o600);
+        }
 
         let _ = fs::remove_dir_all(base);
     }
@@ -1525,7 +1746,7 @@ mod tests {
     }
 
     #[test]
-    fn dry_run_service_inserts_and_finishes_door_run() {
+    fn dry_run_service_preserves_runtime_when_requested() {
         let runtime = temp_dir("dry-runtime");
         let working_dir = temp_dir("dry-working");
         let config = test_config(runtime.clone(), working_dir);
@@ -1539,7 +1760,7 @@ mod tests {
             .expect("door");
 
         let summary = service
-            .execute_with_runner(&DryRunDoorRunner, &test_user(), 1, &door, false)
+            .execute_with_runner(&DryRunDoorRunner, &test_user(), 1, &door, true)
             .expect("run dry");
 
         assert_eq!(summary.exit_code, Some(0));
@@ -1554,6 +1775,89 @@ mod tests {
         assert_eq!(run.bytes_in, 0);
         assert_eq!(run.bytes_out, 0);
 
+        let _ = fs::remove_dir_all(runtime);
+    }
+
+    #[test]
+    fn dry_run_service_cleans_runtime_directory_after_completion() {
+        let runtime = temp_dir("dry-runtime-clean");
+        let working_dir = temp_dir("dry-working-clean");
+        let config = test_config(runtime.clone(), working_dir.clone());
+        let db = OxideDb::open_memory().expect("open db");
+        insert_test_user(&db);
+        let service = DoorService::new(&db, &config);
+        let door = service
+            .list_enabled_doors()
+            .expect("list doors")
+            .pop()
+            .expect("door");
+
+        let summary = service
+            .execute_with_runner(&DryRunDoorRunner, &test_user(), 1, &door, false)
+            .expect("run dry");
+
+        assert_eq!(summary.exit_code, Some(0));
+        assert!(!runtime.join("node-001").exists());
+        let run = find_door_run_by_id(db.db(), summary.run_id.as_deref().expect("run id"))
+            .expect("find run")
+            .expect("run exists");
+        assert!(run.ended_at.is_some());
+
+        let _ = fs::remove_dir_all(runtime);
+        let _ = fs::remove_dir_all(working_dir);
+    }
+
+    #[test]
+    fn dry_run_service_cleans_runtime_directory_after_prepare_door_run_failure() {
+        let runtime = temp_dir("dry-runtime-prepare-fail");
+        let working_dir = temp_dir("dry-working-prepare-fail");
+        let config = test_config(runtime.clone(), working_dir.clone());
+        let db = OxideDb::open_memory().expect("open db");
+        insert_test_user(&db);
+        let service = DoorService::new(&db, &config);
+        let mut door = service
+            .list_enabled_doors()
+            .expect("list doors")
+            .pop()
+            .expect("door");
+
+        let command_path = working_dir.join("COMMAND.EXE");
+        fs::write(&command_path, b"fixture").expect("command fixture");
+        let command_path = command_path.to_string_lossy().to_string();
+        door.command = command_path;
+
+        let result = service.execute_with_runner(&DryRunDoorRunner, &test_user(), 1, &door, false);
+        assert!(result.is_err());
+        assert!(!runtime.join("node-001").exists());
+
+        let _ = fs::remove_dir_all(runtime);
+        let _ = fs::remove_dir_all(working_dir);
+    }
+
+    #[test]
+    fn runtime_guard_cleans_directory_after_command_staging_failure() {
+        let runtime = temp_dir("stage-cleanup-runtime");
+        let working_dir = temp_dir("stage-cleanup-working");
+        let config = test_config(runtime.clone(), working_dir);
+        let db = OxideDb::open_memory().expect("open db");
+        let service = DoorService::new(&db, &config);
+        let door = service
+            .list_enabled_doors()
+            .expect("list doors")
+            .pop()
+            .expect("door");
+
+        let runtime_guard =
+            DoorRuntimeDirectoryGuard::prepare(&config.paths.runtime, 1).expect("runtime guard");
+        let request = service
+            .build_request(&test_user(), 1, &door)
+            .expect("build request");
+        let plan = prepare_door_run(&request).expect("prepare door run");
+        assert!(plan.working_dir.join("TEST.EXE").is_file());
+
+        drop(runtime_guard);
+
+        assert!(!runtime.join("node-001").exists());
         let _ = fs::remove_dir_all(runtime);
     }
 
@@ -1734,5 +2038,95 @@ mod tests {
         assert!(result.timed_out);
         assert!(result.disconnect_forced);
         let _ = fs::remove_dir_all(runtime_dir);
+    }
+
+    #[tokio::test]
+    async fn runtime_guard_cleans_directory_after_bridge_timeout() {
+        let runtime_root = temp_dir("bridge-timeout-cleanup");
+        let bridge_runtime = runtime_root.join("node-001");
+        let guard = DoorRuntimeDirectoryGuard::prepare(&runtime_root, 1).expect("runtime guard");
+        let bridge = Dosemu2ComBridge {
+            pty_path: bridge_runtime.join(DOSEMU2_COM1_PTY),
+            config_path: bridge_runtime.join(DOSEMU2_CONFIG_FILE),
+        };
+        let runtime = ServerRuntime::new("test".to_string(), 1, 1, 30);
+        runtime.mark_node_connected(
+            1,
+            "session".to_string(),
+            "127.0.0.1:23".to_string(),
+            "now".to_string(),
+        );
+        let (mut transport, _client) = LoopbackTransport::new();
+        let child = Command::new("sh")
+            .arg("-c")
+            .arg("sleep 2")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn child");
+
+        let result = run_door_bridge(
+            &mut transport,
+            &runtime,
+            1,
+            child,
+            bridge,
+            Duration::from_millis(50),
+        )
+        .await
+        .expect("bridge");
+
+        assert!(result.timed_out);
+        drop(guard);
+        assert!(!bridge_runtime.exists());
+
+        let _ = fs::remove_dir_all(runtime_root);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn bridge_error_cleans_runtime_directory_via_guard() {
+        let runtime = ServerRuntime::new("test".to_string(), 1, 1, 30);
+        let runtime_root = temp_dir("bridge-error-cleanup");
+        let bridge_runtime = runtime_root.join("node-001");
+        let bridge_guard =
+            DoorRuntimeDirectoryGuard::prepare(&runtime_root, 1).expect("runtime guard");
+        let bridge = Dosemu2ComBridge {
+            pty_path: bridge_runtime.join(DOSEMU2_COM1_PTY),
+            config_path: bridge_runtime.join(DOSEMU2_CONFIG_FILE),
+        };
+        fs::create_dir_all(&bridge_runtime).expect("runtime dir");
+        fs::write(&bridge.pty_path, b"").expect("create pty file");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&bridge.pty_path, fs::Permissions::from_mode(0o000))
+                .expect("restrict pty");
+        }
+        let child = Command::new("sh")
+            .arg("-c")
+            .arg("sleep 2")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn child");
+        let mut transport = LoopbackTransport::new().0;
+
+        let result = run_door_bridge(
+            &mut transport,
+            &runtime,
+            1,
+            child,
+            bridge,
+            Duration::from_secs(2),
+        )
+        .await;
+
+        assert!(result.is_err());
+        drop(bridge_guard);
+        assert!(!bridge_runtime.exists());
+        let _ = fs::remove_dir_all(runtime_root);
     }
 }

@@ -45,9 +45,16 @@ The wizard asks for:
 Press Enter at a prompt to accept the value shown in brackets.
 
 Setup writes the TOML config, creates required directories, initializes a
-schema `3` DecentDB database, creates the initial sysop account, and creates the
+schema `4` DecentDB database, creates the initial sysop account, and creates the
 default `general` local message area. The generated sysop account is real data,
 so a setup-created database is not an empty restore target for `db import`.
+Generated configs include the v1 authentication defaults: five failed attempts
+within ten minutes lock the IP or alias scope for fifteen minutes, new callers
+start at security level `10`, and Argon2id uses `memory_cost_kib = 19456`,
+`iterations = 2`, and `parallelism = 1`.
+Generated configs also include `[audit].retention_days = 365`; retention cleanup
+is an explicit maintenance operation, not an automatic side effect of audit
+inserts.
 
 After setup, `serve` can use the generated file directly:
 
@@ -87,7 +94,9 @@ cargo run -p oxidebbs-server -- setup \
 ```
 
 Non-interactive setup requires `--sysop-password`. Optional flags can override
-the board name, sysop alias, telnet port, node count, and sample ANSI creation.
+the board name, sysop alias, telnet port or full bind address, node count, and
+sample ANSI creation. `--telnet-port` keeps the bind on `127.0.0.1`; use
+`--telnet-bind` only for an explicit plaintext exposure decision.
 Use `--enable-example-door` when a generated config should enable the bundled
 `oxide-check` test door immediately, as the Docker first-boot path does.
 

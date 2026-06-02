@@ -2,7 +2,10 @@ use std::collections::BTreeMap;
 #[cfg(unix)]
 use std::io::{BufRead, BufReader, Write as IoWrite};
 use std::io::{Error as IoError, ErrorKind};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 #[cfg(any(unix, test))]
 use std::time::Duration;
@@ -105,6 +108,7 @@ pub struct ControlStatus {
     pub uptime_seconds: u64,
     pub node_count: u16,
     pub active_nodes: usize,
+    pub audit_write_failures: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -196,6 +200,7 @@ pub struct ServerRuntime {
     allocation: Arc<Semaphore>,
     disconnect_requests: Mutex<BTreeMap<u16, String>>,
     node_messages: Mutex<BTreeMap<u16, Vec<String>>>,
+    audit_write_failures: AtomicU64,
     command_notify: Notify,
 }
 
@@ -217,6 +222,7 @@ impl ServerRuntime {
             allocation: Arc::new(Semaphore::new(max_slots)),
             disconnect_requests: Mutex::new(BTreeMap::new()),
             node_messages: Mutex::new(BTreeMap::new()),
+            audit_write_failures: AtomicU64::new(0),
             command_notify: Notify::new(),
         }
     }
@@ -358,7 +364,16 @@ impl ServerRuntime {
             uptime_seconds,
             node_count: self.node_count,
             active_nodes,
+            audit_write_failures: self.audit_write_failures(),
         }
+    }
+
+    pub fn record_audit_write_failure(&self) {
+        self.audit_write_failures.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn audit_write_failures(&self) -> u64 {
+        self.audit_write_failures.load(Ordering::Relaxed)
     }
 
     pub fn nodes_snapshot(&self) -> Vec<ControlNodeStatus> {
@@ -549,7 +564,7 @@ impl ServerRuntime {
     }
 
     #[cfg(test)]
-    fn force_node_heartbeat_age(&self, node_number: u16, age: Duration) {
+    pub(crate) fn force_node_heartbeat_age(&self, node_number: u16, age: Duration) {
         if let Ok(mut nodes) = self.nodes.lock()
             && let Some(node) = nodes.get_mut(&node_number)
         {
@@ -711,7 +726,9 @@ pub async fn start_control_listener(
 ) -> Result<tokio::task::JoinHandle<()>, ControlError> {
     let listener = bind_control_listener(runtime_dir).await?;
     Ok(tokio::spawn(async move {
-        if let Err(error) = run_control_accept_loop(listener, runtime).await {
+        if let Err(error) =
+            run_control_accept_loop(listener.socket, listener.server_uid, runtime).await
+        {
             tracing::warn!(%error, "control listener stopped");
         }
     }))
@@ -728,11 +745,18 @@ pub async fn start_control_listener(
 }
 
 #[cfg(unix)]
-async fn bind_control_listener(
-    runtime_dir: &Path,
-) -> Result<tokio::net::UnixListener, ControlError> {
+struct BoundControlListener {
+    socket: tokio::net::UnixListener,
+    server_uid: u32,
+}
+
+#[cfg(unix)]
+async fn bind_control_listener(runtime_dir: &Path) -> Result<BoundControlListener, ControlError> {
     let socket_path = control_socket_path(runtime_dir);
     tokio::fs::create_dir_all(runtime_dir)
+        .await
+        .map_err(IoError::other)?;
+    tokio::fs::set_permissions(runtime_dir, std::fs::Permissions::from_mode(0o700))
         .await
         .map_err(IoError::other)?;
 
@@ -750,19 +774,27 @@ async fn bind_control_listener(
     }
 
     tracing::info!(path = %socket_path.display(), "starting control listener");
-    tokio::net::UnixListener::bind(&socket_path).map_err(ControlError::Io)
+    let listener = tokio::net::UnixListener::bind(&socket_path).map_err(ControlError::Io)?;
+    tokio::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o600))
+        .await
+        .map_err(IoError::other)?;
+    Ok(BoundControlListener {
+        socket: listener,
+        server_uid: control_process_uid(),
+    })
 }
 
 #[cfg(unix)]
 async fn run_control_accept_loop(
     listener: tokio::net::UnixListener,
+    server_uid: u32,
     runtime: Arc<ServerRuntime>,
 ) -> Result<(), ControlError> {
     loop {
         let (stream, _) = listener.accept().await.map_err(ControlError::Io)?;
         let runtime = Arc::clone(&runtime);
         tokio::spawn(async move {
-            if let Err(error) = handle_control_connection(stream, runtime).await {
+            if let Err(error) = handle_control_connection(stream, server_uid, runtime).await {
                 tracing::warn!(%error, "control connection failed");
             }
         });
@@ -842,9 +874,22 @@ async fn is_socket_in_use(socket_path: &Path) -> bool {
 #[cfg(unix)]
 async fn handle_control_connection(
     mut stream: tokio::net::UnixStream,
+    owner_uid: u32,
     runtime: Arc<ServerRuntime>,
 ) -> Result<(), ControlError> {
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+
+    if let Err(error) = authorize_control_peer_uid(&stream, owner_uid) {
+        write_control_response(
+            &mut stream,
+            ControlResponse::Error {
+                ok: false,
+                error: error.to_string(),
+            },
+        )
+        .await?;
+        return Ok(());
+    }
 
     let mut request_line = Vec::new();
     let bytes_read = {
@@ -984,6 +1029,41 @@ async fn write_control_response(
     Ok(())
 }
 
+#[cfg(unix)]
+fn authorize_control_peer_uid(
+    stream: &tokio::net::UnixStream,
+    expected_uid: u32,
+) -> Result<(), ControlError> {
+    let peer_uid = control_peer_uid(stream)?;
+    if is_authorized_control_uid(peer_uid, expected_uid) {
+        Ok(())
+    } else {
+        Err(ControlError::Protocol(format!(
+            "control socket access denied for peer uid {peer_uid} (expected {expected_uid})",
+        )))
+    }
+}
+
+#[cfg(unix)]
+fn control_peer_uid(stream: &tokio::net::UnixStream) -> Result<u32, ControlError> {
+    let peer_cred = stream.peer_cred().map_err(|error| {
+        ControlError::Protocol(format!(
+            "unable to obtain peer uid from control socket: {error}"
+        ))
+    })?;
+    Ok(peer_cred.uid())
+}
+
+#[cfg(unix)]
+fn control_process_uid() -> u32 {
+    nix::unistd::Uid::effective().as_raw()
+}
+
+#[cfg(unix)]
+fn is_authorized_control_uid(peer_uid: u32, expected_uid: u32) -> bool {
+    peer_uid == expected_uid
+}
+
 fn timestamp_string() -> String {
     let since_epoch = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1053,9 +1133,34 @@ mod tests {
     }
 
     #[test]
+    fn control_status_json_includes_audit_write_failures() {
+        let runtime = ServerRuntime::new("test".to_string(), TEST_NODE_COUNT, 4, 60);
+        runtime.record_audit_write_failure();
+
+        let response = ControlResponse::Status {
+            ok: true,
+            status: runtime.status(),
+        };
+        let response_json = serde_json::to_value(&response).expect("serialize");
+
+        assert_eq!(
+            response_json["status"]["audit_write_failures"],
+            serde_json::json!(1)
+        );
+    }
+
+    #[test]
     fn control_unknown_request_rejected() {
         let bad = r#"{"type":"does.not.exist"}"#;
         assert!(serde_json::from_str::<ControlRequest>(bad).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn control_peer_uid_rejection_checks_exact_uid_match() {
+        let uid = 1000u32;
+        assert!(is_authorized_control_uid(uid, uid));
+        assert!(!is_authorized_control_uid(uid, uid.saturating_add(1)));
     }
 
     #[test]
@@ -1215,6 +1320,22 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         assert!(socket_path.exists());
+        #[cfg(unix)]
+        {
+            let socket_mode = fs::metadata(&socket_path)
+                .expect("socket metadata")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(socket_mode, 0o600);
+
+            let runtime_mode = fs::metadata(&runtime_dir)
+                .expect("runtime metadata")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(runtime_mode, 0o700);
+        }
 
         runtime.mark_node_connected(
             1,

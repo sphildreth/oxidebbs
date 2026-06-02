@@ -8,22 +8,36 @@ use serde_json::Value as JsonValue;
 
 use crate::sysop_cli::{AppContext, CliError, CliResult, emit_ok, open_database, print_json};
 use oxidebbs_db::{
-    AuditEventRecord, Db, DoorDefinitionRecord, DoorRunRecord, MessageAreaRecord, MessageRecord,
-    SessionRecord, UserRecord, Value, insert_audit_event, insert_door_definition, insert_door_run,
-    insert_message, insert_message_area, insert_session, insert_user, list_door_definitions,
-    list_message_areas, list_messages, list_users, read_schema_version,
+    AuditEventRecord, AuthAttemptRecord, Db, DoorDefinitionRecord, DoorRunRecord,
+    MessageAreaRecord, MessageRecord, SessionRecord, UserRecord, Value,
+    insert_audit_event_preserving_record, insert_auth_attempt, insert_door_definition,
+    insert_door_run, insert_message, insert_message_area, insert_session, insert_user,
+    list_auth_attempts, list_door_definitions, list_message_areas, list_messages, list_users,
+    read_schema_version,
 };
 
 #[derive(Debug, Clone, Deserialize)]
 struct ImportSchema {
     schema_version: i64,
     users: Vec<ImportUserRecord>,
+    #[serde(default)]
+    auth_attempts: Vec<ImportAuthAttemptRecord>,
     message_areas: Vec<ImportMessageAreaRecord>,
     messages: Vec<ImportMessageRecord>,
     sessions: Vec<ImportSessionRecord>,
     doors: Vec<ImportDoorDefinitionRecord>,
     door_runs: Vec<ImportDoorRunRecord>,
     audit_events: Vec<ImportAuditEventRecord>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ImportAuthAttemptRecord {
+    scope: String,
+    scope_key: String,
+    failed_count: i64,
+    first_failed_at: Option<String>,
+    last_failed_at: Option<String>,
+    locked_until: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -138,6 +152,19 @@ impl From<ImportUserRecord> for UserRecord {
             total_calls: record.total_calls,
             time_bank_minutes: record.time_bank_minutes,
             status: record.status,
+        }
+    }
+}
+
+impl From<ImportAuthAttemptRecord> for AuthAttemptRecord {
+    fn from(record: ImportAuthAttemptRecord) -> Self {
+        Self {
+            scope: record.scope,
+            scope_key: record.scope_key,
+            failed_count: record.failed_count,
+            first_failed_at: record.first_failed_at,
+            last_failed_at: record.last_failed_at,
+            locked_until: record.locked_until,
         }
     }
 }
@@ -467,6 +494,7 @@ fn db_stats(db: &Db) -> CliResult<JsonValue> {
         "messages": db_scalar_i64(db, "SELECT COUNT(*) FROM messages")?,
         "sessions": db_scalar_i64(db, "SELECT COUNT(*) FROM sessions")?,
         "active_sessions": db_scalar_i64(db, "SELECT COUNT(*) FROM sessions WHERE ended_at IS NULL")?,
+        "auth_attempts": db_scalar_i64(db, "SELECT COUNT(*) FROM auth_attempts")?,
         "doors": db_scalar_i64(db, "SELECT COUNT(*) FROM doors")?,
         "door_runs": db_scalar_i64(db, "SELECT COUNT(*) FROM door_runs")?,
         "audit_events": db_scalar_i64(db, "SELECT COUNT(*) FROM audit_events")?
@@ -479,6 +507,17 @@ fn print_stats(stats: &JsonValue) {
             println!("{key}: {value}");
         }
     }
+}
+
+fn auth_attempt_json(attempt: &AuthAttemptRecord) -> JsonValue {
+    serde_json::json!({
+        "scope": attempt.scope,
+        "scope_key": attempt.scope_key,
+        "failed_count": attempt.failed_count,
+        "first_failed_at": attempt.first_failed_at,
+        "last_failed_at": attempt.last_failed_at,
+        "locked_until": attempt.locked_until
+    })
 }
 
 fn audit_json(event: &oxidebbs_db::AuditEventRecord) -> JsonValue {
@@ -496,6 +535,7 @@ fn db_export(db: &Db) -> CliResult<JsonValue> {
     Ok(serde_json::json!({
         "schema_version": read_schema_version(db)?,
         "users": list_users(db)?.iter().map(user_json).collect::<Vec<_>>(),
+        "auth_attempts": list_auth_attempts(db)?.iter().map(auth_attempt_json).collect::<Vec<_>>(),
         "message_areas": list_message_areas(db)?.iter().map(area_json).collect::<Vec<_>>(),
         "messages": list_messages(db)?.iter().map(message_json).collect::<Vec<_>>(),
         "sessions": list_all_sessions_for_export(db)?.iter().map(session_json).collect::<Vec<_>>(),
@@ -525,6 +565,7 @@ fn ensure_import_target_is_schema_only(db: &Db) -> CliResult<()> {
 
     for table in [
         "users",
+        "auth_attempts",
         "message_areas",
         "messages",
         "sessions",
@@ -724,6 +765,8 @@ fn perform_db_import(db: &oxidebbs_db::OxideDb, payload: ImportSchema) -> CliRes
     ensure_import_target_is_schema_only(db.db())?;
 
     let users: Vec<UserRecord> = payload.users.into_iter().map(Into::into).collect();
+    let auth_attempts: Vec<AuthAttemptRecord> =
+        payload.auth_attempts.into_iter().map(Into::into).collect();
     let message_areas: Vec<MessageAreaRecord> =
         payload.message_areas.into_iter().map(Into::into).collect();
     let messages: Vec<MessageRecord> = payload.messages.into_iter().map(Into::into).collect();
@@ -739,6 +782,9 @@ fn perform_db_import(db: &oxidebbs_db::OxideDb, payload: ImportSchema) -> CliRes
         for user in &users {
             insert_user(db, user)?;
         }
+        for attempt in &auth_attempts {
+            insert_auth_attempt(db, attempt)?;
+        }
         for area in &message_areas {
             insert_message_area(db, area)?;
         }
@@ -753,7 +799,7 @@ fn perform_db_import(db: &oxidebbs_db::OxideDb, payload: ImportSchema) -> CliRes
             insert_door_run(db, run)?;
         }
         for event in &audit_events {
-            insert_audit_event(db, event)?;
+            insert_audit_event_preserving_record(db, event)?;
         }
         Ok(())
     })();
@@ -871,6 +917,7 @@ pub fn run_db(command: DbCommand, ctx: &AppContext) -> CliResult<()> {
             let db = open_database(&ctx.config)?;
             let import_counts = (
                 payload.users.len(),
+                payload.auth_attempts.len(),
                 payload.message_areas.len(),
                 payload.messages.len(),
                 payload.sessions.len(),
@@ -885,12 +932,13 @@ pub fn run_db(command: DbCommand, ctx: &AppContext) -> CliResult<()> {
                 serde_json::json!({
                     "schema_version": db.schema_version()?,
                     "users": import_counts.0,
-                    "message_areas": import_counts.1,
-                    "messages": import_counts.2,
-                    "sessions": import_counts.3,
-                    "doors": import_counts.4,
-                    "door_runs": import_counts.5,
-                    "audit_events": import_counts.6,
+                    "auth_attempts": import_counts.1,
+                    "message_areas": import_counts.2,
+                    "messages": import_counts.3,
+                    "sessions": import_counts.4,
+                    "doors": import_counts.5,
+                    "door_runs": import_counts.6,
+                    "audit_events": import_counts.7,
                 }),
             )
         }
@@ -992,9 +1040,11 @@ mod tests {
         }
     }
 
-    fn table_counts(db: &oxidebbs_db::OxideDb) -> (i64, i64, i64, i64, i64, i64, i64) {
+    fn table_counts(db: &oxidebbs_db::OxideDb) -> (i64, i64, i64, i64, i64, i64, i64, i64) {
         (
             db_scalar_i64(db.db(), "SELECT COUNT(*) FROM users").expect("count users"),
+            db_scalar_i64(db.db(), "SELECT COUNT(*) FROM auth_attempts")
+                .expect("count auth attempts"),
             db_scalar_i64(db.db(), "SELECT COUNT(*) FROM message_areas").expect("count areas"),
             db_scalar_i64(db.db(), "SELECT COUNT(*) FROM messages").expect("count messages"),
             db_scalar_i64(db.db(), "SELECT COUNT(*) FROM sessions").expect("count sessions"),
@@ -1087,7 +1137,7 @@ mod tests {
     #[test]
     fn db_init_target_is_schema_only_for_import() {
         let db = test_db();
-        assert_eq!(table_counts(&db), (0, 0, 0, 0, 0, 0, 0));
+        assert_eq!(table_counts(&db), (0, 0, 0, 0, 0, 0, 0, 0));
         ensure_import_target_is_schema_only(db.db()).expect("schema-only target");
     }
 
@@ -1096,7 +1146,7 @@ mod tests {
         let (_, payload) = seeded_source_db();
         let target = test_db();
         perform_db_import(&target, payload).expect("import");
-        assert_eq!(table_counts(&target), (1, 1, 2, 1, 1, 1, 1));
+        assert_eq!(table_counts(&target), (1, 0, 1, 2, 1, 1, 1, 1));
         let users = list_users(target.db()).expect("list users");
         assert_eq!(users[0].alias, "alice");
         assert_eq!(users[0].password_hash, "hash");
@@ -1176,6 +1226,7 @@ mod tests {
         assert!(obj.contains_key("messages"));
         assert!(obj.contains_key("sessions"));
         assert!(obj.contains_key("active_sessions"));
+        assert!(obj.contains_key("auth_attempts"));
         assert!(obj.contains_key("doors"));
         assert!(obj.contains_key("door_runs"));
         assert!(obj.contains_key("audit_events"));

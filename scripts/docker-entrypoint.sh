@@ -59,7 +59,7 @@ first_boot_setup() {
     --board-name "${OXIDEBBS_BOARD_NAME:-OxideBBS}"
     --sysop-alias "${OXIDEBBS_SYSOP_ALIAS:-sysop}"
     --sysop-password "$SYSOP_PASSWORD"
-    --telnet-port "${OXIDEBBS_TELNET_PORT:-2323}"
+    --telnet-bind "${OXIDEBBS_TELNET_BIND:-0.0.0.0:${OXIDEBBS_TELNET_PORT:-2323}}"
     --nodes "${OXIDEBBS_NODES:-4}"
   )
 

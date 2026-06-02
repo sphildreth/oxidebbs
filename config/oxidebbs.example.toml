@@ -6,9 +6,23 @@ timezone = "America/Chicago"
 
 [telnet]
 enabled = true
-bind = "0.0.0.0:2323"
+bind = "127.0.0.1:2323"
 max_connections = 4
 idle_timeout_seconds = 900
+
+[auth]
+failed_login_threshold = 5
+failed_login_window_minutes = 10
+failed_login_lockout_minutes = 15
+new_user_security_level = 10
+
+[auth.argon2]
+memory_cost_kib = 19456
+iterations = 2
+parallelism = 1
+
+[audit]
+retention_days = 365
 
 [database]
 path = "./data/oxidebbs.ddb"
@@ -106,6 +120,7 @@ action = "logoff"
 [doors]
 enabled = true
 default_runner = "dosemu"
+allowed_runners = ["dosemu", "dosemu2"]
 
 [[doors.definitions]]
 key = "oxide-check"

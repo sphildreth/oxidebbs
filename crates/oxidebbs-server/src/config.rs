@@ -32,6 +32,10 @@ pub struct OxideConfig {
     #[serde(default)]
     pub telnet: TelnetConfig,
     #[serde(default)]
+    pub auth: AuthConfig,
+    #[serde(default)]
+    pub audit: AuditConfig,
+    #[serde(default)]
     pub database: DatabaseConfig,
     #[serde(default)]
     pub paths: PathsConfig,
@@ -72,6 +76,36 @@ pub struct TelnetConfig {
     pub max_connections: u32,
     #[serde(default = "default_idle_timeout")]
     pub idle_timeout_seconds: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AuthConfig {
+    #[serde(default = "default_failed_login_threshold")]
+    pub failed_login_threshold: i64,
+    #[serde(default = "default_failed_login_window_minutes")]
+    pub failed_login_window_minutes: i64,
+    #[serde(default = "default_failed_login_lockout_minutes")]
+    pub failed_login_lockout_minutes: i64,
+    #[serde(default = "default_new_user_security_level")]
+    pub new_user_security_level: i32,
+    #[serde(default)]
+    pub argon2: Argon2Config,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Argon2Config {
+    #[serde(default = "default_argon2_memory_cost_kib")]
+    pub memory_cost_kib: u32,
+    #[serde(default = "default_argon2_iterations")]
+    pub iterations: u32,
+    #[serde(default = "default_argon2_parallelism")]
+    pub parallelism: u32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AuditConfig {
+    #[serde(default = "default_audit_retention_days")]
+    pub retention_days: i64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -209,6 +243,8 @@ pub struct DoorsConfig {
     pub enabled: bool,
     #[serde(default = "default_door_runner")]
     pub default_runner: String,
+    #[serde(default = "default_door_allowed_runners")]
+    pub allowed_runners: Vec<String>,
     #[serde(default)]
     pub definitions: Vec<DoorDefConfig>,
 }
@@ -268,6 +304,59 @@ impl OxideConfig {
             return Err(ConfigError::Validation(
                 "telnet.idle_timeout_seconds must be greater than 0".into(),
             ));
+        }
+        if self.auth.failed_login_threshold <= 0 {
+            return Err(ConfigError::Validation(
+                "auth.failed_login_threshold must be greater than 0".into(),
+            ));
+        }
+        if self.auth.failed_login_window_minutes <= 0 {
+            return Err(ConfigError::Validation(
+                "auth.failed_login_window_minutes must be greater than 0".into(),
+            ));
+        }
+        if self.auth.failed_login_lockout_minutes <= 0 {
+            return Err(ConfigError::Validation(
+                "auth.failed_login_lockout_minutes must be greater than 0".into(),
+            ));
+        }
+        if !(0..=255).contains(&self.auth.new_user_security_level) {
+            return Err(ConfigError::Validation(
+                "auth.new_user_security_level must be between 0 and 255".into(),
+            ));
+        }
+        if self.auth.argon2.memory_cost_kib == 0 {
+            return Err(ConfigError::Validation(
+                "auth.argon2.memory_cost_kib must be greater than 0".into(),
+            ));
+        }
+        if self.auth.argon2.iterations == 0 {
+            return Err(ConfigError::Validation(
+                "auth.argon2.iterations must be greater than 0".into(),
+            ));
+        }
+        if self.auth.argon2.parallelism == 0 {
+            return Err(ConfigError::Validation(
+                "auth.argon2.parallelism must be greater than 0".into(),
+            ));
+        }
+        if self.audit.retention_days <= 0 {
+            return Err(ConfigError::Validation(
+                "audit.retention_days must be greater than 0".into(),
+            ));
+        }
+        if self.doors.allowed_runners.is_empty() {
+            return Err(ConfigError::Validation(
+                "doors.allowed_runners must include at least one runner".into(),
+            ));
+        }
+        for door in &self.doors.definitions {
+            if door.time_limit_minutes == 0 || door.time_limit_minutes > 240 {
+                return Err(ConfigError::Validation(format!(
+                    "doors.definitions.{} time_limit_minutes must be between 1 and 240",
+                    door.key
+                )));
+            }
         }
         self.validate_flow()?;
         self.validate_screens()?;
@@ -432,7 +521,31 @@ fn default_true() -> bool {
     true
 }
 fn default_bind() -> String {
-    "0.0.0.0:2323".into()
+    "127.0.0.1:2323".into()
+}
+fn default_failed_login_threshold() -> i64 {
+    5
+}
+fn default_failed_login_window_minutes() -> i64 {
+    10
+}
+fn default_failed_login_lockout_minutes() -> i64 {
+    15
+}
+fn default_new_user_security_level() -> i32 {
+    10
+}
+fn default_argon2_memory_cost_kib() -> u32 {
+    19_456
+}
+fn default_argon2_iterations() -> u32 {
+    2
+}
+fn default_argon2_parallelism() -> u32 {
+    1
+}
+fn default_audit_retention_days() -> i64 {
+    365
 }
 fn default_max_connections() -> u32 {
     4
@@ -485,6 +598,9 @@ fn default_menu_prompt() -> String {
 fn default_door_runner() -> String {
     "dosemu".into()
 }
+fn default_door_allowed_runners() -> Vec<String> {
+    vec!["dosemu".to_string(), "dosemu2".to_string()]
+}
 fn default_door_time_limit() -> u32 {
     30
 }
@@ -531,6 +647,36 @@ impl Default for TelnetConfig {
             bind: default_bind(),
             max_connections: default_max_connections(),
             idle_timeout_seconds: default_idle_timeout(),
+        }
+    }
+}
+
+impl Default for AuthConfig {
+    fn default() -> Self {
+        Self {
+            failed_login_threshold: default_failed_login_threshold(),
+            failed_login_window_minutes: default_failed_login_window_minutes(),
+            failed_login_lockout_minutes: default_failed_login_lockout_minutes(),
+            new_user_security_level: default_new_user_security_level(),
+            argon2: Argon2Config::default(),
+        }
+    }
+}
+
+impl Default for Argon2Config {
+    fn default() -> Self {
+        Self {
+            memory_cost_kib: default_argon2_memory_cost_kib(),
+            iterations: default_argon2_iterations(),
+            parallelism: default_argon2_parallelism(),
+        }
+    }
+}
+
+impl Default for AuditConfig {
+    fn default() -> Self {
+        Self {
+            retention_days: default_audit_retention_days(),
         }
     }
 }
@@ -590,6 +736,7 @@ impl Default for DoorsConfig {
         Self {
             enabled: default_true(),
             default_runner: default_door_runner(),
+            allowed_runners: default_door_allowed_runners(),
             definitions: Vec::new(),
         }
     }
@@ -671,7 +818,19 @@ count = 0
 name = "Minimal"
 "#;
         let config: OxideConfig = toml::from_str(toml).expect("parse with defaults");
-        assert_eq!(config.telnet.bind, "0.0.0.0:2323");
+        assert_eq!(config.telnet.bind, "127.0.0.1:2323");
+        assert_eq!(config.auth.failed_login_threshold, 5);
+        assert_eq!(config.auth.failed_login_window_minutes, 10);
+        assert_eq!(config.auth.failed_login_lockout_minutes, 15);
+        assert_eq!(config.auth.new_user_security_level, 10);
+        assert_eq!(config.auth.argon2.memory_cost_kib, 19_456);
+        assert_eq!(config.auth.argon2.iterations, 2);
+        assert_eq!(config.auth.argon2.parallelism, 1);
+        assert_eq!(config.audit.retention_days, 365);
+        assert_eq!(
+            config.doors.allowed_runners,
+            vec!["dosemu".to_string(), "dosemu2".to_string()]
+        );
         assert_eq!(config.database.path, PathBuf::from("./data/oxidebbs.ddb"));
         assert_eq!(config.nodes.count, 4);
         assert_eq!(config.terminal.default_encoding, "cp437");

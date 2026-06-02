@@ -71,6 +71,8 @@ The check validates:
 
 Missing optional directories and assets are surfaced as warnings; parse failures and
 invalid bind/state values are errors.
+Binding telnet beyond loopback also surfaces as a warning because telnet sends
+credentials and caller traffic without encryption.
 
 ## Starting `serve`
 
@@ -105,6 +107,8 @@ The local control plane is:
 - Single command per connection
 - Used by `status`, `nodes list`, `nodes show`, `nodes watch`,
   `nodes disconnect`, `nodes message`, `nodes broadcast`, and `nodes reset-stale`
+- Protected on Unix by `0700` runtime-directory permissions, `0600` socket
+  permissions, and peer-UID checks against the server process UID
 
 If the socket is unreachable:
 
@@ -134,6 +138,13 @@ When live, node rows include states:
   `posting_message`, `in_door`, `disconnecting`, `offline`, `stale`
 
 Each live row may include heartbeat age in seconds.
+
+Live `status --json` also includes `audit_write_failures`, the in-memory count
+of best-effort audit writes that failed while the server was running.
+
+Any future web admin interface must add CSRF and replay protection before it is
+enabled; the current admin/control surface remains local CLI plus Unix control
+socket.
 
 ## Doors and caller launch
 
@@ -214,17 +225,21 @@ cargo run -p oxidebbs-server -- db compact
 - `db backup` copies the active database file.
 - `db export --format json` is read-only and safe.
 - `db import --format json <path>` performs a full restore only:
-  - requires a schema-3, schema-only target
+  - requires a schema-4, schema-only target
   - validates schema and all foreign-key references before writing
   - preserves UUIDs and load ordering
   - executes in one transaction and fails atomically
 - `db compact` currently returns a hard unsupported error because DecentDB has no
   safe compaction API contract in this release.
+- `[audit].retention_days` defaults to `365`. Runtime audit inserts do not
+  purge old rows automatically; the DecentDB repository exposes a retention
+  purge helper for scheduled maintenance until a CLI wrapper is added.
 
 ## Schema migration notes
 
-- Schema version is currently `3`.
-- Existing schema `2` databases migrate automatically to `3` on first open.
+- Schema version is currently `4`.
+- Existing schema `2` and `3` databases migrate automatically to `4` on first
+  open.
 - Databases with missing, malformed, or future markers are rejected with explicit
   operator-facing errors.
 - `status`/`nodes` do not attempt to operate on incompatible databases.
@@ -236,3 +251,6 @@ All operations here are local to the current machine:
 - no remote TCP admin interface
 - no remote secret/token auth model
 - control socket path must be local filesystem access only
+- local control socket uses Unix peer UID checks plus filesystem permissions
+- any future web admin interface must include CSRF and replay protection before
+  being enabled

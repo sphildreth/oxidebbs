@@ -27,23 +27,38 @@ pub trait Transport: Send {
 pub struct TcpTransport {
     reader: tokio::io::ReadHalf<tokio::net::TcpStream>,
     writer: tokio::io::WriteHalf<tokio::net::TcpStream>,
+    read_buffer: [u8; 4096],
+    read_buffer_len: usize,
+    read_buffer_pos: usize,
 }
 
 impl TcpTransport {
     pub fn new(stream: tokio::net::TcpStream) -> Self {
         let (reader, writer) = tokio::io::split(stream);
-        Self { reader, writer }
+        Self {
+            reader,
+            writer,
+            read_buffer: [0u8; 4096],
+            read_buffer_len: 0,
+            read_buffer_pos: 0,
+        }
     }
 }
 
 impl Transport for TcpTransport {
     async fn read_byte(&mut self) -> Result<Option<u8>, TransportError> {
-        let mut buf = [0u8; 1];
-        match self.reader.read_exact(&mut buf).await {
-            Ok(_) => Ok(Some(buf[0])),
-            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => Ok(None),
-            Err(e) => Err(TransportError::Io(e)),
+        if self.read_buffer_pos == self.read_buffer_len {
+            self.read_buffer_len = self.reader.read(&mut self.read_buffer).await?;
+            self.read_buffer_pos = 0;
+
+            if self.read_buffer_len == 0 {
+                return Ok(None);
+            }
         }
+
+        let byte = self.read_buffer[self.read_buffer_pos];
+        self.read_buffer_pos += 1;
+        Ok(Some(byte))
     }
 
     async fn write_all(&mut self, bytes: &[u8]) -> Result<(), TransportError> {
@@ -137,6 +152,76 @@ impl LoopbackHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::AsyncWriteExt;
+
+    #[tokio::test]
+    async fn tcp_transport_reads_one_byte_at_a_time_from_internal_buffer() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind tcp transport test listener");
+        let server_addr = listener.local_addr().expect("listener addr");
+        let client_task = tokio::spawn(async move {
+            let mut client = tokio::net::TcpStream::connect(server_addr)
+                .await
+                .expect("connect test client");
+            client
+                .write_all(b"ABCD")
+                .await
+                .expect("write transport test payload");
+        });
+
+        let (server, _) = listener.accept().await.expect("accept test connection");
+        let mut transport = TcpTransport::new(server);
+
+        assert_eq!(transport.read_byte().await.expect("read first"), Some(b'A'));
+        assert_eq!(
+            transport.read_byte().await.expect("read second"),
+            Some(b'B')
+        );
+        assert_eq!(transport.read_byte().await.expect("read third"), Some(b'C'));
+        assert_eq!(
+            transport.read_byte().await.expect("read fourth"),
+            Some(b'D')
+        );
+        assert_eq!(transport.read_byte().await.expect("read eof"), None);
+
+        client_task.await.expect("client task");
+    }
+
+    #[tokio::test]
+    async fn tcp_transport_reads_multiple_frames_from_same_recv_buffer() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind tcp transport test listener");
+        let server_addr = listener.local_addr().expect("listener addr");
+        let client_task = tokio::spawn(async move {
+            let mut client = tokio::net::TcpStream::connect(server_addr)
+                .await
+                .expect("connect test client");
+            client
+                .write_all(b"HELLO")
+                .await
+                .expect("write transport test payload");
+        });
+
+        let (server, _) = listener.accept().await.expect("accept test connection");
+        let mut transport = TcpTransport::new(server);
+
+        assert_eq!(transport.read_byte().await.expect("read first"), Some(b'H'));
+        assert_eq!(
+            transport.read_byte().await.expect("read second"),
+            Some(b'E')
+        );
+        assert_eq!(transport.read_byte().await.expect("read third"), Some(b'L'));
+        assert_eq!(
+            transport.read_byte().await.expect("read fourth"),
+            Some(b'L')
+        );
+        assert_eq!(transport.read_byte().await.expect("read fifth"), Some(b'O'));
+        assert_eq!(transport.read_byte().await.expect("read eof"), None);
+
+        client_task.await.expect("client task");
+    }
 
     #[tokio::test]
     async fn loopback_echo_roundtrip() {

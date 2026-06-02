@@ -3,10 +3,16 @@ use std::path::Path;
 use serde_json::Value as JsonValue;
 
 use clap::Subcommand;
+#[cfg(unix)]
+use nix::unistd::geteuid;
 use oxidebbs_door::runner_supports_dosemu2_cli;
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 
 use crate::config::DoorDefConfig;
 use crate::sysop_cli::{AppContext, CliError, CliResult, emit_ok, print_json};
+
+pub(crate) const TELNET_PLAINTEXT_EXPOSURE_WARNING: &str = "telnet bind address is reachable beyond loopback; telnet is plaintext and sends credentials and caller traffic without encryption";
 
 #[derive(Subcommand)]
 pub enum ConfigCommand {
@@ -135,11 +141,18 @@ pub(crate) fn validate_runtime(
             config_path.display()
         )));
     }
-    if config.telnet.bind.parse::<SocketAddr>().is_err() {
-        issues.push(CheckIssue::error(format!(
-            "telnet.bind {:?} is not a valid socket address",
-            config.telnet.bind
-        )));
+    match config.telnet.bind.parse::<SocketAddr>() {
+        Ok(bind) => {
+            if telnet_bind_exposes_plaintext(bind) {
+                issues.push(CheckIssue::warning(TELNET_PLAINTEXT_EXPOSURE_WARNING));
+            }
+        }
+        Err(_) => {
+            issues.push(CheckIssue::error(format!(
+                "telnet.bind {:?} is not a valid socket address",
+                config.telnet.bind
+            )));
+        }
     }
     if config.nodes.count == 0 {
         issues.push(CheckIssue::error("nodes.count must be greater than 0"));
@@ -173,6 +186,11 @@ pub(crate) fn validate_runtime(
         issues.extend(check_configured_door(door, config));
     }
     issues
+}
+
+fn telnet_bind_exposes_plaintext(bind: std::net::SocketAddr) -> bool {
+    let ip = bind.ip();
+    ip.is_unspecified() || !ip.is_loopback()
 }
 
 fn validate_screen_assets(
@@ -210,7 +228,36 @@ fn check_configured_door(
     config: &crate::config::OxideConfig,
 ) -> Vec<CheckIssue> {
     let mut issues = Vec::new();
-    let working_dir = std::path::PathBuf::from(&door.working_dir);
+    let doors_root = match std::path::Path::new(&config.paths.doors).canonicalize() {
+        Ok(root) => root,
+        Err(error) => {
+            issues.push(CheckIssue::warning(format!(
+                "doors path {} is not accessible: {error}",
+                config.paths.doors.display()
+            )));
+            Path::new("/").to_path_buf()
+        }
+    };
+    let working_dir = Path::new(&door.working_dir).canonicalize();
+    let working_dir = match working_dir {
+        Ok(path) => {
+            if !path.starts_with(&doors_root) {
+                issues.push(CheckIssue::error(format!(
+                    "door working directory {} escapes doors path {}",
+                    door.working_dir,
+                    config.paths.doors.display()
+                )));
+            }
+            path
+        }
+        Err(error) => {
+            issues.push(CheckIssue::warning(format!(
+                "door working directory {} does not exist: {error}",
+                door.working_dir
+            )));
+            Path::new(&door.working_dir).to_path_buf()
+        }
+    };
     if !working_dir.is_dir() {
         issues.push(CheckIssue::warning(format!(
             "door working directory {} does not exist",
@@ -254,6 +301,9 @@ fn check_configured_door(
             door.runner
         )));
     }
+    if let Err(error) = validate_door_runner(&door.runner, &config.doors.allowed_runners) {
+        issues.push(error);
+    }
     if !matches!(
         door.drop_file.to_ascii_uppercase().as_str(),
         "DOOR.SYS" | "DORINFO1.DEF"
@@ -263,8 +313,8 @@ fn check_configured_door(
             door.drop_file
         )));
     }
-    if door.time_limit_minutes == 0 {
-        issues.push(CheckIssue::error("time limit must be greater than 0"));
+    if !(1..=240).contains(&door.time_limit_minutes) {
+        issues.push(CheckIssue::error("time limit must be in 1..=240 minutes"));
     }
     if let Err(error) = std::fs::create_dir_all(&config.paths.runtime) {
         issues.push(CheckIssue::error(format!(
@@ -284,6 +334,84 @@ fn command_exists(command: &str) -> bool {
         return false;
     };
     std::env::split_paths(&paths).any(|dir| dir.join(command).is_file())
+}
+
+fn resolve_runner_path(command: &str) -> Option<std::path::PathBuf> {
+    let path = std::path::Path::new(command);
+    if path.components().count() > 1 {
+        Some(path.to_path_buf())
+    } else {
+        let paths = std::env::var_os("PATH")?;
+        std::env::split_paths(&paths).find_map(|dir| {
+            let candidate = dir.join(command);
+            if candidate.is_file() {
+                Some(candidate)
+            } else {
+                None
+            }
+        })
+    }
+}
+
+fn validate_door_runner(runner: &str, allowed_runners: &[String]) -> Result<(), CheckIssue> {
+    if !allowed_runners.iter().any(|allowed| allowed == runner) {
+        return Err(CheckIssue::error(format!(
+            "door runner {:?} is not allowed. expected one of {:?}",
+            runner, allowed_runners
+        )));
+    }
+    let runner_path = resolve_runner_path(runner).ok_or_else(|| {
+        CheckIssue::warning(format!("door runner {:?} was not found on PATH", runner))
+    })?;
+    let runner_path = runner_path.canonicalize().map_err(|error| {
+        CheckIssue::warning(format!(
+            "door runner {:?} is not accessible: {error}",
+            runner
+        ))
+    })?;
+    if !runner_path.is_file() {
+        return Err(CheckIssue::error(format!(
+            "door runner {:?} is not a regular file",
+            runner_path.display()
+        )));
+    }
+    validate_runner_file_permissions(&runner_path, runner).map_err(CheckIssue::error)?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn validate_runner_file_permissions(path: &Path, runner: &str) -> Result<(), String> {
+    let metadata = path
+        .metadata()
+        .map_err(|error| format!("door runner {runner:?} metadata error: {error}"))?;
+    let mode = metadata.mode();
+    if mode & 0o002 != 0 {
+        return Err(format!(
+            "door runner {runner:?} is world-writable; refused for safety"
+        ));
+    }
+    if mode & 0o020 != 0 {
+        return Err(format!(
+            "door runner {runner:?} is group-writable; refused for safety"
+        ));
+    }
+    let owner = metadata.uid();
+    let server_uid = geteuid().as_raw();
+    if owner != 0 && owner != server_uid {
+        return Err(format!(
+            "door runner {runner:?} is owned by UID {owner}, not root or server UID {server_uid}"
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn validate_runner_file_permissions(path: &Path, runner: &str) -> Result<(), String> {
+    if path.is_file() {
+        Ok(())
+    } else {
+        Err(format!("door runner {runner:?} is not a regular file"))
+    }
 }
 
 fn first_command_token(command: &str) -> Option<&str> {
@@ -372,6 +500,9 @@ fn infer_toml_value(raw: &str) -> toml::Value {
 mod tests {
     use super::*;
     use crate::{config::OxideConfig, sysop_cli::AppContext};
+    use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_path(tag: &str) -> std::path::PathBuf {
@@ -443,6 +574,37 @@ mod tests {
     }
 
     #[test]
+    fn check_warns_for_public_telnet_bind() {
+        let (mut config, config_path) = load_example_config_for_repo();
+        let runtime = temp_path("public-bind-runtime");
+        config.paths.runtime = runtime.clone();
+        config.telnet.bind = "0.0.0.0:2323".to_string();
+
+        let issues = validate_runtime(&config, &config_path);
+
+        assert!(issues.iter().any(|issue| {
+            issue.level == "warning" && issue.message == TELNET_PLAINTEXT_EXPOSURE_WARNING
+        }));
+        let _ = std::fs::remove_dir_all(runtime);
+    }
+
+    #[test]
+    fn check_does_not_warn_for_example_loopback_bind() {
+        let (mut config, config_path) = load_example_config_for_repo();
+        let runtime = temp_path("loopback-bind-runtime");
+        config.paths.runtime = runtime.clone();
+
+        let issues = validate_runtime(&config, &config_path);
+
+        assert!(
+            !issues
+                .iter()
+                .any(|issue| issue.message == TELNET_PLAINTEXT_EXPOSURE_WARNING)
+        );
+        let _ = std::fs::remove_dir_all(runtime);
+    }
+
+    #[test]
     fn door_check_uses_first_command_token_and_rejects_quoted_commands() {
         let (mut config, _config_path) = load_example_config_for_repo();
         let runtime = temp_path("door-command-runtime");
@@ -494,5 +656,123 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(runtime);
         let _ = std::fs::remove_dir_all(working_dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn check_configured_door_validates_contained_working_dir_and_rejects_symlink_escape() {
+        let (mut config, config_path) = load_example_config_for_repo();
+        let _ = std::fs::remove_dir_all(config_path.join("runtime-check"));
+        let runtime = temp_path("runtime");
+        let doors_root = temp_path("door-config-root");
+        let outside_root = temp_path("door-config-outside");
+        let outside_target = outside_root.join("outside-target");
+        let symlink_target = doors_root.join("outside-link");
+
+        fs::create_dir_all(&doors_root).expect("doors root");
+        fs::create_dir_all(&outside_target).expect("outside target");
+        std::os::unix::fs::symlink(&outside_target, &symlink_target).expect("symlink escape");
+
+        config.paths.runtime = runtime.clone();
+        config.paths.doors = doors_root.clone();
+
+        let mut door = config.doors.definitions[0].clone();
+        door.working_dir = outside_target.to_string_lossy().to_string();
+        door.runner = doors_root.join("dosemu").to_string_lossy().to_string();
+        config.doors.allowed_runners = vec![door.runner.clone()];
+
+        let runner_contents = "echo";
+        std::fs::write(&door.runner, runner_contents).expect("runner fixture");
+        let issues = check_configured_door(&door, &config);
+        assert!(issues.iter().any(|issue| {
+            issue.level == "error" && issue.message.contains("escapes doors path")
+        }));
+
+        let mut door = config.doors.definitions[0].clone();
+        door.working_dir = symlink_target.to_string_lossy().to_string();
+        let issues = check_configured_door(&door, &config);
+        assert!(issues.iter().any(|issue| {
+            issue.level == "error" && issue.message.contains("escapes doors path")
+        }));
+
+        let _ = std::fs::remove_dir_all(runtime);
+        let _ = std::fs::remove_dir_all(doors_root);
+        let _ = std::fs::remove_dir_all(outside_root);
+    }
+
+    #[test]
+    fn check_configured_door_enforces_runner_allowlist_and_time_limit_cap() {
+        let (mut config, _config_path) = load_example_config_for_repo();
+        let runtime = temp_path("runner-allowlist-runtime");
+        config.paths.runtime = runtime.clone();
+        let runner = temp_path("runner");
+        let runner_path = runner.join("dosemu");
+        fs::create_dir_all(&runner).expect("runner dir");
+        std::fs::write(&runner_path, b"echo").expect("runner");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&runner_path, fs::Permissions::from_mode(0o755))
+                .expect("runner perms");
+        }
+        config.doors.allowed_runners = vec![runner_path.to_string_lossy().to_string()];
+        config.doors.definitions[0].runner = "dosbox".to_string();
+        let mut door = config.doors.definitions[0].clone();
+        door.time_limit_minutes = 241;
+        let issues = check_configured_door(&door, &config);
+        assert!(
+            issues
+                .iter()
+                .any(|issue| { issue.level == "error" && issue.message.contains("not allowed") })
+        );
+        assert!(issues.iter().any(|issue| {
+            issue.level == "error" && issue.message.contains("time limit must be in 1..=240")
+        }));
+        let mut door = config.doors.definitions[0].clone();
+        door.runner = runner_path.to_string_lossy().to_string();
+        door.time_limit_minutes = 240;
+        let issues = check_configured_door(&door, &config);
+        assert!(!issues.iter().any(|issue| {
+            issue.level == "error" && issue.message.contains("time limit must be in")
+        }));
+        door.time_limit_minutes = 0;
+        let issues = check_configured_door(&door, &config);
+        assert!(issues.iter().any(|issue| {
+            issue.level == "error" && issue.message.contains("time limit must be in")
+        }));
+
+        #[cfg(unix)]
+        {
+            let mode = fs::metadata(&runner_path)
+                .expect("runner stat")
+                .permissions()
+                .mode();
+            let mut mode = mode;
+            mode |= 0o020;
+            fs::set_permissions(&runner_path, fs::Permissions::from_mode(mode))
+                .expect("runner group writable");
+            let door = door.clone();
+            let issues = check_configured_door(&door, &config);
+            assert!(issues.iter().any(|issue| {
+                issue.level == "error" && issue.message.contains("group-writable")
+            }));
+            let mode = fs::metadata(&runner_path)
+                .expect("runner stat")
+                .permissions()
+                .mode()
+                & !0o020;
+            fs::set_permissions(&runner_path, fs::Permissions::from_mode(mode))
+                .expect("runner no group write");
+            let mode = mode | 0o002;
+            fs::set_permissions(&runner_path, fs::Permissions::from_mode(mode))
+                .expect("runner world writable");
+            let issues = check_configured_door(&door, &config);
+            assert!(issues.iter().any(|issue| {
+                issue.level == "error" && issue.message.contains("world-writable")
+            }));
+        }
+
+        let _ = fs::remove_dir_all(runner);
+        let _ = fs::remove_dir_all(runtime);
     }
 }

@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Added persistent authentication abuse controls backed by DecentDB
+  `auth_attempts`, with per-IP and per-alias lockouts, explicit `[auth]`
+  Argon2id defaults, configurable new-user security level, and identical
+  visible failed-login messaging for missing aliases and wrong passwords.
+- Added audit retention configuration (`[audit].retention_days = 365`), a
+  DecentDB retention purge helper, and a live `audit_write_failures` runtime
+  counter exposed through control status JSON.
+- Added focused security/performance review coverage for repeated login-failure
+  audit bounding, post-staging door runtime cleanup, CP437 caller input
+  rejection, and message visibility filtering.
 - Added Oxide-owned DOS test door documentation and example configuration:
   `oxide-check` (`OXIDECHK.EXE`) in `config/doors.example.toml` and
   disabled by default in `config/oxidebbs.example.toml` to avoid requiring DOSEMU2
@@ -56,6 +66,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Changed the default telnet bind in generated and example configs to
+  `127.0.0.1:2323`; public telnet binds now produce a plaintext exposure
+  warning during config checks.
+- Hardened the Unix control socket with `0700` runtime directories, `0600`
+  socket permissions, same-UID peer checks, and a background stale-node sweeper
+  that requests disconnects with reason `stale_node_timeout`.
+- Hardened door execution by enforcing runner allowlists, runner ownership/mode
+  checks, working-directory containment under `paths.doors`, a `1..=240` minute
+  time-limit cap, per-node runtime directory guards, `0600` log files, and
+  child-process reap behavior after termination.
+- Bumped the pre-alpha DecentDB schema marker to `4`, adding
+  `users.alias_normalized` for case-insensitive alias uniqueness and
+  persistent `auth_attempts` lockout state.
+- New-user alias creation now uses the atomic
+  `insert_user_if_alias_available` repository path instead of a pre-check plus
+  insert sequence.
+- Runtime audit inserts now generate UUIDs and timestamps inline in DecentDB
+  `INSERT` statements; import uses a preserving insert path for backup fidelity.
+- Caller-authored, remotely rendered text is rejected before storage when it is
+  not CP437-compatible, while password input remains hidden and exempt.
+- Telnet transport now buffers socket reads in 4096-byte chunks, batches telnet
+  negotiation replies, completes capability negotiation early when terminal type
+  and NAWS are known, and removes the fixed menu-newline drain delay.
+- Message reads now use SQL-side visibility filtering, one alias map per
+  displayed message list, cached enabled message areas per message-flow entry,
+  and a shared `Arc<OxideConfig>` instead of per-connection deep config clones.
 - Extracted sysop CLI command handlers into `oxidebbs-server::commands`
   modules as a no-behavior-change structural refactor before live control
   socket work.
@@ -82,7 +118,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Hardened CLI automation by normalizing `--json` output for:
   `status`, `users list`, `nodes list`, `messages areas list`, `doors list`, and
   `db stats` into stable top-level objects.
-- Emitted lifecycle observability events to `audit_log` for server start/stop,
+- Emitted lifecycle observability events to audit events for server start/stop,
   startup config load, node assignment, and database-write failures.
 - Updated the GitHub Pages workflow to self-enable Pages during deployment
   bootstrap and support an optional `GITHUB_PAGES_TOKEN` for first-run setup.
@@ -120,6 +156,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ad hoc TOML editing.
 - Hardened the optional DOSEMU2 smoke script so child-originated hangup signals
   do not terminate sequential multi-node checks inside Docker.
+
+### Fixed
+
+- Plain telnet callers now receive terminal-level `.asc`/`.txt` welcome assets
+  when available instead of stripped CP437 ANSI art that common telnet clients
+  render as mojibake.
 
 ### Removed
 

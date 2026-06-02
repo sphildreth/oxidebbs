@@ -95,6 +95,10 @@
 - [x] Implement configured `submenu` runtime behavior.
 - [x] Add end-to-end telnet/runtime smoke coverage.
 - [x] Add graceful shutdown and lifecycle observability coverage.
+- [x] Complete the 2026-06-02 security and performance review phases covering
+  telnet exposure/auth hardening, local control socket safety, door runtime
+  containment, audit/CP437 policy, caller I/O performance, message query
+  performance, and low-risk load-test notes.
 
 ## Future
 

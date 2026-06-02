@@ -5,6 +5,7 @@ use std::path::Path;
 pub use decentdb::{Db, DbConfig, DbError, QueryResult, QueryRow, Value};
 
 mod audit_repo;
+mod auth_repo;
 mod door_repo;
 mod message_repo;
 mod migrations;
@@ -12,10 +13,15 @@ mod schema;
 mod session_repo;
 mod user_repo;
 
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 4;
 
 pub use audit_repo::{
-    AuditEventRecord, insert_audit_event, list_audit_events, list_audit_events_for_user,
+    AuditEventRecord, insert_audit_event, insert_audit_event_preserving_record, list_audit_events,
+    list_audit_events_for_user, purge_audit_events_older_than,
+};
+pub use auth_repo::{
+    AuthAttemptRecord, clear_auth_attempt, find_auth_attempt, insert_auth_attempt,
+    is_auth_scope_locked, list_auth_attempts, record_auth_failure,
 };
 pub use door_repo::{
     DoorDefinitionRecord, DoorRunFinish, DoorRunRecord, find_door_by_key, find_door_run_by_id,
@@ -25,8 +31,8 @@ pub use door_repo::{
 pub use message_repo::{
     MessageAreaRecord, MessageRecord, find_message_area_by_key, find_message_by_id, insert_message,
     insert_message_area, list_message_areas, list_messages, list_messages_in_area,
-    move_message_to_area, update_message_area_enabled, update_message_area_levels,
-    update_message_visibility,
+    list_visible_messages_in_area, move_message_to_area, update_message_area_enabled,
+    update_message_area_levels, update_message_visibility,
 };
 pub use migrations::migrate_to_current;
 pub use schema::schema_version as read_schema_version;
@@ -35,8 +41,9 @@ pub use session_repo::{
     list_recent_sessions, update_session_user,
 };
 pub use user_repo::{
-    UserRecord, find_user_by_alias, find_user_by_alias_ci, find_user_by_id, insert_user,
-    list_users, update_user_alias, update_user_is_sysop, update_user_login,
+    UserInsertError, UserRecord, find_user_by_alias, find_user_by_alias_ci, find_user_by_id,
+    insert_user, insert_user_if_alias_available, list_user_aliases_by_ids, list_users,
+    normalize_alias, update_user_alias, update_user_is_sysop, update_user_login,
     update_user_password_hash, update_user_security_level, update_user_status,
 };
 
@@ -83,7 +90,10 @@ mod tests {
     fn opens_memory_database_and_initializes_schema_marker() {
         let db = OxideDb::open_memory().expect("open in-memory DecentDB");
 
-        assert_eq!(db.schema_version().expect("read schema version"), 3);
+        assert_eq!(
+            db.schema_version().expect("read schema version"),
+            SCHEMA_VERSION
+        );
     }
 
     #[test]
@@ -93,6 +103,9 @@ mod tests {
         schema::init_schema(&db).expect("first schema init");
         schema::init_schema(&db).expect("second schema init");
 
-        assert_eq!(schema::schema_version(&db).expect("read schema version"), 3);
+        assert_eq!(
+            schema::schema_version(&db).expect("read schema version"),
+            SCHEMA_VERSION
+        );
     }
 }

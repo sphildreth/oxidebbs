@@ -98,6 +98,28 @@ pub fn list_messages_in_area(db: &Db, area_id: &str) -> decentdb::Result<Vec<Mes
     Ok(result.rows().iter().map(row_to_message).collect())
 }
 
+pub fn list_visible_messages_in_area(
+    db: &Db,
+    area_id: &str,
+    user_security_level: i64,
+) -> decentdb::Result<Vec<MessageRecord>> {
+    let result = db.execute_with_params(
+        "SELECT UUID_TO_STRING(messages.id), UUID_TO_STRING(messages.area_id), UUID_TO_STRING(messages.author_user_id), UUID_TO_STRING(messages.to_user_id), messages.subject, messages.body, CAST(messages.created_at AS TEXT), UUID_TO_STRING(messages.reply_to_id), messages.network_message_id, messages.visibility
+         FROM messages
+         JOIN message_areas ON message_areas.id = messages.area_id
+         WHERE messages.area_id = UUID_PARSE($1)
+           AND message_areas.enabled = TRUE
+           AND message_areas.read_security_level <= $2
+           AND messages.visibility = 'normal'
+         ORDER BY messages.created_at",
+        &[
+            Value::Text(area_id.to_string()),
+            Value::Int64(user_security_level),
+        ],
+    )?;
+    Ok(result.rows().iter().map(row_to_message).collect())
+}
+
 pub fn list_messages(db: &Db) -> decentdb::Result<Vec<MessageRecord>> {
     let result = db.execute(
         "SELECT UUID_TO_STRING(id), UUID_TO_STRING(area_id), UUID_TO_STRING(author_user_id), UUID_TO_STRING(to_user_id), subject, body, CAST(created_at AS TEXT), UUID_TO_STRING(reply_to_id), network_message_id, visibility
@@ -356,6 +378,40 @@ mod tests {
 
         let messages = list_messages_in_area(&db, AREA_GENERAL).expect("list");
         assert_eq!(messages[0].visibility, "deleted");
+    }
+
+    #[test]
+    fn visible_messages_filter_area_level_and_visibility_in_sql() {
+        let db = test_db();
+        insert_test_user(&db);
+        let mut area = sample_area("general");
+        area.read_security_level = 10;
+        insert_message_area(&db, &area).expect("insert area");
+        insert_message(&db, &sample_message(MSG_1, AREA_GENERAL)).expect("insert visible");
+        let mut hidden = sample_message("00000000-0000-4000-8000-000000000202", AREA_GENERAL);
+        hidden.visibility = "hidden".to_string();
+        insert_message(&db, &hidden).expect("insert hidden");
+
+        let low = list_visible_messages_in_area(&db, AREA_GENERAL, 0).expect("list low");
+        let visible = list_visible_messages_in_area(&db, AREA_GENERAL, 10).expect("list visible");
+
+        assert!(low.is_empty());
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].id, MSG_1);
+    }
+
+    #[test]
+    fn visible_messages_filter_disabled_areas_in_sql() {
+        let db = test_db();
+        insert_test_user(&db);
+        let mut area = sample_area("general");
+        area.enabled = false;
+        insert_message_area(&db, &area).expect("insert area");
+        insert_message(&db, &sample_message(MSG_1, AREA_GENERAL)).expect("insert message");
+
+        let visible = list_visible_messages_in_area(&db, AREA_GENERAL, 10).expect("list");
+
+        assert!(visible.is_empty());
     }
 
     #[test]

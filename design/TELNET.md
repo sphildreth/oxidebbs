@@ -38,7 +38,9 @@ After negotiation:
 
 - ANSI callers may receive the configured clear-screen sequence.
 - Plain text callers do not receive ANSI clear-screen bytes.
-- The configured terminal welcome asset is sent from `paths.ansi`.
+- The configured terminal welcome asset is sent from `paths.ansi`; plain text
+  callers first probe sibling `.asc` and `.txt` assets before falling back to a
+  stripped `.ans` rendering.
 - Login, post-login, and menu screens are selected from `paths.screens`.
 
 ## Initial Telnet Options
@@ -130,6 +132,11 @@ For plain text callers:
 2. Otherwise use `text` when configured.
 3. If only ANSI assets exist, strip ANSI escape sequences and render a plain
    CP437 text fallback.
+
+Terminal-level `welcome_screen` and `logoff_screen` assets use the configured
+asset name for ANSI callers. Plain text callers replace that asset extension
+with `.asc` and then `.txt` under `paths.ansi`; if neither file exists, the
+configured ANSI file is stripped as a compatibility fallback.
 
 Missing screen assets produce a visible fallback payload that names the missing
 screen and error details rather than silently dropping output.

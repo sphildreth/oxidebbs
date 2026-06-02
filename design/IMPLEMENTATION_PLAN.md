@@ -16,7 +16,7 @@ Status values:
 
 | Phase | Status | Goal | Primary Output |
 | --- | --- | --- | --- |
-| Phase 0 — Current Baseline | COMPLETE | CLI-first sysop interface, schema v3, docs, and release metadata are present. | `oxidebbs-server` exposes top-level sysop command groups. |
+| Phase 0 — Current Baseline | COMPLETE | CLI-first sysop interface, current DecentDB schema docs, and release metadata are present. | `oxidebbs-server` exposes top-level sysop command groups. |
 | Phase 0.5 — Structural Extraction Gate | COMPLETE | Reduce server monolith risk before adding live control behavior. | Command handler modules, `sysop_cli.rs` under 1000 lines, validated no-behavior-change refactor. |
 | Phase 1 — Local Server Control Plane | COMPLETE | Let sysop CLI commands control a running local server process. | Local control socket, command protocol, node command integration. |
 | Phase 2 — Live Node Heartbeats And State | COMPLETE | Make node status authoritative while the server is running. | Node registry, heartbeat timestamps, stale detection, status output. |
@@ -134,19 +134,17 @@ The current baseline after the CLI-first sysop implementation includes:
   - `--json`
   - `--no-color`
   - `--verbose`
-- DecentDB schema marker `3`.
-- Message areas have an `enabled` flag.
+- DecentDB schema marker `4`.
+- Message areas have an `enabled` flag, users have `alias_normalized`, and
+  authentication lockout state lives in `auth_attempts`.
 - Door definitions have an `enabled` flag in config.
 - `setup` can initialize a database and create an initial sysop account.
-- Node live-control commands currently record audited intent and update
-  session rows where possible; they do not yet communicate with a running
-  `serve` process. The current user-facing contract is explicit offline wording
-  such as "live transport control requires a future control socket" and
-  "recorded for delivery by a future live control channel"; Phase 1 replaces
-  those fallback messages only when a live control socket is actually reached.
-- `db import` and `db compact` are explicit command boundaries. Phase 5 defines
-  restore semantics, enables JSON import into schema-only databases, and keeps
-  compaction explicitly unsupported until DecentDB exposes a safe compaction API.
+- Node live-control commands use the local Unix control socket when the running
+  server is reachable. If it is unreachable, read-only commands fall back to
+  persisted data and write-style commands record explicit offline audit intent.
+- `db import` and `db compact` are explicit command boundaries. JSON import
+  restores schema-4 payloads into schema-only databases, and compaction remains
+  explicitly unsupported until DecentDB exposes a safe compaction API.
 
 Do not re-implement this phase unless a regression is found.
 

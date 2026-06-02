@@ -9,8 +9,16 @@ const DEFAULT_TAGLINE: &str = "Built for sysops. Driven by code.";
 const DEFAULT_SYSOP_NAME: &str = "Sysop";
 const DEFAULT_SYSOP_ALIAS: &str = "sysop";
 const DEFAULT_TIMEZONE: &str = "America/Chicago";
-const DEFAULT_TELNET_BIND: &str = "0.0.0.0:2323";
+const DEFAULT_TELNET_BIND: &str = "127.0.0.1:2323";
 const DEFAULT_NODE_COUNT: u16 = 4;
+const DEFAULT_FAILED_LOGIN_THRESHOLD: i64 = 5;
+const DEFAULT_FAILED_LOGIN_WINDOW_MINUTES: i64 = 10;
+const DEFAULT_FAILED_LOGIN_LOCKOUT_MINUTES: i64 = 15;
+const DEFAULT_NEW_USER_SECURITY_LEVEL: i32 = 10;
+const DEFAULT_ARGON2_MEMORY_COST_KIB: u32 = 19_456;
+const DEFAULT_ARGON2_ITERATIONS: u32 = 2;
+const DEFAULT_ARGON2_PARALLELISM: u32 = 1;
+const DEFAULT_AUDIT_RETENTION_DAYS: i64 = 365;
 const DEFAULT_DATABASE_PATH: &str = "./data/oxidebbs.ddb";
 const DEFAULT_ANSI_PATH: &str = "./assets/ansi";
 const DEFAULT_SCREENS_PATH: &str = "./assets/screens";
@@ -18,6 +26,7 @@ const DEFAULT_DOORS_PATH: &str = "./doors";
 const DEFAULT_RUNTIME_PATH: &str = "./runtime";
 const DEFAULT_LOGS_PATH: &str = "./logs";
 const DEFAULT_DOSEMU: &str = "dosemu";
+const DEFAULT_ALLOWED_RUNNERS: &[&str] = &["dosemu", "dosemu2"];
 
 #[derive(Debug, Clone)]
 pub struct SetupAnswers {
@@ -58,6 +67,8 @@ impl Default for SetupAnswers {
 struct GeneratedConfig {
     board: GeneratedBoardConfig,
     telnet: GeneratedTelnetConfig,
+    auth: GeneratedAuthConfig,
+    audit: GeneratedAuditConfig,
     database: GeneratedDatabaseConfig,
     paths: GeneratedPathsConfig,
     nodes: GeneratedNodesConfig,
@@ -80,6 +91,27 @@ struct GeneratedBoardConfig {
 #[derive(Serialize)]
 struct GeneratedTelnetConfig {
     bind: String,
+}
+
+#[derive(Serialize)]
+struct GeneratedAuthConfig {
+    failed_login_threshold: i64,
+    failed_login_window_minutes: i64,
+    failed_login_lockout_minutes: i64,
+    new_user_security_level: i32,
+    argon2: GeneratedArgon2Config,
+}
+
+#[derive(Serialize)]
+struct GeneratedArgon2Config {
+    memory_cost_kib: u32,
+    iterations: u32,
+    parallelism: u32,
+}
+
+#[derive(Serialize)]
+struct GeneratedAuditConfig {
+    retention_days: i64,
 }
 
 #[derive(Serialize)]
@@ -145,6 +177,7 @@ struct GeneratedMenuItemConfig {
 struct GeneratedDoorsConfig {
     enabled: bool,
     default_runner: String,
+    allowed_runners: Vec<String>,
     definitions: Vec<GeneratedDoorDefinitionConfig>,
 }
 
@@ -269,6 +302,10 @@ pub fn build_setup_toml(answers: &SetupAnswers) -> io::Result<String> {
         GeneratedDoorsConfig {
             enabled: true,
             default_runner: DEFAULT_DOSEMU.to_string(),
+            allowed_runners: DEFAULT_ALLOWED_RUNNERS
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect(),
             definitions: vec![GeneratedDoorDefinitionConfig {
                 key: "oxide-check".to_string(),
                 name: "Oxide Door Check".to_string(),
@@ -285,6 +322,10 @@ pub fn build_setup_toml(answers: &SetupAnswers) -> io::Result<String> {
         GeneratedDoorsConfig {
             enabled: false,
             default_runner: DEFAULT_DOSEMU.to_string(),
+            allowed_runners: DEFAULT_ALLOWED_RUNNERS
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect(),
             definitions: Vec::new(),
         }
     };
@@ -298,6 +339,20 @@ pub fn build_setup_toml(answers: &SetupAnswers) -> io::Result<String> {
         },
         telnet: GeneratedTelnetConfig {
             bind: answers.telnet_bind.clone(),
+        },
+        auth: GeneratedAuthConfig {
+            failed_login_threshold: DEFAULT_FAILED_LOGIN_THRESHOLD,
+            failed_login_window_minutes: DEFAULT_FAILED_LOGIN_WINDOW_MINUTES,
+            failed_login_lockout_minutes: DEFAULT_FAILED_LOGIN_LOCKOUT_MINUTES,
+            new_user_security_level: DEFAULT_NEW_USER_SECURITY_LEVEL,
+            argon2: GeneratedArgon2Config {
+                memory_cost_kib: DEFAULT_ARGON2_MEMORY_COST_KIB,
+                iterations: DEFAULT_ARGON2_ITERATIONS,
+                parallelism: DEFAULT_ARGON2_PARALLELISM,
+            },
+        },
+        audit: GeneratedAuditConfig {
+            retention_days: DEFAULT_AUDIT_RETENTION_DAYS,
         },
         database: GeneratedDatabaseConfig {
             path: answers.database_path.to_string_lossy().into_owned(),
@@ -511,11 +566,24 @@ mod tests {
         let parsed: OxideConfig = toml::from_str(&generated).expect("parse generated config");
         parsed.validate().expect("validate generated config");
         assert_eq!(parsed.board.name, "OxideBBS");
+        assert_eq!(parsed.telnet.bind, "127.0.0.1:2323");
+        assert_eq!(parsed.auth.failed_login_threshold, 5);
+        assert_eq!(parsed.auth.failed_login_window_minutes, 10);
+        assert_eq!(parsed.auth.failed_login_lockout_minutes, 15);
+        assert_eq!(parsed.auth.new_user_security_level, 10);
+        assert_eq!(parsed.auth.argon2.memory_cost_kib, 19_456);
+        assert_eq!(parsed.auth.argon2.iterations, 2);
+        assert_eq!(parsed.auth.argon2.parallelism, 1);
+        assert_eq!(parsed.audit.retention_days, 365);
         assert!(parsed.doors.enabled);
         assert_eq!(parsed.doors.definitions.len(), 1);
         assert_eq!(parsed.doors.definitions[0].key, "oxide-check");
         assert_eq!(parsed.doors.definitions[0].command, "OXIDECHK.EXE");
         assert!(!parsed.doors.definitions[0].enabled);
+        assert_eq!(
+            parsed.doors.allowed_runners,
+            vec!["dosemu".to_string(), "dosemu2".to_string()]
+        );
     }
 
     #[test]

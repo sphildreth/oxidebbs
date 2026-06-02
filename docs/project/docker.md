@@ -77,6 +77,12 @@ or connect with SyncTERM to:
 localhost:2323
 ```
 
+OxideBBS generated config binds telnet to `127.0.0.1:2323` by default outside
+Docker. The Docker entrypoint explicitly sets
+`OXIDEBBS_TELNET_BIND=0.0.0.0:2323` so Compose host-port publishing works. That
+is a plaintext deployment choice: telnet sends credentials and caller traffic
+without encryption.
+
 To change the host port:
 
 ```bash
