@@ -32,6 +32,10 @@ Open and startup flow:
   explicit operator intervention.
 - schema migrations do table rebuilds for DecentDB compatibility and record the
   new marker only after successful validation of rebuilt tables.
+- `serve` performs a startup health check after opening DecentDB and before
+  binding telnet: it reads the schema marker and the core user, auth, message,
+  session, door, door-run, and audit tables, then requires the startup audit
+  events to be writable. Failure in those checks blocks startup.
 
 ## Restore and Compaction Semantics
 

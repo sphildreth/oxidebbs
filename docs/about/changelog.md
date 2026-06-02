@@ -31,12 +31,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - DecentDB schema initialization now uses DecentDB catalog metadata instead of
   non-DecentDB metadata SQL, preventing valid DecentDB files from failing
   OxideBBS startup or CLI commands during schema detection.
+- `serve` and `serve --dry-run` now fail before listening when required DecentDB
+  startup reads fail, and live startup now requires `config_loaded` and
+  `server_start` audit events to be writable instead of silently continuing.
 - `db stats` and offline `status`/`nodes` fallbacks no longer report stale
   unclosed session rows as active live sessions when the server is not running.
   `db stats` now keeps those rows visible as `open_sessions` diagnostics.
 - Screen and terminal assets now normalize bare line feeds to CRLF before
   sending bytes to telnet callers, preventing plain clients from rendering each
   line farther to the right.
+- Stock telnet client CR-NUL line endings are now treated as line endings
+  instead of leaking NUL bytes into aliases, passwords, or subsequent prompts.
 
 ## [1.0.0] - 2026-06-02
 

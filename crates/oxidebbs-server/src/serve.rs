@@ -27,9 +27,10 @@ use oxidebbs_db::{
     AuditEventRecord, MessageAreaRecord, MessageRecord, OxideDb, SessionRecord, UserInsertError,
     UserRecord, clear_auth_attempt, end_session, find_user_by_alias_ci, insert_audit_event,
     insert_message, insert_message_area, insert_session, insert_user_if_alias_available,
-    is_auth_scope_locked, list_message_areas, list_user_aliases_by_ids,
-    list_visible_messages_in_area, normalize_alias, record_auth_failure, update_session_user,
-    update_user_login,
+    is_auth_scope_locked, list_audit_events, list_auth_attempts, list_door_definitions,
+    list_door_runs, list_message_areas, list_messages, list_recent_sessions,
+    list_user_aliases_by_ids, list_users, list_visible_messages_in_area, normalize_alias,
+    record_auth_failure, update_session_user, update_user_login,
 };
 use oxidebbs_telnet::telnet::{
     DO, IAC, SB, SE, TELOPT_ECHO, TELOPT_SUPPRESS_GO_AHEAD, TELOPT_TTYPE_SEND, WILL,
@@ -86,6 +87,15 @@ pub async fn run(config: &OxideConfig, config_path: &Path) -> ServeResult<()> {
     run_until_shutdown(config, config_path, wait_for_shutdown_signal()).await
 }
 
+pub(crate) fn validate_startup_database(config: &OxideConfig) -> ServeResult<()> {
+    if !config.telnet.enabled {
+        return Ok(());
+    }
+
+    let db = OxideDb::open_or_create(&config.database.path).map_err(ServeError::Database)?;
+    validate_startup_database_health(&db)
+}
+
 async fn run_until_shutdown<S>(
     config: &OxideConfig,
     config_path: &Path,
@@ -101,7 +111,8 @@ where
 
     let db =
         Arc::new(OxideDb::open_or_create(&config.database.path).map_err(ServeError::Database)?);
-    emit_audit_event(
+    validate_startup_database_health(db.as_ref())?;
+    insert_required_startup_audit_event(
         db.as_ref(),
         "config_loaded",
         None,
@@ -111,7 +122,7 @@ where
             config_path.display(),
             config.board.name
         ),
-    );
+    )?;
 
     let runtime = Arc::new(ServerRuntime::new(
         config.board.name.clone(),
@@ -174,7 +185,7 @@ where
     ) = (None, None);
 
     let listener = TcpListener::bind(&config.telnet.bind).await?;
-    emit_audit_event_with_runtime(
+    insert_required_startup_audit_event(
         db.as_ref(),
         "server_start",
         None,
@@ -183,8 +194,7 @@ where
             "serving {} on {} with {} node(s)",
             config.board.name, config.telnet.bind, config.nodes.count
         ),
-        Some(runtime.as_ref()),
-    );
+    )?;
 
     info!(bind = %config.telnet.bind, "listening for telnet callers");
 
@@ -2025,7 +2035,7 @@ async fn read_line_input<T: Transport>(
             CallerInput::IdleTimeout => return Ok(PromptLineResult::IdleTimeout),
             CallerInput::Event(event) => match event {
                 TelnetEvent::Data(raw) => match raw {
-                    b'\n' if line.is_empty() => {}
+                    b'\0' | b'\n' if line.is_empty() => {}
                     b'\r' if line.is_empty() && !allow_empty => {}
                     b'\r' | b'\n' => {
                         write_text_buffered(transport, "\r\n", &mut output).await?;
@@ -2566,7 +2576,7 @@ async fn drain_line_ending_after_menu_key<T: Transport>(
         };
 
         match parse_next_event(input, &mut reply, byte) {
-            Some(TelnetEvent::Data(b'\r' | b'\n')) => {}
+            Some(TelnetEvent::Data(b'\0' | b'\r' | b'\n')) => {}
             Some(event) => {
                 input.pending_inputs.push_front(CallerInput::Event(event));
                 break;
@@ -2696,6 +2706,30 @@ fn current_timestamp(db: &OxideDb) -> ServeResult<String> {
     db_scalar_text(db, "SELECT CAST(NOW() AS TEXT)")
 }
 
+fn validate_startup_database_health(db: &OxideDb) -> ServeResult<()> {
+    db.schema_version()
+        .map_err(|error| startup_database_check_error("system_config schema_version", error))?;
+    list_users(db.db()).map_err(|error| startup_database_check_error("users", error))?;
+    list_auth_attempts(db.db())
+        .map_err(|error| startup_database_check_error("auth_attempts", error))?;
+    list_message_areas(db.db())
+        .map_err(|error| startup_database_check_error("message_areas", error))?;
+    list_messages(db.db()).map_err(|error| startup_database_check_error("messages", error))?;
+    list_recent_sessions(db.db(), 1)
+        .map_err(|error| startup_database_check_error("sessions", error))?;
+    list_door_definitions(db.db()).map_err(|error| startup_database_check_error("doors", error))?;
+    list_door_runs(db.db(), 1).map_err(|error| startup_database_check_error("door_runs", error))?;
+    list_audit_events(db.db(), 1)
+        .map_err(|error| startup_database_check_error("audit_events", error))?;
+    Ok(())
+}
+
+fn startup_database_check_error(table: &str, error: oxidebbs_db::DbError) -> ServeError {
+    ServeError::Runtime(format!(
+        "startup database health check failed while reading {table}: {error}. Refusing to start; run `oxidebbs-server db doctor` and repair or restore the DecentDB data files before serving callers"
+    ))
+}
+
 fn db_scalar_text(db: &OxideDb, sql: &str) -> ServeResult<String> {
     let result = db.db().execute(sql).map_err(ServeError::Database)?;
     let value = result
@@ -2712,14 +2746,30 @@ fn db_scalar_text(db: &OxideDb, sql: &str) -> ServeResult<String> {
     }
 }
 
-fn emit_audit_event(
+fn insert_required_startup_audit_event(
     db: &OxideDb,
     event_type: &str,
     user_id: Option<String>,
     node_number: Option<i64>,
     details: String,
-) {
-    emit_audit_event_with_runtime(db, event_type, user_id, node_number, details, None);
+) -> ServeResult<()> {
+    insert_audit_event(
+        db.db(),
+        &AuditEventRecord {
+            id: String::new(),
+            created_at: String::new(),
+            event_type: event_type.to_string(),
+            user_id,
+            node_number,
+            details,
+        },
+    )
+    .map_err(|error| {
+        ServeError::Runtime(format!(
+            "required startup audit event {event_type:?} could not be written: {error}. Refusing to start because audit storage is not writable"
+        ))
+    })?;
+    Ok(())
 }
 
 fn emit_audit_event_with_runtime(
@@ -3174,6 +3224,41 @@ mod tests {
         );
 
         assert_eq!(runtime.audit_write_failures(), 1);
+    }
+
+    #[test]
+    fn startup_database_health_check_fails_when_audit_events_are_unreadable() {
+        let db = OxideDb::open_memory().expect("open db");
+        db.db()
+            .execute_batch("DROP TABLE audit_events")
+            .expect("drop audit_events");
+
+        let error =
+            validate_startup_database_health(&db).expect_err("missing audit_events should fail");
+        let message = error.to_string();
+
+        assert!(message.contains("startup database health check failed"));
+        assert!(message.contains("audit_events"));
+        assert!(message.contains("Refusing to start"));
+    }
+
+    #[test]
+    fn required_startup_audit_event_fails_loudly_when_write_fails() {
+        let db = OxideDb::open_memory().expect("open db");
+
+        let error = insert_required_startup_audit_event(
+            &db,
+            "server_start",
+            Some("not-a-uuid".to_string()),
+            Some(1),
+            "forced failure".to_string(),
+        )
+        .expect_err("invalid startup audit user id should fail");
+        let message = error.to_string();
+
+        assert!(message.contains("required startup audit event"));
+        assert!(message.contains("server_start"));
+        assert!(message.contains("Refusing to start"));
     }
 
     #[test]
@@ -3672,11 +3757,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn menu_line_ending_drain_discards_telnet_cr_nul() {
+        let (mut transport, client) = LoopbackTransport::new();
+        let mut input = InputSession::default();
+
+        client.write_bytes(b"\r\0X").expect("write line ending");
+
+        let drained = timeout(
+            TestDuration::from_millis(4),
+            drain_line_ending_after_menu_key(&mut transport, &mut input),
+        )
+        .await
+        .expect("menu key drain should not wait");
+        drained.expect("drain should succeed");
+
+        let event = next_event(&mut transport, &mut input, TestDuration::from_millis(1))
+            .await
+            .expect("read preserved key");
+
+        match event {
+            CallerInput::Event(TelnetEvent::Data(b'X')) => {}
+            other => panic!("expected preserved X event, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn read_line_input_ignores_leading_lf_from_crlf() {
         let (mut transport, client) = LoopbackTransport::new();
         let mut input = InputSession::default();
 
         client.write_bytes(b"\nHello\r").expect("write value");
+
+        let value = read_line_input(
+            &mut transport,
+            &mut input,
+            Duration::from_secs(1),
+            true,
+            false,
+        )
+        .await
+        .expect("read");
+
+        match value {
+            PromptLineResult::Value(value) => assert_eq!(value, "Hello"),
+            other => panic!("expected value, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn read_line_input_ignores_leading_nul_from_telnet_cr_nul() {
+        let (mut transport, client) = LoopbackTransport::new();
+        let mut input = InputSession::default();
+
+        client.write_bytes(b"\0Hello\r").expect("write value");
 
         let value = read_line_input(
             &mut transport,

@@ -95,6 +95,13 @@ cargo run -p oxidebbs-server -- --config config/oxidebbs.toml serve
 - door execution bridge
 - local control socket listener at `runtime/oxidebbs-control.sock` (Unix only)
 
+Before binding telnet, `serve` opens DecentDB, verifies the schema marker, reads
+the core user, auth, message, session, door, door-run, and audit tables, and
+writes required `config_loaded` and `server_start` audit events. Startup exits
+with a blocking error if any of those reads or required audit writes fail.
+`serve --dry-run` runs the same database startup health check after config
+validation succeeds.
+
 When `runtime/oxidebbs-control.sock` already exists and is actively bound by a
 running process, startup exits with a clear error instead of entering offline
 mode.

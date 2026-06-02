@@ -26,6 +26,9 @@ pub async fn run_serve(args: ServeArgs, ctx: &AppContext) -> CliResult<()> {
     if args.dry_run {
         let issues = validate_runtime(&config, &ctx.config_path);
         let errors = issues.iter().filter(|issue| issue.level == "error").count();
+        if errors == 0 {
+            serve::validate_startup_database(&config)?;
+        }
         if ctx.json {
             print_json(&json!({
                 "command": "serve --dry-run",

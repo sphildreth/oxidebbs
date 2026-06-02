@@ -97,9 +97,11 @@ Implementations:
 - `LoopbackTransport` for tests
 
 The `serve` runtime binds the configured telnet address, opens DecentDB before
-accepting callers, assigns node slots up to the configured node and connection
-limits, records session/audit lifecycle rows, and closes sessions on caller
-disconnect, logoff, or idle timeout.
+accepting callers, verifies the schema marker and core DecentDB tables, assigns
+node slots up to the configured node and connection limits, records
+session/audit lifecycle rows, and closes sessions on caller disconnect, logoff,
+or idle timeout. Startup must fail before listening if required database reads or
+required startup audit writes fail.
 
 The telnet transport reads from the socket into an internal 4096-byte buffer and
 serves caller input one byte at a time to the parser. Telnet negotiation replies
