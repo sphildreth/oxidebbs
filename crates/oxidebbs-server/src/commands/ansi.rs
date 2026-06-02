@@ -6,6 +6,7 @@ use serde_json::Value as JsonValue;
 use serde_json::json;
 
 use crate::config::TerminalCapabilities;
+use crate::setup::install_default_assets;
 use crate::sysop_cli::{AppContext, CliError, CliResult, emit_ok, print_json};
 use oxidebbs_term::{decode_cp437, encode_cp437, render_plain_text};
 
@@ -119,12 +120,17 @@ pub fn run_ansi(command: AnsiCommand, ctx: &AppContext) -> CliResult<()> {
             }
         }
         AnsiCommand::InstallDefaults => {
-            fs::create_dir_all(&ctx.config.paths.ansi)?;
-            fs::create_dir_all(&ctx.config.paths.screens)?;
+            let summary =
+                install_default_assets(&ctx.config.paths.ansi, &ctx.config.paths.screens)?;
             emit_ok(
                 ctx.json,
-                "default ANSI/screen directories are present",
-                json!({"ansi": ctx.config.paths.ansi, "screens": ctx.config.paths.screens}),
+                "default ANSI/screen assets are present",
+                json!({
+                    "ansi": ctx.config.paths.ansi,
+                    "screens": ctx.config.paths.screens,
+                    "installed": summary.installed,
+                    "skipped": summary.skipped
+                }),
             )?;
         }
         AnsiCommand::Preview { screen_name } => {

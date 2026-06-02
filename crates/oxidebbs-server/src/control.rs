@@ -1075,17 +1075,21 @@ fn timestamp_string() -> String {
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::SystemTime;
 
     const TEST_NODE_COUNT: u16 = 4;
+    static TEST_RUNTIME_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     fn temporary_runtime_path() -> PathBuf {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_nanos())
             .unwrap_or(0);
+        let counter = TEST_RUNTIME_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let pid = std::process::id();
         let mut path = std::env::temp_dir();
-        path.push(format!("oxidebbs-control-test-{nanos}"));
+        path.push(format!("oxidebbs-control-test-{pid}-{nanos}-{counter}"));
         let _ = fs::remove_dir_all(&path);
         path
     }

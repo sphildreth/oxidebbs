@@ -120,7 +120,8 @@ Required behavior:
 - Load door definitions
 - Start telnet listener
 - Start session/node manager
-- Start DbWriter service
+- Open DecentDB repository services for the v1 direct-write model; a dedicated
+  DbWriter remains deferred unless write contention emerges
 - Log startup details
 
 Useful options:
@@ -428,6 +429,8 @@ oxidebbs ansi inspect <screen-name>
 ### Notes
 
 `ansi show` should write the raw ANSI to the local terminal only if the user asks. A safe preview mode should also exist because not every shell will render CP437/ANSI correctly.
+`ansi install-defaults` installs the bundled terminal and screen assets into the
+configured ANSI/screen paths without overwriting customized files.
 
 ## Database commands
 

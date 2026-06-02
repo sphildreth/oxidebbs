@@ -169,7 +169,6 @@ pub(crate) fn validate_runtime(
         ("ansi", &config.paths.ansi),
         ("screens", &config.paths.screens),
         ("doors", &config.paths.doors),
-        ("runtime", &config.paths.runtime),
         ("logs", &config.paths.logs),
     ] {
         if !path.exists() {
@@ -179,6 +178,7 @@ pub(crate) fn validate_runtime(
             )));
         }
     }
+    validate_runtime_directory(&config.paths.runtime, &mut issues);
     for screen_name in config.screens.keys() {
         issues.extend(validate_screen_assets(config, screen_name));
     }
@@ -316,13 +316,46 @@ fn check_configured_door(
     if !(1..=240).contains(&door.time_limit_minutes) {
         issues.push(CheckIssue::error("time limit must be in 1..=240 minutes"));
     }
-    if let Err(error) = std::fs::create_dir_all(&config.paths.runtime) {
+    issues
+}
+
+fn validate_runtime_directory(path: &Path, issues: &mut Vec<CheckIssue>) {
+    if let Err(error) = std::fs::create_dir_all(path) {
         issues.push(CheckIssue::error(format!(
             "runtime directory {} is not writable: {error}",
-            config.paths.runtime.display()
+            path.display()
         )));
+        return;
     }
-    issues
+
+    let metadata = match path.metadata() {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            issues.push(CheckIssue::error(format!(
+                "runtime directory {} metadata is not readable: {error}",
+                path.display()
+            )));
+            return;
+        }
+    };
+    if !metadata.is_dir() {
+        issues.push(CheckIssue::error(format!(
+            "runtime path {} is not a directory",
+            path.display()
+        )));
+        return;
+    }
+
+    #[cfg(unix)]
+    {
+        let mode = metadata.mode() & 0o777;
+        if mode != 0o700 {
+            issues.push(CheckIssue::warning(format!(
+                "runtime directory {} has mode {mode:o}; expected 700 for local control socket isolation",
+                path.display()
+            )));
+        }
+    }
 }
 
 fn command_exists(command: &str) -> bool {
@@ -601,6 +634,27 @@ mod tests {
                 .iter()
                 .any(|issue| issue.message == TELNET_PLAINTEXT_EXPOSURE_WARNING)
         );
+        let _ = std::fs::remove_dir_all(runtime);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn check_warns_for_runtime_directory_mode_that_weakens_control_socket_isolation() {
+        let (mut config, config_path) = load_example_config_for_repo();
+        let runtime = temp_path("runtime-permissions");
+        fs::create_dir_all(&runtime).expect("runtime dir");
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o755))
+            .expect("runtime permissions");
+        config.paths.runtime = runtime.clone();
+
+        let issues = validate_runtime(&config, &config_path);
+
+        assert!(issues.iter().any(|issue| {
+            issue.level == "warning"
+                && issue.message.contains("runtime directory")
+                && issue.message.contains("expected 700")
+        }));
         let _ = std::fs::remove_dir_all(runtime);
     }
 

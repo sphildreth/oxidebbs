@@ -68,6 +68,7 @@ The check validates:
 - door working directory + command + runner availability
 - drop-file format (`DOOR.SYS` or `DORINFO1.DEF`)
 - runtime directory writability
+- Unix runtime directory mode (`0700` expected for local control socket isolation)
 
 Missing optional directories and assets are surfaced as warnings; parse failures and
 invalid bind/state values are errors.

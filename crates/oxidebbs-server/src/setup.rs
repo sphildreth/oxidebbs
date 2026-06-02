@@ -28,6 +28,123 @@ const DEFAULT_LOGS_PATH: &str = "./logs";
 const DEFAULT_DOSEMU: &str = "dosemu";
 const DEFAULT_ALLOWED_RUNNERS: &[&str] = &["dosemu", "dosemu2"];
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum DefaultAssetRoot {
+    Ansi,
+    Screens,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DefaultAsset {
+    root: DefaultAssetRoot,
+    path: &'static str,
+    bytes: &'static [u8],
+}
+
+const DEFAULT_ASSETS: &[DefaultAsset] = &[
+    DefaultAsset {
+        root: DefaultAssetRoot::Ansi,
+        path: "logoff.ans",
+        bytes: include_bytes!("../../../assets/ansi/logoff.ans"),
+    },
+    DefaultAsset {
+        root: DefaultAssetRoot::Ansi,
+        path: "logoff.asc",
+        bytes: include_bytes!("../../../assets/ansi/logoff.asc"),
+    },
+    DefaultAsset {
+        root: DefaultAssetRoot::Ansi,
+        path: "welcome-preview.txt",
+        bytes: include_bytes!("../../../assets/ansi/welcome-preview.txt"),
+    },
+    DefaultAsset {
+        root: DefaultAssetRoot::Ansi,
+        path: "welcome.ans",
+        bytes: include_bytes!("../../../assets/ansi/welcome.ans"),
+    },
+    DefaultAsset {
+        root: DefaultAssetRoot::Ansi,
+        path: "welcome.asc",
+        bytes: include_bytes!("../../../assets/ansi/welcome.asc"),
+    },
+    DefaultAsset {
+        root: DefaultAssetRoot::Screens,
+        path: "info/screen1.ans",
+        bytes: include_bytes!("../../../assets/screens/info/screen1.ans"),
+    },
+    DefaultAsset {
+        root: DefaultAssetRoot::Screens,
+        path: "info/screen1.asc",
+        bytes: include_bytes!("../../../assets/screens/info/screen1.asc"),
+    },
+    DefaultAsset {
+        root: DefaultAssetRoot::Screens,
+        path: "info/screen1.txt",
+        bytes: include_bytes!("../../../assets/screens/info/screen1.txt"),
+    },
+    DefaultAsset {
+        root: DefaultAssetRoot::Screens,
+        path: "info/screen2.ans",
+        bytes: include_bytes!("../../../assets/screens/info/screen2.ans"),
+    },
+    DefaultAsset {
+        root: DefaultAssetRoot::Screens,
+        path: "info/screen2.asc",
+        bytes: include_bytes!("../../../assets/screens/info/screen2.asc"),
+    },
+    DefaultAsset {
+        root: DefaultAssetRoot::Screens,
+        path: "info/screen2.txt",
+        bytes: include_bytes!("../../../assets/screens/info/screen2.txt"),
+    },
+    DefaultAsset {
+        root: DefaultAssetRoot::Screens,
+        path: "login/login-40.ans",
+        bytes: include_bytes!("../../../assets/screens/login/login-40.ans"),
+    },
+    DefaultAsset {
+        root: DefaultAssetRoot::Screens,
+        path: "login/login.ans",
+        bytes: include_bytes!("../../../assets/screens/login/login.ans"),
+    },
+    DefaultAsset {
+        root: DefaultAssetRoot::Screens,
+        path: "login/login.asc",
+        bytes: include_bytes!("../../../assets/screens/login/login.asc"),
+    },
+    DefaultAsset {
+        root: DefaultAssetRoot::Screens,
+        path: "login/login.txt",
+        bytes: include_bytes!("../../../assets/screens/login/login.txt"),
+    },
+    DefaultAsset {
+        root: DefaultAssetRoot::Screens,
+        path: "menus/main/main-40.ans",
+        bytes: include_bytes!("../../../assets/screens/menus/main/main-40.ans"),
+    },
+    DefaultAsset {
+        root: DefaultAssetRoot::Screens,
+        path: "menus/main/main.ans",
+        bytes: include_bytes!("../../../assets/screens/menus/main/main.ans"),
+    },
+    DefaultAsset {
+        root: DefaultAssetRoot::Screens,
+        path: "menus/main/main.asc",
+        bytes: include_bytes!("../../../assets/screens/menus/main/main.asc"),
+    },
+    DefaultAsset {
+        root: DefaultAssetRoot::Screens,
+        path: "menus/main/main.txt",
+        bytes: include_bytes!("../../../assets/screens/menus/main/main.txt"),
+    },
+];
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct DefaultAssetInstallSummary {
+    pub installed: usize,
+    pub skipped: usize,
+}
+
 #[derive(Debug, Clone)]
 pub struct SetupAnswers {
     pub board_name: String,
@@ -438,12 +555,46 @@ pub fn run_setup_with_answers(
         std::fs::create_dir_all(dir)?;
     }
 
+    if answers.include_sample_ansi {
+        install_default_assets(
+            Path::new(DEFAULT_ANSI_PATH),
+            Path::new(DEFAULT_SCREENS_PATH),
+        )?;
+    }
+
     if let Some(parent) = output_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
 
     std::fs::write(output_path, output)?;
     Ok(())
+}
+
+pub fn install_default_assets(
+    ansi_root: &Path,
+    screens_root: &Path,
+) -> io::Result<DefaultAssetInstallSummary> {
+    let mut installed = 0;
+    let mut skipped = 0;
+
+    for asset in DEFAULT_ASSETS {
+        let root = match asset.root {
+            DefaultAssetRoot::Ansi => ansi_root,
+            DefaultAssetRoot::Screens => screens_root,
+        };
+        let destination = root.join(asset.path);
+        if destination.exists() {
+            skipped += 1;
+            continue;
+        }
+        if let Some(parent) = destination.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(destination, asset.bytes)?;
+        installed += 1;
+    }
+
+    Ok(DefaultAssetInstallSummary { installed, skipped })
 }
 
 fn interactive_answers<R: BufRead, W: Write>(
@@ -558,6 +709,19 @@ fn prompt_yes_no<R: BufRead, W: Write>(
 mod tests {
     use super::*;
     use crate::config::OxideConfig;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_path(tag: &str) -> PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "oxidebbs-setup-{tag}-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time should be valid")
+                .as_nanos()
+        ));
+        path
+    }
 
     #[test]
     fn generated_setup_config_with_defaults_is_valid() {
@@ -622,5 +786,33 @@ mod tests {
         let dirs = setup_required_directories(Path::new("config/oxidebbs.toml"), &answers);
         assert!(dirs.contains(&PathBuf::from("/tmp/oxidebbs")));
         assert!(dirs.contains(&PathBuf::from("./assets/ansi")));
+    }
+
+    #[test]
+    fn default_asset_installer_writes_bundled_assets_without_overwriting_custom_files() {
+        let base_dir = temp_path("default-assets");
+        let ansi_root = base_dir.join("ansi");
+        let screens_root = base_dir.join("screens");
+        std::fs::create_dir_all(&ansi_root).expect("ansi root");
+        std::fs::write(ansi_root.join("welcome.asc"), b"custom welcome").expect("custom welcome");
+
+        let summary = install_default_assets(&ansi_root, &screens_root).expect("install assets");
+
+        assert_eq!(summary.installed, DEFAULT_ASSETS.len() - 1);
+        assert_eq!(summary.skipped, 1);
+        assert_eq!(
+            std::fs::read(ansi_root.join("welcome.asc")).expect("read custom"),
+            b"custom welcome"
+        );
+        assert!(ansi_root.join("welcome.ans").is_file());
+        assert!(ansi_root.join("logoff.asc").is_file());
+        assert!(screens_root.join("login/login.ans").is_file());
+        assert!(screens_root.join("menus/main/main.asc").is_file());
+
+        let summary = install_default_assets(&ansi_root, &screens_root).expect("reinstall assets");
+        assert_eq!(summary.installed, 0);
+        assert_eq!(summary.skipped, DEFAULT_ASSETS.len());
+
+        let _ = std::fs::remove_dir_all(base_dir);
     }
 }

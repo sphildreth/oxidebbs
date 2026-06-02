@@ -156,6 +156,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ad hoc TOML editing.
 - Hardened the optional DOSEMU2 smoke script so child-originated hangup signals
   do not terminate sequential multi-node checks inside Docker.
+- `setup` and `ansi install-defaults` now install bundled ANSI/screen assets
+  without overwriting customized files, and `check` warns when Unix runtime
+  directory permissions weaken local control-socket isolation.
 
 ### Fixed
 
