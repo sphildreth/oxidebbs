@@ -8,11 +8,11 @@ use serde_json::json;
 use oxidebbs_core::door::DoorDefinition;
 use oxidebbs_db::{
     DoorDefinitionRecord, find_door_by_key, find_door_run_by_id, insert_door_definition,
-    list_door_definitions, list_door_runs, update_door_enabled,
+    list_door_definitions, list_door_runs, update_door_definition, update_door_enabled,
 };
 use oxidebbs_door::{
     DoorCaller, DoorRunRequest, DoorRunner, DryRunDoorRunner, node_runtime_dir, render_door_sys,
-    render_dorinfo1_def,
+    render_dorinfo1_def, runner_supports_dosemu2_cli,
 };
 
 use crate::config::DoorDefConfig;
@@ -402,7 +402,7 @@ fn set_door_enabled(
     match find_door_by_key(db.db(), door_key)? {
         Some(existing) => update_door_enabled(db.db(), &existing.id, enabled)?,
         None => {
-            let mut record = door_record_from_config(db, door)?;
+            let mut record = door_record_from_config(db, door, true)?;
             record.enabled = enabled;
             insert_door_definition(db.db(), &record)?;
         }
@@ -415,8 +415,18 @@ pub(crate) fn sync_configured_doors(
     config: &crate::config::OxideConfig,
 ) -> CliResult<()> {
     for door in &config.doors.definitions {
-        if find_door_by_key(db.db(), &door.key)?.is_none() {
-            insert_door_definition(db.db(), &door_record_from_config(db, door)?)?;
+        match find_door_by_key(db.db(), &door.key)? {
+            Some(existing) => {
+                let record =
+                    door_record_from_config_with_id(door, config.doors.enabled, existing.id);
+                update_door_definition(db.db(), &record)?;
+            }
+            None => {
+                insert_door_definition(
+                    db.db(),
+                    &door_record_from_config(db, door, config.doors.enabled)?,
+                )?;
+            }
         }
     }
     Ok(())
@@ -433,9 +443,11 @@ pub(crate) fn effective_doors(
         .collect();
     for config_door in &config.doors.definitions {
         let key = config_door.key.to_ascii_lowercase();
-        by_key
-            .entry(key)
-            .or_insert(door_record_from_config(db, config_door)?);
+        by_key.entry(key).or_insert(door_record_from_config(
+            db,
+            config_door,
+            config.doors.enabled,
+        )?);
     }
     let mut doors = by_key.into_values().collect::<Vec<_>>();
     doors.sort_by(|left, right| left.key.cmp(&right.key));
@@ -493,6 +505,12 @@ fn check_door(door: &DoorDefinitionRecord, config: &crate::config::OxideConfig) 
             door.runner
         )));
     }
+    if !runner_supports_dosemu2_cli(&door.runner) {
+        issues.push(CheckIssue::error(format!(
+            "door runner {:?} is not supported for live caller doors; use DOSEMU2 runner \"dosemu\"",
+            door.runner
+        )));
+    }
     if !matches!(
         door.drop_file.to_ascii_uppercase().as_str(),
         "DOOR.SYS" | "DORINFO1.DEF"
@@ -522,18 +540,22 @@ fn check_door(door: &DoorDefinitionRecord, config: &crate::config::OxideConfig) 
 fn door_record_from_config(
     db: &oxidebbs_db::OxideDb,
     door: &DoorDefConfig,
+    board_doors_enabled: bool,
 ) -> CliResult<DoorDefinitionRecord> {
-    let mut record = door_record_from_config_only(door, true);
-    record.id = generated_uuid(db)?;
-    Ok(record)
+    Ok(door_record_from_config_with_id(
+        door,
+        board_doors_enabled,
+        generated_uuid(db)?,
+    ))
 }
 
-fn door_record_from_config_only(
+fn door_record_from_config_with_id(
     door: &DoorDefConfig,
     board_doors_enabled: bool,
+    id: String,
 ) -> DoorDefinitionRecord {
     DoorDefinitionRecord {
-        id: format!("door-{}", door.key),
+        id,
         key: door.key.clone(),
         name: door.name.clone(),
         runner: door.runner.clone(),
@@ -693,6 +715,15 @@ mod tests {
                 .any(|issue| issue.level == "error" && issue.message.contains("command is empty"))
         );
 
+        door.command = "LORD.EXE".to_string();
+        door.runner = "dosbox".to_string();
+        let check = check_door(&door, &config);
+        assert!(check.issues.iter().any(|issue| {
+            issue.level == "error"
+                && issue.message.contains("not supported")
+                && issue.message.contains("DOSEMU2")
+        }));
+
         let _ = fs::remove_dir_all(temp);
     }
 
@@ -705,5 +736,63 @@ mod tests {
         assert!(error.to_string().contains("require a caller session"));
         assert!(error.to_string().contains("--dry-run"));
         assert!(error.to_string().contains("COM1 serial"));
+    }
+
+    #[test]
+    fn sync_configured_doors_updates_existing_db_record_from_config() {
+        let db = oxidebbs_db::OxideDb::open_memory().expect("open db");
+        let door_id = "00000000-0000-4000-8000-000000000901".to_string();
+        insert_door_definition(
+            db.db(),
+            &DoorDefinitionRecord {
+                id: door_id.clone(),
+                key: "oxide-check".to_string(),
+                name: "Old Name".to_string(),
+                runner: "dosbox".to_string(),
+                working_dir: "./old".to_string(),
+                command: "OLD.EXE".to_string(),
+                drop_file: "DOOR.SYS".to_string(),
+                exclusive: true,
+                time_limit_minutes: 1,
+                enabled: false,
+            },
+        )
+        .expect("insert stale door");
+        let config: crate::config::OxideConfig = toml::from_str(
+            r#"
+[board]
+name = "Test"
+
+[doors]
+enabled = true
+
+[[doors.definitions]]
+key = "oxide-check"
+name = "Oxide Door Check"
+runner = "dosemu2"
+working_dir = "./tools/doors/oxide-door-check/dist"
+command = "OXIDECHK.EXE"
+drop_file = "DORINFO1.DEF"
+exclusive = false
+time_limit_minutes = 5
+enabled = true
+"#,
+        )
+        .expect("config");
+
+        sync_configured_doors(&db, &config).expect("sync doors");
+
+        let synced = find_door_by_key(db.db(), "oxide-check")
+            .expect("find door")
+            .expect("door exists");
+        assert_eq!(synced.id, door_id);
+        assert_eq!(synced.name, "Oxide Door Check");
+        assert_eq!(synced.runner, "dosemu2");
+        assert_eq!(synced.working_dir, "./tools/doors/oxide-door-check/dist");
+        assert_eq!(synced.command, "OXIDECHK.EXE");
+        assert_eq!(synced.drop_file, "DORINFO1.DEF");
+        assert!(!synced.exclusive);
+        assert_eq!(synced.time_limit_minutes, 5);
+        assert!(synced.enabled);
     }
 }

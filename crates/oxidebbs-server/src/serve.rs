@@ -1164,15 +1164,37 @@ async fn run_doors_flow(
 }
 
 fn door_summary_text(summary: &DoorExecutionSummary) -> String {
+    let run_id = summary
+        .run_id
+        .as_deref()
+        .map(|id| format!(" Run id: {id}."))
+        .unwrap_or_default();
+    let diagnostics = if summary.stdout_log.is_some() || summary.stderr_log.is_some() {
+        " Door diagnostics were captured."
+    } else {
+        ""
+    };
     if let Some(error) = summary.launch_error.as_ref() {
-        return format!("Unable to launch {}: {error}\r\n", summary.door_name);
+        return format!(
+            "Unable to launch {}: {error}.{run_id}{diagnostics}\r\n",
+            summary.door_name
+        );
     }
     if summary.timed_out {
-        return format!("{} timed out and was closed.\r\n", summary.door_name);
+        return format!(
+            "{} timed out and was closed.{run_id}{diagnostics}\r\n",
+            summary.door_name
+        );
+    }
+    if summary.early_exit_before_com1 {
+        return format!(
+            "{} finished before opening the serial bridge. Exit code: {:?}.{run_id}{diagnostics}\r\n",
+            summary.door_name, summary.exit_code
+        );
     }
 
     format!(
-        "{} finished. Exit code: {:?}.\r\n",
+        "{} finished. Exit code: {:?}.{run_id}{diagnostics}\r\n",
         summary.door_name, summary.exit_code
     )
 }

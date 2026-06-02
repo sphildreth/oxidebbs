@@ -150,6 +150,15 @@ pub fn node_runtime_dir(base: impl AsRef<Path>, node_number: u16) -> PathBuf {
     base.as_ref().join(format!("node-{node_number:03}"))
 }
 
+pub fn runner_supports_dosemu2_cli(runner: &str) -> bool {
+    let runner_name = Path::new(runner)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(runner)
+        .to_ascii_lowercase();
+    matches!(runner_name.as_str(), "dosemu" | "dosemu.bin" | "dosemu2")
+}
+
 pub fn prepare_node_runtime_dir(
     base: impl AsRef<Path>,
     node_number: u16,
@@ -494,6 +503,15 @@ command = "LORD.EXE"
         assert!(path.is_dir());
 
         cleanup_node_runtime_dir(&base).expect("cleanup");
+    }
+
+    #[test]
+    fn identifies_dosemu2_cli_compatible_runner_names() {
+        assert!(runner_supports_dosemu2_cli("dosemu"));
+        assert!(runner_supports_dosemu2_cli("/usr/bin/dosemu.bin"));
+        assert!(runner_supports_dosemu2_cli("dosemu2"));
+        assert!(!runner_supports_dosemu2_cli("dosbox"));
+        assert!(!runner_supports_dosemu2_cli("/usr/bin/dosbox-staging"));
     }
 
     #[test]

@@ -3,6 +3,7 @@ use std::path::Path;
 use serde_json::Value as JsonValue;
 
 use clap::Subcommand;
+use oxidebbs_door::runner_supports_dosemu2_cli;
 
 use crate::config::DoorDefConfig;
 use crate::sysop_cli::{AppContext, CliError, CliResult, emit_ok, print_json};
@@ -247,6 +248,12 @@ fn check_configured_door(
             door.runner
         )));
     }
+    if !runner_supports_dosemu2_cli(&door.runner) {
+        issues.push(CheckIssue::error(format!(
+            "door runner {:?} is not supported for live caller doors; use DOSEMU2 runner \"dosemu\"",
+            door.runner
+        )));
+    }
     if !matches!(
         door.drop_file.to_ascii_uppercase().as_str(),
         "DOOR.SYS" | "DORINFO1.DEF"
@@ -475,6 +482,15 @@ mod tests {
                 .iter()
                 .any(|issue| issue.level == "error" && issue.message.contains("command is empty"))
         );
+
+        let mut door = config.doors.definitions[0].clone();
+        door.runner = "dosbox".to_string();
+        let issues = check_configured_door(&door, &config);
+        assert!(issues.iter().any(|issue| {
+            issue.level == "error"
+                && issue.message.contains("not supported")
+                && issue.message.contains("DOSEMU2")
+        }));
 
         let _ = std::fs::remove_dir_all(runtime);
         let _ = std::fs::remove_dir_all(working_dir);

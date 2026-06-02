@@ -139,9 +139,22 @@ bridge and then lets the caller session follow normal disconnect cleanup.
 OxideBBS never bundles door binaries; sysops provide their own licensed door
 files under the configured door working directory.
 
+Each live launch records a door run id in the caller summary and audit events.
+The `door_started` audit detail includes the resolved runner command, runtime
+directory, generated drop file, DOSEMU2 config path, COM1 PTY path, and per-run
+runner stdout/stderr files under `logs/doors/`. If a door flashes and returns to
+the menu, check `audit door <door-key>`, `doors runs show <run-id>`, and the
+matching runner stderr/stdout files first.
+
 ## Common door launch failures
 
 - `dosemu` not found: fix `PATH` or `runner` path in door config.
+- `runner = "dosbox"` or another non-DOSEMU2 runner: live caller doors use the
+  DOSEMU2 COM1 PTY bridge and DOSEMU2 command-line flags. Set the door runner to
+  `dosemu`.
+- Runner exits before COM1 exists: inspect the run id from the caller summary,
+  then read the `door_finished` audit details and `logs/doors/*<run-id>*` files
+  for DOSEMU or DOS program startup errors.
 - PTY path never appears: verify `/dev/pts` is mounted and writable; restart
   node runtime path and check stale permissions.
 - PTY permission denied: ensure `runtime/` and per-node directory permissions are

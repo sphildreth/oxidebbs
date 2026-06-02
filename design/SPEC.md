@@ -217,8 +217,14 @@ The initial implementation includes `DOOR.SYS` and `DORINFO1.DEF` generation,
 per-node runtime directory helpers, dry-run execution, DOSEMU2 command planning,
 live caller launch from the configured `Doors` menu, byte bridging between the
 caller transport and child process, timeout/sysop-disconnect cleanup, DecentDB
-door-run records with byte counters, and `in_door` live node state. Additional
-drop-file formats remain compatible with this boundary.
+door-run records with byte counters, per-run DOSEMU stdout/stderr capture under
+the configured logs directory, early-exit-before-COM1 diagnostics, and `in_door`
+live node state. Additional drop-file formats remain compatible with this
+boundary.
+
+The live caller door bridge is DOSEMU2-specific. Door runner values must resolve
+to a DOSEMU2-compatible binary such as `dosemu`; DOSBox/DOSBox-Staging is not a
+supported runner for the v1 COM1 PTY bridge.
 
 ## 9. Configuration
 
@@ -388,6 +394,12 @@ Required events:
 - door_timed_out
 - db_write_failed
 - config_loaded
+
+Door launch audit details must include the run id, resolved runner program and
+arguments, runtime directory, generated drop file, DOSEMU2 COM1 PTY path, and
+per-run runner stdout/stderr log paths when available. A door runner that exits
+before the COM1 PTY appears must be distinguishable from a bridged door session
+that exits normally.
 
 ## 15. Error handling
 

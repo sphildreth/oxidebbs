@@ -20,7 +20,7 @@ pub use audit_repo::{
 pub use door_repo::{
     DoorDefinitionRecord, DoorRunFinish, DoorRunRecord, find_door_by_key, find_door_run_by_id,
     finish_door_run, insert_door_definition, insert_door_run, list_door_definitions,
-    list_door_runs, update_door_enabled,
+    list_door_runs, update_door_definition, update_door_enabled,
 };
 pub use message_repo::{
     MessageAreaRecord, MessageRecord, find_message_area_by_key, find_message_by_id, insert_message,

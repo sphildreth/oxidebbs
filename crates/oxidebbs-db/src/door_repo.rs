@@ -84,6 +84,27 @@ pub fn update_door_enabled(db: &Db, id: &str, enabled: bool) -> decentdb::Result
     Ok(())
 }
 
+pub fn update_door_definition(db: &Db, door: &DoorDefinitionRecord) -> decentdb::Result<()> {
+    db.execute_with_params(
+        "UPDATE doors
+         SET key = $1, name = $2, runner = $3, working_dir = $4, command = $5, drop_file = $6, exclusive = $7, time_limit_minutes = $8, enabled = $9
+         WHERE id = UUID_PARSE($10)",
+        &[
+            Value::Text(door.key.clone()),
+            Value::Text(door.name.clone()),
+            Value::Text(door.runner.clone()),
+            Value::Text(door.working_dir.clone()),
+            Value::Text(door.command.clone()),
+            Value::Text(door.drop_file.clone()),
+            Value::Bool(door.exclusive),
+            Value::Int64(door.time_limit_minutes),
+            Value::Bool(door.enabled),
+            Value::Text(door.id.clone()),
+        ],
+    )?;
+    Ok(())
+}
+
 pub fn insert_door_run(db: &Db, run: &DoorRunRecord) -> decentdb::Result<()> {
     db.execute_with_params(
         "INSERT INTO door_runs (id, door_id, user_id, node_number, started_at, ended_at, exit_code, timed_out, disconnect_forced, bytes_in, bytes_out)
@@ -348,6 +369,26 @@ mod tests {
 
         let found = find_door_by_key(&db, "lord").expect("find").unwrap();
         assert!(!found.enabled);
+    }
+
+    #[test]
+    fn updates_door_definition_from_config_sync() {
+        let db = test_db();
+        insert_door_definition(&db, &sample_door()).expect("insert door");
+        let mut updated = sample_door();
+        updated.name = "Updated Door".to_string();
+        updated.runner = "dosemu2".to_string();
+        updated.working_dir = "./doors/updated".to_string();
+        updated.command = "UPDATED.EXE /N1".to_string();
+        updated.drop_file = "DORINFO1.DEF".to_string();
+        updated.exclusive = true;
+        updated.time_limit_minutes = 45;
+        updated.enabled = false;
+
+        update_door_definition(&db, &updated).expect("update definition");
+
+        let found = find_door_by_key(&db, "lord").expect("find").unwrap();
+        assert_eq!(found, updated);
     }
 
     #[test]

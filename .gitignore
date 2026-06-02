@@ -27,3 +27,4 @@ docs/.vitepress/dist/
 
 data/*
 config/oxidebbs.toml
+logs/*

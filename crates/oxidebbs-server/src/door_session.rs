@@ -9,20 +9,20 @@ use oxidebbs_core::user::User;
 use oxidebbs_db::{
     AuditEventRecord, DoorDefinitionRecord, DoorRunFinish, DoorRunRecord, OxideDb,
     find_door_by_key, finish_door_run, insert_audit_event, insert_door_definition, insert_door_run,
-    list_door_definitions,
+    list_door_definitions, update_door_definition,
 };
 #[cfg(test)]
 use oxidebbs_door::DoorRunner;
 use oxidebbs_door::{
     DoorCaller, DoorRunPlan, DoorRunRequest, cleanup_node_runtime_dir, node_runtime_dir,
-    prepare_door_run, prepare_node_runtime_dir,
+    prepare_door_run, prepare_node_runtime_dir, runner_supports_dosemu2_cli,
 };
 use oxidebbs_telnet::Transport;
 use oxidebbs_term::encode_cp437;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::process::{Child, Command};
 use tokio::time::{self, Instant as TokioInstant};
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::config::{DoorDefConfig, OxideConfig};
 use crate::control::ServerRuntime;
@@ -32,6 +32,7 @@ const DOOR_BRIDGE_POLL: Duration = Duration::from_millis(250);
 const DOOR_KILL_WAIT: Duration = Duration::from_secs(2);
 const DOSEMU2_CONFIG_FILE: &str = "OXDOSEMU2.CONF";
 const DOSEMU2_COM1_PTY: &str = "OXCOM1.PTY";
+const DOOR_LOG_DIR: &str = "doors";
 
 pub(crate) struct DoorService<'a> {
     db: &'a OxideDb,
@@ -47,9 +48,12 @@ pub(crate) struct DoorExecutionSummary {
     pub disconnect_forced: bool,
     pub caller_disconnected: bool,
     pub disconnect_reason: Option<String>,
+    pub early_exit_before_com1: bool,
     pub bytes_in: i64,
     pub bytes_out: i64,
     pub launch_error: Option<String>,
+    pub stdout_log: Option<std::path::PathBuf>,
+    pub stderr_log: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -59,6 +63,8 @@ pub(crate) struct DoorBridgeResult {
     pub disconnect_forced: bool,
     pub caller_disconnected: bool,
     pub disconnect_reason: Option<String>,
+    pub early_exit_before_com1: bool,
+    pub com1_connected: bool,
     pub bytes_in: i64,
     pub bytes_out: i64,
 }
@@ -73,6 +79,14 @@ pub(crate) enum DoorSelection<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Dosemu2ComBridge {
     pty_path: std::path::PathBuf,
+    config_path: std::path::PathBuf,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct DoorRunnerLogs {
+    stdout: Option<std::path::PathBuf>,
+    stderr: Option<std::path::PathBuf>,
+    capture_errors: Vec<String>,
 }
 
 impl<'a> DoorService<'a> {
@@ -125,6 +139,12 @@ impl<'a> DoorService<'a> {
             ));
         }
 
+        if !runner_supports_dosemu2_cli(&door.runner) {
+            return Err(format!(
+                "Door {} runner {:?} is not supported for live caller doors. The current bridge requires DOSEMU2; use runner = \"dosemu\".",
+                door.key, door.runner
+            ));
+        }
         if !command_exists(&door.runner) {
             return Err(format!(
                 "Door {} runner {:?} was not found.",
@@ -191,8 +211,23 @@ impl<'a> DoorService<'a> {
         self.validate_door(door, node_number)
             .map_err(ServeError::Runtime)?;
         let request = self.build_request(user, node_number, door)?;
-        let _plan = prepare_door_run(&request).map_err(door_error)?;
-        let run_id = self.insert_started_run(door, user, node_number)?;
+        let plan = prepare_door_run(&request).map_err(door_error)?;
+        let run_id = generated_uuid(self.db)?;
+        let run_id = self.insert_started_run(
+            &run_id,
+            door,
+            user,
+            node_number,
+            format!(
+                "door run {run_id} started for {}; mode=dry_run program={} args={:?} working_dir={} runtime_dir={} drop_file={}",
+                door.key,
+                plan.program,
+                plan.args,
+                plan.working_dir.display(),
+                request.runtime_dir.display(),
+                plan.drop_file_path.display()
+            ),
+        )?;
         let result = runner.run(&request).map_err(door_error)?;
         self.finish_run(
             &run_id,
@@ -223,9 +258,12 @@ impl<'a> DoorService<'a> {
             disconnect_forced: result.timed_out,
             caller_disconnected: false,
             disconnect_reason: None,
+            early_exit_before_com1: false,
             bytes_in: 0,
             bytes_out: 0,
             launch_error: None,
+            stdout_log: None,
+            stderr_log: None,
         })
     }
 
@@ -241,16 +279,40 @@ impl<'a> DoorService<'a> {
             .map_err(ServeError::Runtime)?;
         let request = self.build_request(user, node_number, door)?;
         let mut plan = prepare_door_run(&request).map_err(door_error)?;
-        let com_bridge = prepare_dosemu2_com1_bridge(&mut plan, &request.runtime_dir)?;
-        let run_id = self.insert_started_run(door, user, node_number)?;
+        let bridge_runtime_dir = plan.working_dir.clone();
+        let com_bridge = prepare_dosemu2_com1_bridge(&mut plan, &bridge_runtime_dir)?;
+        let run_id = generated_uuid(self.db)?;
+        let (stdout, stderr, runner_logs) =
+            door_runner_stdio(&self.config.paths.logs, &run_id, &door.key);
+        self.insert_started_run(
+            &run_id,
+            door,
+            user,
+            node_number,
+            door_start_details(&run_id, &request, &plan, &com_bridge, &runner_logs),
+        )?;
 
         let mut command = Command::new(&plan.program);
         command
             .args(&plan.args)
             .current_dir(&plan.working_dir)
             .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stdout(stdout)
+            .stderr(stderr);
+
+        info!(
+            door = %door.key,
+            run_id = %run_id,
+            node = %node_number,
+            program = %plan.program,
+            args = ?plan.args,
+            working_dir = %plan.working_dir.display(),
+            runtime_dir = %request.runtime_dir.display(),
+            pty = %com_bridge.pty_path.display(),
+            stdout_log = ?runner_logs.stdout,
+            stderr_log = ?runner_logs.stderr,
+            "launching door runner"
+        );
 
         let child = match command.spawn() {
             Ok(child) => child,
@@ -267,9 +329,12 @@ impl<'a> DoorService<'a> {
                     disconnect_forced: false,
                     caller_disconnected: false,
                     disconnect_reason: None,
+                    early_exit_before_com1: false,
                     bytes_in: 0,
                     bytes_out: 0,
                     launch_error: Some(message),
+                    stdout_log: runner_logs.stdout,
+                    stderr_log: runner_logs.stderr,
                 });
             }
         };
@@ -307,7 +372,27 @@ impl<'a> DoorService<'a> {
             }
         };
 
-        self.finish_run(&run_id, door, user, node_number, bridge.clone(), None)?;
+        if bridge.early_exit_before_com1 {
+            warn!(
+                door = %door.key,
+                run_id = %run_id,
+                node = %node_number,
+                exit_code = ?bridge.exit_code,
+                stdout_log = ?runner_logs.stdout,
+                stderr_log = ?runner_logs.stderr,
+                "door runner exited before DOSEMU2 COM1 bridge was available"
+            );
+        }
+
+        let finish_note = door_finish_note(&bridge, &runner_logs);
+        self.finish_run(
+            &run_id,
+            door,
+            user,
+            node_number,
+            bridge.clone(),
+            Some(&finish_note),
+        )?;
         cleanup_runtime_dir(&request);
 
         Ok(DoorExecutionSummary {
@@ -318,20 +403,26 @@ impl<'a> DoorService<'a> {
             disconnect_forced: bridge.disconnect_forced,
             caller_disconnected: bridge.caller_disconnected,
             disconnect_reason: bridge.disconnect_reason,
+            early_exit_before_com1: bridge.early_exit_before_com1,
             bytes_in: bridge.bytes_in,
             bytes_out: bridge.bytes_out,
             launch_error: None,
+            stdout_log: runner_logs.stdout,
+            stderr_log: runner_logs.stderr,
         })
     }
 
     fn sync_configured_doors(&self) -> ServeResult<()> {
         for door in &self.config.doors.definitions {
-            if find_door_by_key(self.db.db(), &door.key)
-                .map_err(ServeError::Database)?
-                .is_none()
-            {
-                let record = self.record_from_config(door)?;
-                insert_door_definition(self.db.db(), &record).map_err(ServeError::Database)?;
+            match find_door_by_key(self.db.db(), &door.key).map_err(ServeError::Database)? {
+                Some(existing) => {
+                    let record = self.record_from_config_with_id(door, existing.id);
+                    update_door_definition(self.db.db(), &record).map_err(ServeError::Database)?;
+                }
+                None => {
+                    let record = self.record_from_config(door)?;
+                    insert_door_definition(self.db.db(), &record).map_err(ServeError::Database)?;
+                }
             }
         }
         Ok(())
@@ -353,16 +444,17 @@ impl<'a> DoorService<'a> {
 
     fn insert_started_run(
         &self,
+        run_id: &str,
         door: &DoorDefinitionRecord,
         user: &User,
         node_number: u16,
+        details: String,
     ) -> ServeResult<String> {
-        let run_id = generated_uuid(self.db)?;
         let started_at = current_timestamp(self.db)?;
         insert_door_run(
             self.db.db(),
             &DoorRunRecord {
-                id: run_id.clone(),
+                id: run_id.to_string(),
                 door_id: door.id.clone(),
                 user_id: user.id.clone(),
                 node_number: i64::from(node_number),
@@ -377,15 +469,9 @@ impl<'a> DoorService<'a> {
         )
         .map_err(ServeError::Database)?;
 
-        self.audit_door_event(
-            "door_started",
-            door,
-            user,
-            node_number,
-            format!("door run {run_id} started for {}", door.key),
-        );
+        self.audit_door_event("door_started", door, user, node_number, details);
 
-        Ok(run_id)
+        Ok(run_id.to_string())
     }
 
     fn finish_run(
@@ -480,8 +566,12 @@ impl<'a> DoorService<'a> {
     }
 
     fn record_from_config(&self, door: &DoorDefConfig) -> ServeResult<DoorDefinitionRecord> {
-        Ok(DoorDefinitionRecord {
-            id: generated_uuid(self.db)?,
+        Ok(self.record_from_config_with_id(door, generated_uuid(self.db)?))
+    }
+
+    fn record_from_config_with_id(&self, door: &DoorDefConfig, id: String) -> DoorDefinitionRecord {
+        DoorDefinitionRecord {
+            id,
             key: door.key.clone(),
             name: door.name.clone(),
             runner: if door.runner.trim().is_empty() {
@@ -494,8 +584,8 @@ impl<'a> DoorService<'a> {
             drop_file: door.drop_file.clone(),
             exclusive: door.exclusive,
             time_limit_minutes: i64::from(door.time_limit_minutes),
-            enabled: door.enabled,
-        })
+            enabled: self.config.doors.enabled && door.enabled,
+        }
     }
 }
 
@@ -545,7 +635,10 @@ fn prepare_dosemu2_com1_bridge(
     let config_path = runtime_dir.join(DOSEMU2_CONFIG_FILE);
     fs::write(&config_path, dosemu2_serial_config(&pty_path))?;
     add_dosemu2_config(plan, &config_path);
-    Ok(Dosemu2ComBridge { pty_path })
+    Ok(Dosemu2ComBridge {
+        pty_path,
+        config_path,
+    })
 }
 
 fn dosemu2_serial_config(pty_path: &Path) -> String {
@@ -568,6 +661,117 @@ fn add_dosemu2_config(plan: &mut DoorRunPlan, config_path: &Path) {
     args.push(config_path.display().to_string());
     args.append(&mut plan.args);
     plan.args = args;
+}
+
+fn door_runner_stdio(
+    logs_dir: &Path,
+    run_id: &str,
+    door_key: &str,
+) -> (Stdio, Stdio, DoorRunnerLogs) {
+    let mut logs = DoorRunnerLogs::default();
+    let door_logs_dir = logs_dir.join(DOOR_LOG_DIR);
+    if let Err(error) = fs::create_dir_all(&door_logs_dir) {
+        let message = format!(
+            "failed to create door log directory {}: {error}",
+            door_logs_dir.display()
+        );
+        warn!("{message}");
+        logs.capture_errors.push(message);
+        return (Stdio::null(), Stdio::null(), logs);
+    }
+
+    let prefix = format!("{}-{run_id}", sanitize_log_component(door_key));
+    let stdout_path = door_logs_dir.join(format!("{prefix}.stdout.log"));
+    let stderr_path = door_logs_dir.join(format!("{prefix}.stderr.log"));
+    let stdout = capture_stdio_file(&stdout_path, "stdout", &mut logs);
+    let stderr = capture_stdio_file(&stderr_path, "stderr", &mut logs);
+    (stdout, stderr, logs)
+}
+
+fn capture_stdio_file(path: &Path, stream: &str, logs: &mut DoorRunnerLogs) -> Stdio {
+    match fs::File::create(path) {
+        Ok(file) => {
+            match stream {
+                "stdout" => logs.stdout = Some(path.to_path_buf()),
+                "stderr" => logs.stderr = Some(path.to_path_buf()),
+                _ => {}
+            }
+            Stdio::from(file)
+        }
+        Err(error) => {
+            let message = format!(
+                "failed to create door {stream} log {}: {error}",
+                path.display()
+            );
+            warn!("{message}");
+            logs.capture_errors.push(message);
+            Stdio::null()
+        }
+    }
+}
+
+fn sanitize_log_component(value: &str) -> String {
+    let sanitized = value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    if sanitized.is_empty() {
+        "door".to_string()
+    } else {
+        sanitized
+    }
+}
+
+fn door_start_details(
+    run_id: &str,
+    request: &DoorRunRequest,
+    plan: &DoorRunPlan,
+    com_bridge: &Dosemu2ComBridge,
+    runner_logs: &DoorRunnerLogs,
+) -> String {
+    let mut details = format!(
+        "door run {run_id} started for {}; program={} args={:?} working_dir={} runtime_dir={} drop_file={} dosemu_config={} com1_pty={}",
+        request.door.key,
+        plan.program,
+        plan.args,
+        plan.working_dir.display(),
+        request.runtime_dir.display(),
+        plan.drop_file_path.display(),
+        com_bridge.config_path.display(),
+        com_bridge.pty_path.display()
+    );
+    append_runner_log_details(&mut details, runner_logs);
+    details
+}
+
+fn door_finish_note(bridge: &DoorBridgeResult, runner_logs: &DoorRunnerLogs) -> String {
+    let mut details = format!(
+        "com1_connected={} early_exit_before_com1={}",
+        bridge.com1_connected, bridge.early_exit_before_com1
+    );
+    append_runner_log_details(&mut details, runner_logs);
+    details
+}
+
+fn append_runner_log_details(details: &mut String, runner_logs: &DoorRunnerLogs) {
+    if let Some(path) = runner_logs.stdout.as_ref() {
+        details.push_str("; stdout_log=");
+        details.push_str(&path.display().to_string());
+    }
+    if let Some(path) = runner_logs.stderr.as_ref() {
+        details.push_str("; stderr_log=");
+        details.push_str(&path.display().to_string());
+    }
+    if !runner_logs.capture_errors.is_empty() {
+        details.push_str("; log_capture_errors=");
+        details.push_str(&format!("{:?}", runner_logs.capture_errors));
+    }
 }
 
 pub(crate) async fn run_door_bridge<T: Transport>(
@@ -620,10 +824,12 @@ async fn wait_for_com1_pty<T: Transport>(
     loop {
         if let Some(status) = child.try_wait()? {
             result.exit_code = status.code();
+            result.early_exit_before_com1 = true;
             return Ok(None);
         }
         if com_bridge.pty_path.exists() {
             runtime.heartbeat_node(node_number);
+            result.com1_connected = true;
             return Ok(Some(open_com1_pty(&com_bridge.pty_path)?));
         }
 
@@ -696,6 +902,7 @@ where
     T: Transport,
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    result.com1_connected = true;
     let (mut serial_reader, mut serial_writer) = tokio::io::split(serial);
     let mut serial_buf = [0_u8; 1024];
 
@@ -916,6 +1123,8 @@ mod tests {
 
     fn test_config(runtime: std::path::PathBuf, working_dir: std::path::PathBuf) -> OxideConfig {
         fs::write(working_dir.join("TEST.EXE"), b"").expect("create test command");
+        fs::write(working_dir.join("dosemu"), b"").expect("create test runner");
+        let runner = supported_runner_path(&working_dir);
         OxideConfig {
             board: BoardConfig {
                 name: "Test BBS".to_string(),
@@ -939,11 +1148,11 @@ mod tests {
             menus: HashMap::<String, MenuConfig>::new(),
             doors: DoorsConfig {
                 enabled: true,
-                default_runner: current_runner(),
+                default_runner: runner.clone(),
                 definitions: vec![DoorDefConfig {
                     key: "test".to_string(),
                     name: "Test Door".to_string(),
-                    runner: current_runner(),
+                    runner,
                     working_dir: working_dir.to_string_lossy().to_string(),
                     command: "TEST.EXE".to_string(),
                     drop_file: "DOOR.SYS".to_string(),
@@ -954,6 +1163,10 @@ mod tests {
             },
             ftn: FtnConfig::default(),
         }
+    }
+
+    fn supported_runner_path(dir: &Path) -> String {
+        dir.join("dosemu").to_string_lossy().to_string()
     }
 
     fn current_runner() -> String {
@@ -1063,6 +1276,53 @@ mod tests {
     }
 
     #[test]
+    fn prepare_dosemu2_com1_bridge_uses_absolute_runtime_paths() {
+        let runtime_dir = temp_dir("absolute-bridge-runtime");
+        let mut plan = DoorRunPlan {
+            program: "dosemu".to_string(),
+            args: vec!["-dumb".to_string(), "-quiet".to_string()],
+            working_dir: runtime_dir.clone(),
+            drop_file_path: runtime_dir.join("DOOR.SYS"),
+            timeout: Duration::from_secs(60),
+        };
+
+        let bridge = prepare_dosemu2_com1_bridge(&mut plan, &runtime_dir).expect("prepare bridge");
+
+        assert!(bridge.config_path.is_absolute());
+        assert!(bridge.pty_path.is_absolute());
+        assert_eq!(plan.args[0], "-f");
+        assert_eq!(plan.args[1], bridge.config_path.display().to_string());
+        let config = fs::read_to_string(&bridge.config_path).expect("read bridge config");
+        assert!(config.contains(&bridge.pty_path.display().to_string()));
+
+        let _ = fs::remove_dir_all(runtime_dir);
+    }
+
+    #[test]
+    fn door_runner_stdio_creates_per_run_log_files() {
+        let base = temp_dir("stdio-logs");
+        let logs_dir = base.join("logs");
+
+        let (_stdout, _stderr, logs) = door_runner_stdio(&logs_dir, "run-001", "oxide/check");
+
+        assert!(logs.capture_errors.is_empty());
+        let stdout = logs.stdout.expect("stdout path");
+        let stderr = logs.stderr.expect("stderr path");
+        assert_eq!(
+            stdout.file_name().and_then(|name| name.to_str()),
+            Some("oxide_check-run-001.stdout.log")
+        );
+        assert_eq!(
+            stderr.file_name().and_then(|name| name.to_str()),
+            Some("oxide_check-run-001.stderr.log")
+        );
+        assert!(stdout.is_file());
+        assert!(stderr.is_file());
+
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
     fn validate_door_rejects_disabled_missing_runner_and_bad_dropfile() {
         let runtime = temp_dir("validate-runtime");
         let working_dir = temp_dir("validate-working");
@@ -1085,7 +1345,15 @@ mod tests {
         door.runner = runtime.join("missing-runner").to_string_lossy().to_string();
         assert!(service.validate_door(&door, 1).is_err());
 
-        door.runner = current_runner();
+        door.runner = "dosbox".to_string();
+        let unsupported_error = service.validate_door(&door, 1).unwrap_err();
+        assert!(
+            unsupported_error.contains("not supported")
+                && unsupported_error.contains("DOSEMU2")
+                && unsupported_error.contains("dosemu")
+        );
+
+        door.runner = supported_runner_path(Path::new(&door.working_dir));
         door.drop_file = "BAD.TXT".to_string();
         assert!(service.validate_door(&door, 1).is_err());
 
@@ -1197,6 +1465,49 @@ mod tests {
         assert!(output.contains("serial-ready"));
         assert_eq!(result.bytes_in, 6);
         assert!(result.bytes_out >= 14);
+        assert!(result.com1_connected);
+    }
+
+    #[tokio::test]
+    async fn bridge_marks_child_exit_before_com1_pty() {
+        let runtime_dir = temp_dir("early-exit-runtime");
+        let bridge = Dosemu2ComBridge {
+            pty_path: runtime_dir.join(DOSEMU2_COM1_PTY),
+            config_path: runtime_dir.join(DOSEMU2_CONFIG_FILE),
+        };
+        let (mut transport, _client) = LoopbackTransport::new();
+        let runtime = ServerRuntime::new("test".to_string(), 1, 1, 30);
+        runtime.mark_node_connected(
+            1,
+            "session".to_string(),
+            "127.0.0.1:23".to_string(),
+            "now".to_string(),
+        );
+        let child = Command::new("sh")
+            .arg("-c")
+            .arg("exit 7")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn exit helper");
+
+        let result = run_door_bridge(
+            &mut transport,
+            &runtime,
+            1,
+            child,
+            bridge,
+            Duration::from_secs(2),
+        )
+        .await
+        .expect("bridge");
+
+        assert_eq!(result.exit_code, Some(7));
+        assert!(result.early_exit_before_com1);
+        assert!(!result.com1_connected);
+        assert!(!result.timed_out);
+        let _ = fs::remove_dir_all(runtime_dir);
     }
 
     #[tokio::test]
@@ -1204,6 +1515,7 @@ mod tests {
         let runtime_dir = temp_dir("missing-pty-runtime");
         let bridge = Dosemu2ComBridge {
             pty_path: runtime_dir.join(DOSEMU2_COM1_PTY),
+            config_path: runtime_dir.join(DOSEMU2_CONFIG_FILE),
         };
         let (mut transport, _client) = LoopbackTransport::new();
         let runtime = ServerRuntime::new("test".to_string(), 1, 1, 30);
