@@ -174,7 +174,7 @@ where
     ) = (None, None);
 
     let listener = TcpListener::bind(&config.telnet.bind).await?;
-    emit_audit_event(
+    emit_audit_event_with_runtime(
         db.as_ref(),
         "server_start",
         None,
@@ -183,6 +183,7 @@ where
             "serving {} on {} with {} node(s)",
             config.board.name, config.telnet.bind, config.nodes.count
         ),
+        Some(runtime.as_ref()),
     );
 
     info!(bind = %config.telnet.bind, "listening for telnet callers");
@@ -207,12 +208,13 @@ where
                 };
 
                 if let Some(allocation) = runtime.try_allocate_node() {
-                    emit_audit_event(
+                    emit_audit_event_with_runtime(
                         db.as_ref(),
                         "node_assigned",
                         None,
                         Some(i64::from(allocation.node_number)),
                         format!("node {} assigned to {}", allocation.node_number, peer.address),
+                        Some(runtime.as_ref()),
                     );
                     let resources = CallerResources {
                         db: Arc::clone(&db),
@@ -285,7 +287,7 @@ where
         handle.abort();
     }
 
-    emit_audit_event(
+    emit_audit_event_with_runtime(
         db.as_ref(),
         "server_stop",
         None,
@@ -294,6 +296,7 @@ where
             "shutdown complete with {} active node(s)",
             active_nodes.len()
         ),
+        Some(runtime.as_ref()),
     );
 
     if let Some(error) = accept_error {
@@ -398,12 +401,13 @@ async fn handle_caller(
     );
     let mut current_menu = Arc::clone(&login_menu);
 
-    emit_audit_event(
+    emit_audit_event_with_runtime(
         db.as_ref(),
         "caller_connected",
         None,
         Some(node_number),
         format!("caller connected from {}", peer.address),
+        Some(runtime.as_ref()),
     );
 
     let mut capabilities = negotiate_terminal_capabilities(
@@ -738,12 +742,13 @@ async fn handle_caller(
     }
     runtime.mark_node_disconnected(node_number_u16);
 
-    emit_audit_event(
+    emit_audit_event_with_runtime(
         db.as_ref(),
         "caller_disconnected",
         authenticated_user.as_ref().map(|user| user.id.clone()),
         Some(node_number),
         format!("disconnect reason: {disconnect_reason}"),
+        Some(runtime.as_ref()),
     );
 
     info!(
@@ -997,12 +1002,13 @@ async fn run_login_flow(
             &login_at,
             &state.config.auth,
         )?;
-        emit_audit_event(
+        emit_audit_event_with_runtime(
             db,
             "login_failure",
             None,
             Some(node_number),
             format!("login failed for alias {alias_scope_key}"),
+            Some(state.runtime),
         );
         send_text(transport, INVALID_LOGIN_MESSAGE).await?;
         return Ok(AuthFlowResult::Retry);
@@ -1012,7 +1018,7 @@ async fn run_login_flow(
     let verification =
         verify_stored_password(&password, &user.password_hash, &state.config.auth.argon2)?;
     if verification == PasswordVerification::HashParseFailure {
-        emit_audit_event(
+        emit_audit_event_with_runtime(
             db,
             "password_hash_parse_failure",
             Some(user.id.clone()),
@@ -1021,6 +1027,7 @@ async fn run_login_flow(
                 "stored password hash could not be parsed for {}",
                 user.alias
             ),
+            Some(state.runtime),
         );
     }
     let rejected =
@@ -1033,12 +1040,13 @@ async fn run_login_flow(
             &login_at,
             &state.config.auth,
         )?;
-        emit_audit_event(
+        emit_audit_event_with_runtime(
             db,
             "login_failure",
             Some(user.id.clone()),
             Some(node_number),
             format!("login failed for user {}", user.alias),
+            Some(state.runtime),
         );
         send_text(transport, INVALID_LOGIN_MESSAGE).await?;
         return Ok(AuthFlowResult::Retry);
@@ -1082,12 +1090,13 @@ async fn run_login_flow(
         );
     }
 
-    emit_audit_event(
+    emit_audit_event_with_runtime(
         db,
         "login_success",
         Some(user.id.clone()),
         Some(node_number),
         format!("login successful for {}", user.alias),
+        Some(state.runtime),
     );
 
     *authenticated_user = Some(user);
@@ -1328,19 +1337,21 @@ async fn run_new_user_flow(
 
     *authenticated_user = Some(user.clone());
 
-    emit_audit_event(
+    emit_audit_event_with_runtime(
         db,
         "new_user_created",
         Some(user.id.clone()),
         Some(node_number),
         format!("new user created for {}", user.alias),
+        Some(state.runtime),
     );
-    emit_audit_event(
+    emit_audit_event_with_runtime(
         db,
         "login_success",
         Some(user.id.clone()),
         Some(node_number),
         format!("new user logged in as {}", user.alias),
+        Some(state.runtime),
     );
 
     send_text(transport, "Account created. Welcome.\r\n").await?;
@@ -1402,7 +1413,24 @@ async fn run_doors_flow(
         };
 
         if let Err(message) = service.validate_door(door, state.node_number) {
-            send_text(transport, &format!("{message}\r\n")).await?;
+            warn!(
+                door = %door.key,
+                node = %state.node_number,
+                "door unavailable before launch: {message}"
+            );
+            emit_audit_event_with_runtime(
+                state.db,
+                "door_unavailable",
+                Some(user.id.clone()),
+                Some(i64::from(state.node_number)),
+                format!("door {} unavailable before launch: {message}", door.key),
+                Some(state.runtime),
+            );
+            send_text(
+                transport,
+                "This door is not available right now. Contact the sysop.\r\n",
+            )
+            .await?;
             continue;
         }
 
@@ -1438,8 +1466,12 @@ fn door_summary_text(summary: &DoorExecutionSummary) -> String {
         ""
     };
     if let Some(error) = summary.launch_error.as_ref() {
+        warn!(
+            door = %summary.door_name,
+            "door launch failed after run record was created: {error}"
+        );
         return format!(
-            "Unable to launch {}: {error}.{run_id}{diagnostics}\r\n",
+            "Unable to launch {}. Contact the sysop.{run_id}{diagnostics}\r\n",
             summary.door_name
         );
     }
@@ -2450,6 +2482,11 @@ fn encode_text(text: &str) -> Vec<u8> {
 
 fn encode_text_into(text: &str, output: &mut Vec<u8>) {
     output.clear();
+    if text.is_ascii() {
+        output.reserve(text.len());
+        output.extend_from_slice(text.as_bytes());
+        return;
+    }
 
     match encode_cp437(text) {
         Ok(bytes) => output.extend_from_slice(&bytes),
@@ -2471,6 +2508,9 @@ fn encode_text_lossy_into(text: &str, output: &mut Vec<u8>) {
 }
 
 fn is_cp437_compatible(text: &str) -> bool {
+    if text.is_ascii() {
+        return true;
+    }
     encode_cp437(text).is_ok()
 }
 
@@ -3103,6 +3143,51 @@ mod tests {
     }
 
     #[test]
+    fn runtime_counter_increments_when_audit_insert_fails() {
+        let db = OxideDb::open_memory().expect("open db");
+        let runtime = ServerRuntime::new("test".to_string(), 1, 1, 60);
+
+        emit_audit_event_with_runtime(
+            &db,
+            "forced_audit_failure",
+            Some("not-a-uuid".to_string()),
+            Some(1),
+            "forced failure".to_string(),
+            Some(&runtime),
+        );
+
+        assert_eq!(runtime.audit_write_failures(), 1);
+    }
+
+    #[test]
+    fn launch_error_summary_hides_verbose_host_details_from_caller() {
+        let summary = DoorExecutionSummary {
+            door_name: "Test Door".to_string(),
+            run_id: Some("run-1".to_string()),
+            exit_code: None,
+            timed_out: false,
+            disconnect_forced: false,
+            caller_disconnected: false,
+            disconnect_reason: None,
+            early_exit_before_com1: false,
+            bytes_in: 0,
+            bytes_out: 0,
+            launch_error: Some(
+                "door runner validation failed before launch: /var/lib/oxidebbs/doors".to_string(),
+            ),
+            stdout_log: None,
+            stderr_log: None,
+        };
+
+        let text = door_summary_text(&summary);
+
+        assert!(text.contains("Unable to launch Test Door. Contact the sysop."));
+        assert!(text.contains("Run id: run-1"));
+        assert!(!text.contains("/var/lib/oxidebbs"));
+        assert!(!text.contains("validation failed"));
+    }
+
+    #[test]
     fn terminal_asset_payload_loads_from_ansi_path() {
         let base_dir = temp_dir("terminal-asset");
         let db_path = base_dir.join("oxidebbs.ddb");
@@ -3143,6 +3228,20 @@ mod tests {
         assert_eq!(plain_payload, b"Welcome\r\n");
 
         let _ = std::fs::remove_dir_all(base_dir);
+    }
+
+    #[test]
+    fn ascii_text_encodes_without_cp437_lookup() {
+        let mut output = Vec::new();
+
+        encode_text_into("Main menu? ", &mut output);
+
+        assert_eq!(output, b"Main menu? ");
+    }
+
+    #[test]
+    fn ascii_is_cp437_compatible() {
+        assert!(is_cp437_compatible("Main menu? 123."));
     }
 
     #[test]

@@ -444,6 +444,36 @@ impl<'a> DoorService<'a> {
             "launching door runner"
         );
 
+        if let Err(error) = validate_door_runner(&door.runner, &self.config.doors.allowed_runners) {
+            let message = format!("door runner validation failed before launch: {error}");
+            self.finish_run(
+                &run_id,
+                door,
+                user,
+                node_number,
+                DoorBridgeResult::default(),
+                DoorFinishOptions {
+                    runtime: Some(runtime),
+                    note: Some(&message),
+                },
+            )?;
+            return Ok(DoorExecutionSummary {
+                door_name: door.name.clone(),
+                run_id: Some(run_id),
+                exit_code: None,
+                timed_out: false,
+                disconnect_forced: false,
+                caller_disconnected: false,
+                disconnect_reason: None,
+                early_exit_before_com1: false,
+                bytes_in: 0,
+                bytes_out: 0,
+                launch_error: Some(message),
+                stdout_log: runner_logs.stdout,
+                stderr_log: runner_logs.stderr,
+            });
+        }
+
         let child = match command.spawn() {
             Ok(child) => child,
             Err(error) => {
@@ -1743,6 +1773,33 @@ mod tests {
         assert!(empty_error.contains("command is empty"));
 
         let _ = fs::remove_dir_all(runtime);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn runner_revalidation_detects_permission_change_before_spawn() {
+        let runtime = temp_dir("runner-recheck-runtime");
+        let working_dir = temp_dir("runner-recheck-working");
+        let config = test_config(runtime.clone(), working_dir.clone());
+        let runner = supported_runner_path(&working_dir);
+
+        validate_door_runner(&runner, &config.doors.allowed_runners).expect("safe runner");
+
+        use std::os::unix::fs::PermissionsExt;
+        let mode = fs::metadata(&runner)
+            .expect("runner metadata")
+            .permissions()
+            .mode()
+            | 0o002;
+        fs::set_permissions(&runner, fs::Permissions::from_mode(mode))
+            .expect("runner world-writable");
+
+        let error = validate_door_runner(&runner, &config.doors.allowed_runners)
+            .expect_err("unsafe runner should fail revalidation");
+        assert!(error.contains("world-writable"));
+
+        let _ = fs::remove_dir_all(runtime);
+        let _ = fs::remove_dir_all(working_dir);
     }
 
     #[test]

@@ -2,7 +2,11 @@ use decentdb::{Db, Value};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AuditEventRecord {
+    // Populated by list/export and preserving import. Normal runtime inserts
+    // ignore these fields because DecentDB generates id/created_at server-side.
+    #[doc(hidden)]
     pub id: String,
+    #[doc(hidden)]
     pub created_at: String,
     pub event_type: String,
     pub user_id: Option<String>,
@@ -190,6 +194,18 @@ mod tests {
         let types: Vec<&str> = events.iter().map(|e| e.event_type.as_str()).collect();
         assert!(types.contains(&"login_success"));
         assert!(types.contains(&"caller_connected"));
+    }
+
+    #[test]
+    fn runtime_insert_returns_generated_id_and_timestamp() {
+        let db = test_db();
+        insert_audit_event(&db, &sample_event("server_start", None)).expect("insert");
+
+        let events = list_audit_events(&db, 1).expect("list");
+
+        assert_eq!(events.len(), 1);
+        assert!(!events[0].id.is_empty());
+        assert!(!events[0].created_at.is_empty());
     }
 
     #[test]

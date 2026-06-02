@@ -82,6 +82,26 @@ The runtime directory is created with mode `0700`, the control socket is chmoded
 to `0600`, and Unix clients are accepted only when their peer UID matches the
 server process UID.
 
+Important: CLI/sysop commands must run as the same OS user that owns
+`oxidebbs-server` (the UID used by the running `serve` process). Example:
+
+```bash
+sudo -u oxidebbs oxidebbs-server nodes list
+```
+
+Running control commands as a different local user (including root) will usually
+be rejected with a peer-UID mismatch error even if the socket file is reachable.
+
+The runtime path and any pre-existing `runtime/node-NNN` directories must be
+writable by the server UID, and OxideBBS will try to keep node runtime
+directories at mode `0700`. If you move an installation to a different OS user
+or restore runtime files from backup, stop the server and remove stale
+`runtime/node-*` directories before restarting:
+
+```bash
+rm -rf runtime/node-*
+```
+
 If cleanup ever remains necessary, stop the managed service or development
 process first, then remove only the socket file:
 

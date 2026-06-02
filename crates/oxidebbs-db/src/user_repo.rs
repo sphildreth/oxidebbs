@@ -52,45 +52,56 @@ impl From<DbError> for UserInsertError {
 }
 
 pub fn insert_user(db: &Db, user: &UserRecord) -> decentdb::Result<()> {
+    let params = user_insert_params(user);
     db.execute_with_params(
         "INSERT INTO users (id, alias, alias_normalized, real_name, email, password_hash, security_level, is_sysop, created_at, last_login_at, total_calls, time_bank_minutes, status)
          VALUES (UUID_PARSE($1), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
-        &[
-            Value::Text(user.id.clone()),
-            Value::Text(user.alias.clone()),
-            Value::Text(normalize_alias(&user.alias)),
-            Value::Text(user.real_name.clone()),
-            user.email.as_ref().map(|e| Value::Text(e.clone())).unwrap_or(Value::Null),
-            Value::Text(user.password_hash.clone()),
-            Value::Int64(user.security_level),
-            Value::Bool(user.is_sysop),
-            Value::Text(user.created_at.clone()),
-            user.last_login_at.as_ref().map(|t| Value::Text(t.clone())).unwrap_or(Value::Null),
-            Value::Int64(user.total_calls),
-            Value::Int64(user.time_bank_minutes),
-            Value::Text(user.status.clone()),
-        ],
+        &params,
     )?;
     Ok(())
 }
 
 pub fn insert_user_if_alias_available(db: &Db, user: &UserRecord) -> Result<(), UserInsertError> {
-    match insert_user(db, user) {
-        Ok(()) => Ok(()),
-        Err(error @ DbError::Constraint { .. }) => {
-            if find_user_by_alias_ci(db, &user.alias)
-                .map_err(UserInsertError::Db)?
-                .is_some()
-            {
-                Err(UserInsertError::DuplicateAlias {
-                    alias: user.alias.clone(),
-                })
-            } else {
-                Err(UserInsertError::Db(error))
-            }
-        }
-        Err(error) => Err(UserInsertError::Db(error)),
+    let params = user_insert_params(user);
+    let result = db.execute_with_params(
+        "INSERT INTO users (id, alias, alias_normalized, real_name, email, password_hash, security_level, is_sysop, created_at, last_login_at, total_calls, time_bank_minutes, status)
+         VALUES (UUID_PARSE($1), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+         ON CONFLICT (alias_normalized) DO NOTHING
+         RETURNING UUID_TO_STRING(id)",
+        &params,
+    )?;
+
+    if result.rows().is_empty() {
+        Err(UserInsertError::DuplicateAlias {
+            alias: user.alias.clone(),
+        })
+    } else {
+        Ok(())
     }
+}
+
+fn user_insert_params(user: &UserRecord) -> [Value; 13] {
+    [
+        Value::Text(user.id.clone()),
+        Value::Text(user.alias.clone()),
+        Value::Text(normalize_alias(&user.alias)),
+        Value::Text(user.real_name.clone()),
+        user.email
+            .as_ref()
+            .map(|e| Value::Text(e.clone()))
+            .unwrap_or(Value::Null),
+        Value::Text(user.password_hash.clone()),
+        Value::Int64(user.security_level),
+        Value::Bool(user.is_sysop),
+        Value::Text(user.created_at.clone()),
+        user.last_login_at
+            .as_ref()
+            .map(|t| Value::Text(t.clone()))
+            .unwrap_or(Value::Null),
+        Value::Int64(user.total_calls),
+        Value::Int64(user.time_bank_minutes),
+        Value::Text(user.status.clone()),
+    ]
 }
 
 pub fn find_user_by_alias(db: &Db, alias: &str) -> decentdb::Result<Option<UserRecord>> {
@@ -270,6 +281,8 @@ mod tests {
     use super::*;
     use crate::schema;
     use decentdb::DbConfig;
+    use std::sync::{Arc, Barrier};
+    use std::thread;
 
     fn test_db() -> Db {
         let db = Db::open_or_create(":memory:", DbConfig::default()).expect("open DecentDB");
@@ -302,6 +315,12 @@ mod tests {
             time_bank_minutes: 0,
             status: "active".to_string(),
         }
+    }
+
+    fn sample_user_with_id(alias: &str, id_seed: &str) -> UserRecord {
+        let mut user = sample_user(alias);
+        user.id = test_uuid(id_seed);
+        user
     }
 
     #[test]
@@ -435,6 +454,67 @@ mod tests {
             result,
             Err(UserInsertError::DuplicateAlias { alias }) if alias == "alice"
         ));
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum ConcurrentInsertOutcome {
+        Inserted,
+        Duplicate,
+        Db,
+    }
+
+    #[test]
+    fn insert_user_if_alias_available_allows_one_concurrent_duplicate_alias() {
+        let db = test_db();
+        let barrier = Arc::new(Barrier::new(2));
+
+        let outcomes = thread::scope(|scope| {
+            let handles = (0..2)
+                .map(|index| {
+                    let barrier = Arc::clone(&barrier);
+                    let db = &db;
+                    scope.spawn(move || {
+                        let user = sample_user_with_id("RaceAlias", &format!("race-alias-{index}"));
+                        barrier.wait();
+                        match insert_user_if_alias_available(db, &user) {
+                            Ok(()) => ConcurrentInsertOutcome::Inserted,
+                            Err(UserInsertError::DuplicateAlias { .. }) => {
+                                ConcurrentInsertOutcome::Duplicate
+                            }
+                            Err(UserInsertError::Db(_)) => ConcurrentInsertOutcome::Db,
+                        }
+                    })
+                })
+                .collect::<Vec<_>>();
+
+            handles
+                .into_iter()
+                .map(|handle| handle.join().expect("join insert thread"))
+                .collect::<Vec<_>>()
+        });
+
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|outcome| **outcome == ConcurrentInsertOutcome::Inserted)
+                .count(),
+            1
+        );
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|outcome| **outcome == ConcurrentInsertOutcome::Duplicate)
+                .count(),
+            1
+        );
+        assert!(!outcomes.contains(&ConcurrentInsertOutcome::Db));
+
+        let matching_users = list_users(&db)
+            .expect("list users")
+            .into_iter()
+            .filter(|user| user.alias.eq_ignore_ascii_case("RaceAlias"))
+            .count();
+        assert_eq!(matching_users, 1);
     }
 
     #[test]

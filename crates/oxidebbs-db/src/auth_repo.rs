@@ -1,5 +1,9 @@
 use decentdb::{Db, Value};
 
+// DecentDB serializes single-statement writes. `clear_auth_attempt` is therefore
+// intentionally a single atomic DELETE; revisit this if OxideBBS ever adopts a
+// multi-writer DecentDB topology.
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuthAttemptRecord {
     pub scope: String,
@@ -168,7 +172,12 @@ pub fn is_auth_scope_locked(
     let Some(locked_until) = record.locked_until.as_deref() else {
         return Ok(false);
     };
-    Ok(timestamp_is_after(locked_until, now))
+    if timestamp_is_after(locked_until, now) {
+        return Ok(true);
+    }
+
+    clear_auth_attempt(db, scope, scope_key)?;
+    Ok(false)
 }
 
 fn row_to_auth_attempt(row: &decentdb::QueryRow) -> AuthAttemptRecord {
@@ -421,6 +430,33 @@ mod tests {
         assert!(
             find_auth_attempt(&db, "alias", "alice")
                 .expect("find")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn expired_lockout_is_removed_on_lock_check() {
+        let db = test_db();
+        for _ in 0..5 {
+            record_auth_failure(
+                &db,
+                "alias",
+                "alice",
+                "2026-06-02T09:00:00.000000Z",
+                10,
+                15,
+                5,
+            )
+            .expect("record failure");
+        }
+
+        assert!(
+            !is_auth_scope_locked(&db, "alias", "alice", "2026-06-02T09:16:00.000000Z")
+                .expect("expired lockout should not be locked")
+        );
+        assert!(
+            find_auth_attempt(&db, "alias", "alice")
+                .expect("find expired attempt")
                 .is_none()
         );
     }

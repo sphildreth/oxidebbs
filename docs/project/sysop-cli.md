@@ -111,6 +111,20 @@ The local control plane is:
 - Protected on Unix by `0700` runtime-directory permissions, `0600` socket
   permissions, and peer-UID checks against the server process UID
 
+Run sysop commands as the same OS user as the running server process:
+
+```bash
+sudo -u oxidebbs oxidebbs-server nodes list
+```
+
+Running control commands as a different local user (including root) typically
+fails before request handling with a peer-UID mismatch error.
+
+The runtime directory and any pre-existing `runtime/node-NNN` directories must
+be writable by the server UID. When changing the service user or restoring
+runtime files from backup, stop the server and remove stale `runtime/node-*`
+directories so OxideBBS can recreate them with mode `0700`.
+
 If the socket is unreachable:
 
 - `status`, `nodes list`, and `nodes show` fall back to persisted session rows.

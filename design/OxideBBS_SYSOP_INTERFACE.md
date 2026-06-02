@@ -298,7 +298,11 @@ The node commands are backed by a local Unix control socket at:
 ```
 
 The control socket is local-only and only accepts callers whose Unix peer UID matches
-the server process effective UID; it also uses local filesystem permissions for
+the server process effective UID. Run CLI commands under the same OS user account
+as the server process (for example:
+`sudo -u oxidebbs oxidebbs-server nodes list`); other users typically fail with
+a peer-UID mismatch before commands are processed.
+It also uses local filesystem permissions for
 additional isolation.
 
 `nodes list`, `nodes show`, `nodes watch`, `nodes disconnect`, `nodes message`,

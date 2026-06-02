@@ -92,6 +92,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Message reads now use SQL-side visibility filtering, one alias map per
   displayed message list, cached enabled message areas per message-flow entry,
   and a shared `Arc<OxideConfig>` instead of per-connection deep config clones.
+- Completed the 2026-06-02 security/performance re-review follow-ups, including
+  same-UID control-socket documentation, runtime directory cleanup guidance,
+  immediate door runner revalidation before spawn, runtime-aware audit failure
+  counting, expired auth lockout cleanup, and caller-safe door launch error text.
 - Extracted sysop CLI command handlers into `oxidebbs-server::commands`
   modules as a no-behavior-change structural refactor before live control
   socket work.
