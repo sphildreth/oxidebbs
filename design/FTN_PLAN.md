@@ -16,11 +16,11 @@ Implementation plan for FTN (FidoNet Technology Network) support in OxideBBS.
 
 ## Purpose
 
-This document describes everything needed for OxideBBS to participate in real FTN networks — FidoNet, fsxNet, RetroNet, or any other zone. It covers the tosser, scanner, packet format, bundle handling, nodelist processing, netmail routing, AreaFix, and BinkP transport.
+This document describes everything needed for OxideBBS to participate in real FTN networks — FidoNet, fsxNet, RetroNet, or any other zone. It covers the shared network model, FTN packet adapter, tosser, scanner, packet format, bundle handling, nodelist processing, netmail routing, AreaFix, and BinkP transport.
 
-This is separate from the OxideNet PRD. OxideNet uses an internal binary packet format and is a self-contained network. This plan enables OxideBBS to interoperate with traditional FTN networks that use the standard `.pkt` format, arcmail bundles, and nodelist files.
+This is separate from the OxideNet PRD. OxideNet uses an internal binary packet format and is a self-contained network. This plan enables OxideBBS to interoperate with traditional FTN networks that use the standard `.pkt` format, arcmail bundles, and nodelist files. Both packet formats share the same protocol-neutral network model so queueing, duplicate detection, local-message conversion, and area mapping do not need separate implementations.
 
-The `oxidebbs-ftn` crate provides the generic engine. OxideNet or any other network profile builds on top of it.
+The `oxidebbs-network` crate provides the generic network model. The `oxidebbs-ftn` crate is the legacy FTN adapter and engine. OxideNet or any other network profile builds on the shared model and uses its own packet adapter.
 
 ## Current state
 
@@ -31,7 +31,7 @@ What exists today:
 - `oxidebbs-db` schema — `message_areas.kind` CHECK includes `'echomail'` and `'netmail'`. `message_areas.network_id` and `messages.network_message_id` columns exist but have no FTN-specific repository code.
 - `oxidebbs-server/src/config.rs` — `FtnConfig` with `enabled: bool` (default false) and `reserved_network_name: String` (default `"OxideNet"`).
 - `config/oxidebbs.example.toml` — minimal `[ftn]` section.
-- No `oxidebbs-ftn`, `oxidebbs-binkp`, or `oxidebbs-oxidenet` crates exist yet.
+- No `oxidebbs-network`, `oxidebbs-ftn`, `oxidebbs-binkp`, or `oxidebbs-oxidenet` crates exist yet.
 - No FTN packet reading, writing, tossing, scanning, or transport code exists.
 
 What does not exist yet:
@@ -70,16 +70,25 @@ OxideBBS must implement or interoperate with these standards:
 | FSC-0115 | INTL, FMPT, TOPT kludges | Required |
 | FSC-0116 | Typed SEEN-BY and PATH | Medium |
 | FidoNet Nodelist | Standard nodelist format with flags | Required |
-| BinkP | Binkley-style TCP/IP mailer protocol (draft) | Required (Phase 10) |
+| FSP-1011 / BinkP | TCP/IP mailer protocol for FTN mail exchange | Required (Phase 10) |
 
 ## Architecture
 
 ### Crate layout
 
 ```text
+oxidebbs-network
+    Protocol-neutral network model: FTN-style addresses, network message
+    envelopes, packet boundaries, queues, duplicate detection keys,
+    local-message conversion traits, area mapping traits, and shared state
+    enums. It has no dependency on oxidebbs-core, oxidebbs-db, or any
+    packet/transport crate.
+
 oxidebbs-ftn
-    Generic FTN engine: packet format, message model, tosser, scanner,
-    nodelist, duplicate detection, area mapping, routing.
+    Legacy FTN adapter and engine: standard .pkt format, echomail/netmail
+    kludges, tosser, scanner, nodelist, duplicate detection implementation,
+    area mapping repositories, routing, and arcmail bundles. Depends on
+    oxidebbs-network.
 
 oxidebbs-binkp
     BinkP-compatible mail transport: outbound polling, inbound listener,
@@ -87,7 +96,8 @@ oxidebbs-binkp
 
 oxidebbs-oxidenet
     OxideNet-specific profile: signup, policy, config generation,
-    nodelist generation, admin workflow. Depends on oxidebbs-ftn.
+    nodelist generation, admin workflow, and internal binary packet adapter.
+    Depends on oxidebbs-network, not on legacy .pkt parsing.
 ```
 
 ### Dependency direction
@@ -95,28 +105,36 @@ oxidebbs-oxidenet
 ```text
 oxidebbs-server
   -> oxidebbs-core
+  -> oxidebbs-network
   -> oxidebbs-ftn
   -> oxidebbs-binkp (future)
   -> oxidebbs-oxidenet (future)
   -> oxidebbs-db
 
+oxidebbs-core
+  -> oxidebbs-network (temporary re-exports for current FTN foundation types)
+
+oxidebbs-network
+  -> no OxideBBS workspace crates
+
 oxidebbs-ftn
-  -> oxidebbs-core (FtnAddress, EchoMailAreaMapping, etc.)
+  -> oxidebbs-network (FtnAddress, NetworkMessage, queue and boundary types)
+  -> oxidebbs-core (local message conversion only)
   -> oxidebbs-db (DecentDB tables for FTN state)
 
 oxidebbs-binkp
-  -> oxidebbs-ftn
+  -> oxidebbs-network
 
 oxidebbs-oxidenet
-  -> oxidebbs-ftn
+  -> oxidebbs-network
   -> oxidebbs-db
 ```
 
 Lower-level crates must not depend on `oxidebbs-server`.
 
-### Core types migration
+### Shared network types migration
 
-The FTN domain types currently in `oxidebbs-core/src/network.rs` will migrate to `oxidebbs-ftn` once the crate exists. `oxidebbs-core` will re-export them for backward compatibility during the transition. The types are:
+The FTN-style domain types currently in `oxidebbs-core/src/network.rs` will migrate to `oxidebbs-network` once the crate exists. `oxidebbs-core` will re-export them for backward compatibility during the transition. They must not migrate to `oxidebbs-ftn`, because that would create a dependency cycle (`core -> ftn -> core`) and would force OxideNet to depend on legacy `.pkt` details. The migrated types are:
 
 - `FtnAddress`
 - `NetworkAddressError`
@@ -126,7 +144,7 @@ The FTN domain types currently in `oxidebbs-core/src/network.rs` will migrate to
 - `PacketDirection`
 - `PacketBoundary`
 
-New types introduced by `oxidebbs-ftn` will live in the new crate from the start.
+Protocol-neutral types introduced during this work live in `oxidebbs-network` from the start. Legacy packet, kludge, bundle, nodelist, and tosser/scanner implementation types live in `oxidebbs-ftn`.
 
 ### Hard constraints
 
@@ -137,7 +155,7 @@ New types introduced by `oxidebbs-ftn` will live in the new crate from the start
 5. The FTN engine must work with real `.pkt` format (Type-2 and Type-2+).
 6. The tosser must handle malformed packets gracefully — quarantine, not crash.
 7. The scanner must produce standards-compliant packets and bundles.
-8. BinkP transport must use TLS by default for production connections.
+8. BinkP transport must use profile-aware transport security: TLS required by default for OxideNet and new private networks, plaintext allowed only by explicit per-link opt-in for legacy FTN interoperability.
 9. OxideBBS must be able to participate in multiple FTN networks simultaneously.
 10. No new crate additions without justification.
 
@@ -145,7 +163,7 @@ New types introduced by `oxidebbs-ftn` will live in the new crate from the start
 
 ## Configuration model
 
-The `[ftn]` section in `oxidebbs.toml` will expand significantly. The current minimal config:
+The current minimal `[ftn]` section in `oxidebbs.toml` remains a compatibility starting point:
 
 ```toml
 [ftn]
@@ -153,57 +171,71 @@ enabled = false
 reserved_network_name = "OxideNet"
 ```
 
-Will become:
+Phase 0 should introduce a shared `[network]` config with packet-adapter-specific profiles. Legacy `[ftn]` keys can remain as deprecated aliases during migration, but new multi-network configuration should use the shared form:
 
 ```toml
-[ftn]
+[network]
 enabled = true
 
-[ftn.address]
+[network.profiles]
+
+[network.profiles.fidonet]
+name = "FidoNet"
+enabled = true
+adapter = "legacy-ftn"
+
+[network.profiles.fidonet.local_address]
+zone = 1
+net = 105
+node = 42
+point = 0
+
+[network.profiles.fidonet.areas]
+# Subscribed areas are managed by AreaFix or manual config
+
+[network.profiles.fsxnet]
+name = "fsxNet"
+enabled = true
+adapter = "legacy-ftn"
+
+[network.profiles.fsxnet.local_address]
+zone = 21
+net = 1
+node = 100
+point = 0
+
+[network.profiles.oxidenet]
+name = "OxideNet"
+enabled = true
+adapter = "oxidenet"
+
+[network.profiles.oxidenet.local_address]
 zone = 42
 net = 1
 node = 1
 point = 0
 
-[ftn.networks]
+[network.links]
 
-[ftn.networks.fidonet]
-name = "FidoNet"
-zone = 1
-enabled = true
-
-[ftn.networks.fidonet.areas]
-# Subscribed areas are managed by AreaFix or manual config
-
-[ftn.networks.fsxnet]
-name = "fsxNet"
-zone = 21
-enabled = true
-
-[ftn.networks.oxidenet]
-name = "OxideNet"
-zone = 42
-enabled = true
-
-[ftn.links]
-
-[ftn.links.hub_fidonet]
+[network.links.hub_fidonet]
+network = "fidonet"
 address = "1:1/0"
 host = "fidonet.example.net"
 binkp_port = 24554
 password = "secret-here"
-network = "fidonet"
 poll_schedule_minutes = 60
+transport_security = "plaintext_legacy" # explicit legacy compatibility opt-in
 
-[ftn.links.hub_fsxnet]
+[network.links.hub_fsxnet]
+network = "fsxnet"
 address = "21:1/100"
 host = "fsxnet.example.net"
 binkp_port = 24554
 password = "secret-there"
-network = "fsxnet"
 poll_schedule_minutes = 120
+transport_security = "plaintext_legacy" # explicit legacy compatibility opt-in
 
-[ftn.paths]
+[network.paths]
 inbound = "/var/lib/oxidebbs/ftn/inbound"
 outbound = "/var/lib/oxidebbs/ftn/outbound"
 nodelist_dir = "/var/lib/oxidebbs/ftn/nodelist"
@@ -211,29 +243,53 @@ temp_inbound = "/var/lib/oxidebbs/ftn/temp"
 quarantine = "/var/lib/oxidebbs/ftn/quarantine"
 log_dir = "/var/lib/oxidebbs/ftn/log"
 
-[ftn.tosser]
+[network.ftn.tosser]
 max_message_size_bytes = 65536
 max_packet_size_bytes = 1048576
 quarantine_on_malformed = true
 log_toss = true
 
-[ftn.scanner]
+[network.ftn.scanner]
 scan_interval_minutes = 30
 add_origin_line = true
 origin_template = "OxideBBS ({address})"
 ```
 
 Configuration validation must reject:
-- Zone 0, net 0, or node 0 in the local address
-- Duplicate link addresses
-- Links referencing networks not defined in `[ftn.networks]`
+- Zone 0, net 0, or node 0 in any per-network local address
+- Missing per-profile local addresses
+- Duplicate profile keys or link keys
+- Duplicate link addresses within the same network
+- Links referencing profiles not defined in `[network.profiles]`
+- `adapter = "oxidenet"` on a profile processed by `oxidebbs-ftn`
+- `transport_security = "plaintext_legacy"` on OxideNet or non-legacy private profiles
 - Paths that do not exist or are not writable at startup (warn, do not fail)
 
 ---
 
 ## Data model
 
-All FTN state is stored in DecentDB. The following tables extend the existing schema. They follow the same design rules as the existing tables in `design/DECENTDB_SCHEMA.md`.
+All shared network state and legacy FTN adapter state is stored in DecentDB. The following tables extend the existing schema. They follow the same design rules as the existing tables in `design/DECENTDB_SCHEMA.md`.
+
+Phase 0 must make the final naming decision before implementation. If these tables are shared by OxideNet and legacy FTN, prefer `network_*` table names. If OxideNet owns separate storage, reserve the `ftn_*` names below for the legacy FTN adapter only and remove `adapter = 'oxidenet'` from the FTN-specific tables.
+
+### Local message schema adjustment
+
+Imported network messages must be visible in local message areas without creating synthetic local users for every remote sender. Before FTN tossing imports messages, the existing `messages` schema must be migrated to support first-class external authors:
+
+```sql
+author_user_id UUID REFERENCES users(id) ON DELETE RESTRICT
+author_display_name TEXT NOT NULL DEFAULT ''
+author_network_address TEXT
+author_kind TEXT NOT NULL DEFAULT 'local'
+```
+
+Rules:
+- Existing local messages are backfilled with `author_display_name` from the referenced user alias and `author_kind = 'local'`.
+- New local posts set `author_user_id`, `author_display_name`, and `author_kind = 'local'`.
+- Imported FTN/OxideNet posts set `author_user_id = NULL`, preserve the remote sender in `author_display_name`, set `author_network_address`, and set `author_kind = 'network'`.
+- System-generated messages such as AreaFix replies may use `author_kind = 'system'`.
+- `author_kind` is one of `local`, `network`, or `system`.
 
 ### ftn_networks
 
@@ -241,18 +297,28 @@ All FTN state is stored in DecentDB. The following tables extend the existing sc
 id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID()
 key TEXT NOT NULL UNIQUE
 name TEXT NOT NULL
-zone INT NOT NULL
+adapter TEXT NOT NULL DEFAULT 'legacy-ftn'
+local_zone INT NOT NULL
+local_net INT NOT NULL
+local_node INT NOT NULL
+local_point INT NOT NULL DEFAULT 0
 enabled BOOL NOT NULL DEFAULT TRUE
 created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 ```
 
-One row per FTN network OxideBBS participates in (e.g. `fidonet`, `fsxnet`, `oxidenet`).
+One row per network profile OxideBBS participates in (e.g. `fidonet`, `fsxnet`, `oxidenet`) if Phase 0 keeps this as shared network state. If Phase 0 reserves this table for the legacy FTN adapter, it contains only `adapter = 'legacy-ftn'` rows.
+
+Constraints:
+- `adapter` is `legacy-ftn` or `oxidenet`
+- `local_zone`, `local_net`, and `local_node` are positive
+- `local_point` is `0..65535`
 
 ### ftn_links
 
 ```sql
 id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID()
+key TEXT NOT NULL UNIQUE
 network_id UUID NOT NULL REFERENCES ftn_networks(id) ON DELETE CASCADE
 address TEXT NOT NULL
 host TEXT NOT NULL
@@ -261,17 +327,19 @@ password TEXT NOT NULL
 poll_schedule_minutes INT NOT NULL DEFAULT 60
 enabled BOOL NOT NULL DEFAULT TRUE
 compression TEXT NOT NULL DEFAULT 'zip'
+transport_security TEXT NOT NULL DEFAULT 'tls_required'
 created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 ```
 
-A link is a system we exchange mail with. Each link belongs to a network. One link per FTN address.
+A link is a system we exchange mail with. Each link belongs to a network profile. One link per address within that profile.
 
 Constraints:
 - `(network_id, address)` is unique
 - `binkp_port` is `1..65535`
 - `poll_schedule_minutes` is positive
 - `compression` is one of `none`, `zip`, `arj`
+- `transport_security` is one of `tls_required`, `tls_opportunistic`, or `plaintext_legacy`
 
 ### ftn_areas
 
@@ -306,7 +374,8 @@ destination_address TEXT
 from_name TEXT NOT NULL
 to_name TEXT
 subject TEXT NOT NULL
-body TEXT NOT NULL
+raw_text BLOB NOT NULL
+display_body TEXT NOT NULL DEFAULT ''
 msgid TEXT
 replyid TEXT
 created_at TIMESTAMPTZ NOT NULL
@@ -319,7 +388,7 @@ packet_id UUID REFERENCES ftn_packets(id) ON DELETE SET NULL
 status TEXT NOT NULL DEFAULT 'imported'
 ```
 
-Stores the network representation of a message alongside its local representation. The `duplicate_hash` is computed from the MSGID (or a combination of fields for messages without MSGID).
+Stores the network representation of a message alongside its local representation. `raw_text` preserves the exact byte-oriented FTN message text from the packet after the packet terminator is removed. `display_body` is decoded through the configured message encoding for local UI/search convenience and is not used when re-emitting legacy FTN messages. The `duplicate_hash` is computed from the MSGID (or a combination of fields for messages without MSGID).
 
 Constraints:
 - `message_type` is `echomail`, `netmail`, or `local`
@@ -330,6 +399,35 @@ Indexes:
 - `(duplicate_hash)` where `duplicate_hash IS NOT NULL`
 - `(msgid)` where `msgid IS NOT NULL`
 - `(local_message_id)` where `local_message_id IS NOT NULL`
+
+### ftn_outbound_queue
+
+```sql
+id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID()
+network_id UUID NOT NULL REFERENCES ftn_networks(id) ON DELETE CASCADE
+link_id UUID NOT NULL REFERENCES ftn_links(id) ON DELETE CASCADE
+local_message_id UUID REFERENCES messages(id) ON DELETE SET NULL
+ftn_message_id UUID REFERENCES ftn_messages(id) ON DELETE SET NULL
+packet_id UUID REFERENCES ftn_packets(id) ON DELETE SET NULL
+message_type TEXT NOT NULL DEFAULT 'echomail'
+status TEXT NOT NULL DEFAULT 'queued'
+attempts INT NOT NULL DEFAULT 0
+queued_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+packed_at TIMESTAMPTZ
+sent_at TIMESTAMPTZ
+last_error TEXT
+```
+
+One row per message/link delivery attempt. This table is the authoritative export state; `ftn_messages.status = 'exported'` records that a network representation exists, not that every subscribed link has received it.
+
+Constraints:
+- `message_type` is `echomail` or `netmail`
+- `status` is `queued`, `packed`, `sent`, `failed`, `held`, or `skipped`
+- `(link_id, local_message_id)` is unique where `local_message_id IS NOT NULL` and the status is not terminal for duplicate prevention
+
+Indexes:
+- `(network_id, status, queued_at)`
+- `(link_id, status, queued_at)`
 
 ### ftn_packets
 
@@ -459,12 +557,73 @@ Constraints:
 
 ---
 
+## Phase 0: Shared network model, schema, and config
+
+### Objectives
+
+Create the shared protocol-neutral network layer and the DecentDB/config foundation needed by all later phases.
+
+### Deliverables
+
+- `oxidebbs-network` crate added to the workspace with explicit justification in its crate docs.
+- FTN-style address, duplicate-key, packet-boundary, network-message envelope, area-mapping trait, subscription trait, and queue-state types migrated from `oxidebbs-core` into `oxidebbs-network`.
+- `oxidebbs-core` temporarily re-exports migrated types while existing callers are updated.
+- `oxidebbs-server` config model updated for per-network local addresses, `adapter`, per-link compression, and `transport_security`.
+- DecentDB schema version bumped with a table-rebuild migration where required.
+- Local `messages` schema migrated for first-class external authors.
+- FTN tables and repository APIs implemented in `oxidebbs-db`.
+
+### Schema creation order
+
+The migration must create tables in dependency order:
+
+```text
+ftn_networks
+ftn_links
+ftn_areas
+ftn_packets
+ftn_messages
+ftn_seen_by
+ftn_path
+ftn_duplicate_log
+ftn_poll_log
+ftn_area_subscriptions
+ftn_outbound_queue
+ftn_nodelist (Phase 7)
+```
+
+`ftn_messages` and `ftn_outbound_queue` reference `ftn_packets`, so `ftn_packets` must exist before those tables are created even though the logical table descriptions above discuss messages first.
+
+If Phase 0 adopts `network_*` names for shared tables, apply the same dependency order with the final table names and keep only legacy-specific metadata in `ftn_*` tables.
+
+### Tests required
+
+- Fresh schema initializes with all Phase 0 tables.
+- Existing schema migrates without losing local users, areas, messages, sessions, doors, or audit events.
+- Existing local messages are backfilled with `author_kind = 'local'` and `author_display_name`.
+- Imported-network author rows can be inserted with `author_user_id = NULL`.
+- Config accepts multiple networks with different local addresses.
+- Config rejects invalid local addresses, unknown link network keys, and plaintext legacy transport on non-legacy packet profiles.
+
+### Definition of done
+
+- [ ] `oxidebbs-network` crate exists and has no dependency on `oxidebbs-core`, `oxidebbs-db`, `oxidebbs-ftn`, or `oxidebbs-server`
+- [ ] Existing network foundation types are re-exported from `oxidebbs-core` without a dependency cycle
+- [ ] Config supports multiple networks with independent local addresses
+- [ ] DecentDB migration and repository APIs exist for all Phase 0 tables
+- [ ] Local message authors support local, network, and system authors
+- [ ] All tests pass
+- [ ] `dev-check.sh` passes cleanly
+
+---
+
 ## Phase 1: FTN packet format
 
 ### Prerequisites
 
+- Phase 0 complete
 - `oxidebbs-ftn` crate created in workspace
-- Core types migrated from `oxidebbs-core::network` to `oxidebbs-ftn` (re-exported from `oxidebbs-core` during transition)
+- Shared network types available from `oxidebbs-network` and re-exported from `oxidebbs-core` during transition
 
 ### Objectives
 
@@ -506,8 +665,10 @@ Represents a Type-2 or Type-2+ packet header. Fields:
 
 The struct must implement:
 - `fn is_type2_plus(&self) -> bool` — returns true if `cap_word & 0x0001 != 0`
-- `fn originating_address(&self) -> FtnAddress` — constructs address from zone, net, node, point
-- `fn destination_address(&self) -> FtnAddress` — constructs address from zone, net, node, point
+- `fn originating_address(&self, context: PacketZoneContext) -> Result<FtnAddress, PacketError>` — constructs address from explicit Type-2+ fields or caller-supplied Type-2 zone context
+- `fn destination_address(&self, context: PacketZoneContext) -> Result<FtnAddress, PacketError>` — constructs address from explicit Type-2+ fields or caller-supplied Type-2 zone context
+
+`PacketZoneContext` supplies the network/link zones needed for legacy Type-2 packets that do not carry reliable zone fields.
 
 #### `PacketMessage` struct
 
@@ -520,11 +681,13 @@ Represents a single message within a packet. Fields:
 - `dest_net: u16`
 - `attribute: u16`
 - `cost: u16`
-- `datetime: String` (20 chars, format: `"DD MMM YY  HH:MM:SS"`)
-- `to_username: String` (max 36 chars)
-- `from_username: String` (max 36 chars)
-- `subject: String` (max 72 chars)
-- `text: String` (variable length)
+- `datetime_raw: [u8; 20]` (ASCII bytes, format: `"DD MMM YY  HH:MM:SS"`)
+- `to_username_raw: Vec<u8>` (max 36 bytes before NUL)
+- `from_username_raw: Vec<u8>` (max 36 bytes before NUL)
+- `subject_raw: Vec<u8>` (max 72 bytes before NUL)
+- `text_raw: Vec<u8>` (variable length, NUL terminator removed)
+
+Packet I/O is byte-oriented. Decoded `String` accessors may be provided for display and tests, but parsing and writing must preserve the original bytes except where OxideBBS deliberately composes a new outbound packet.
 
 #### `MessageAttribute` bitflags
 
@@ -594,11 +757,12 @@ The packet header's `prod_code` and `prod_rev` fields should identify OxideBBS:
 ### Technical details
 
 - All numeric fields in the packet header and message header are little-endian (u16 LE).
-- Null-terminated strings are stored as fixed-width fields (padded with null bytes) in the header and variable-length null-terminated strings in the message text.
+- Null-terminated fields are byte strings. Header fields are fixed-width and padded with null bytes; message fields are variable-length null-terminated byte strings.
 - The packet terminator is a u16 zero value where a message type field would be.
 - Passwords are compared case-insensitively as per FTN convention.
 - Type-2+ packets MUST include the capability word `0x0001` and its validation copy.
-- When reading Type-2 (non-2+) packets, the zone fields default to values derived from `orig_net`/`dest_net` and the point fields default to 0.
+- When reading Type-2 (non-2+) packets, point fields default to 0 and zones are resolved from the link/network context supplied by the tosser or caller. Zones must not be guessed from `orig_net` or `dest_net`.
+- Text decoding uses the configured network encoding (CP437 by default for legacy FTN). Packet parsing succeeds even when bytes are not valid UTF-8.
 
 ### Tests required
 
@@ -619,6 +783,7 @@ The packet header's `prod_code` and `prod_rev` fields should identify OxideBBS:
 - Handle messages with maximum-length fields (36-char username, 72-char subject)
 - Handle messages with empty text
 - Handle messages with control characters in text (kludges)
+- Preserve non-UTF-8 message text bytes through read/write round trips
 
 ### Documentation required
 
@@ -673,7 +838,7 @@ Parses the text body of an echomail message into structured kludge data. FTN ech
 | Origin | ` * Origin: Board Name (Z:N/N.P)\r` | Originating BBS |
 
 The parser must handle:
-- Null-terminated message text from `.pkt` format (byte 0 marks end of text)
+- Raw message text bytes from `.pkt` format after the packet reader removes the terminating NUL
 - `\r` (CR) as line terminator within `.pkt` messages
 - `\n` (LF) or `\r\n` should also be tolerated on input
 - Kludge lines starting with `^` (ASCII 0x01) before the blank separator line
@@ -695,10 +860,12 @@ struct FtnParsedMessage {
     seen_by: Vec<FtnAddress>,
     path: Vec<FtnAddress>,
     via: Vec<String>,
-    body_text: String,
+    body_raw: Vec<u8>,
+    body_display_text: String,
     tear_line: Option<String>,
     origin_line: Option<String>,
     origin_address: Option<FtnAddress>,
+    unknown_kludges: Vec<Vec<u8>>,
 }
 ```
 
@@ -706,8 +873,8 @@ struct FtnParsedMessage {
 
 Generates the raw message text (including kludges, body, SEEN-BY, PATH, tear, origin) from structured data. This is the inverse of the kludge parser.
 
-- `fn compose_echomail(params: &EchomailComposeParams) -> String`
-- `fn compose_netmail(params: &NetmailComposeParams) -> String`
+- `fn compose_echomail(params: &EchomailComposeParams) -> Vec<u8>`
+- `fn compose_netmail(params: &NetmailComposeParams) -> Vec<u8>`
 
 Output must use `\r` line terminators for `.pkt` format compatibility.
 
@@ -723,8 +890,9 @@ The parser must handle:
 - Space-separated address tokens
 - 2D addresses (`net/node`) — zone is implied from the message's originating zone
 - 3D addresses (`zone:net/node`) — explicit zone
-- Duplicate addresses (remove silently)
-- Out-of-order addresses (sort for canonical output)
+- Duplicate SEEN-BY addresses (remove silently)
+- Out-of-order SEEN-BY addresses (sort for canonical output)
+- PATH addresses in their original routing order; do not sort PATH
 
 ### Technical details
 
@@ -735,7 +903,8 @@ The parser must handle:
 - Tear line format: `---` followed by an optional software tag. Example: `--- OxideBBS/0.4.0`. The three dashes and a space are mandatory.
 - Origin line format: ` * Origin: Display Text (Z:N/N.P)`. The address in parentheses must be parseable as an `FtnAddress`.
 - SEEN-BY addresses use short format (net/node) within the same zone and long format (zone:net/node) for cross-zone.
-- PATH addresses follow the same conventions as SEEN-BY.
+- PATH addresses follow the same address syntax as SEEN-BY but preserve routing order.
+- Kludge names and routing addresses are ASCII-compatible control metadata. Message body bytes are decoded only for `body_display_text`; `body_raw` remains authoritative for duplicate hashing and re-export.
 
 ### Tests required
 
@@ -749,11 +918,13 @@ The parser must handle:
 - Parse SEEN-BY with duplicates
 - Parse PATH with mixed 2D and 3D addresses
 - Compose SEEN-BY and verify canonical output (sorted, deduplicated)
+- Compose PATH and verify original routing order is preserved
 - Round-trip: compose a message, parse it, verify all fields match
 - Handle edge cases: empty body, very long body (> 64 KB), messages with no origin line, messages with no tear line
 - Handle malformed kludge lines gracefully (skip and log, do not fail)
 - Verify `\r` line terminators in composed output
 - Verify MSGID and REPLYID are preserved exactly (no case folding)
+- Verify non-UTF-8 body bytes are preserved in `body_raw`
 
 ### Documentation required
 
@@ -765,7 +936,7 @@ The parser must handle:
 
 - [ ] `FtnParsedMessage` parses all echomail kludge types (AREA, MSGID, REPLY, INTL, FMPT, TOPT, FLAGS, SEEN-BY, PATH, Via)
 - [ ] `FtnMessageComposer` composes echomail and netmail messages with proper line terminators
-- [ ] `FtnAddressList` parses and sorts SEEN-BY/PATH address lists
+- [ ] `FtnAddressList` parses and sorts SEEN-BY address lists while preserving PATH order
 - [ ] Tear line and origin line parsing and composition work correctly
 - [ ] All tests pass
 - [ ] Rustdoc complete on all public types
@@ -780,7 +951,7 @@ The parser must handle:
 
 - Phase 1 complete
 - Phase 2 complete (MSGID parsing)
-- DecentDB `ftn_messages` and `ftn_duplicate_log` tables implemented in `oxidebbs-db`
+- Phase 0 complete (DecentDB `ftn_messages` and `ftn_duplicate_log` tables implemented in `oxidebbs-db`)
 
 ### Objectives
 
@@ -840,10 +1011,16 @@ Backed by the `ftn_messages` and `ftn_duplicate_log` tables in DecentDB.
 
 #### Duplicate hash computation
 
-When MSGID is present:
+When MSGID is present for echomail:
 
 ```text
-duplicate_hash = sha256(network_key + "\x00" + msgid)
+duplicate_hash = sha256(network_key + "\x00" + area_tag + "\x00" + msgid)
+```
+
+When MSGID is present for netmail:
+
+```text
+duplicate_hash = sha256(network_key + "\x00" + from_address.to_string() + "\x00" + to_address.to_string() + "\x00" + msgid)
 ```
 
 When MSGID is absent (fallback):
@@ -856,9 +1033,9 @@ The fallback hash must tolerate a ±5 minute clock skew window on `created_at` w
 
 ### Technical details
 
-- MSGID is the primary duplicate key. Two messages with the same MSGID in the same area are duplicates regardless of content.
+- MSGID is the primary duplicate key. Two echomail messages with the same MSGID in the same area are duplicates regardless of content. The same MSGID in different echo areas is treated as unique.
 - If MSGID is absent, the fallback hash uses multiple fields. A tolerance window of ±5 minutes on `created_at` prevents false negatives from clock drift.
-- Body hash uses SHA-256 of the raw message body bytes (after stripping trailing whitespace and normalizing line endings to `\r`).
+- Body hash uses SHA-256 of the raw message body bytes after stripping trailing whitespace and normalizing line endings to `\r`.
 - The duplicate check must happen before a message is imported into a local area. If a duplicate is found, the message is logged to `ftn_duplicate_log` and not imported.
 - Duplicate detection must be fast enough to handle a full inbound packet (potentially hundreds of messages) without blocking the toss for more than a few seconds.
 
@@ -899,7 +1076,7 @@ The fallback hash must tolerate a ±5 minute clock skew window on `created_at` w
 - Phase 1 complete (packet reading)
 - Phase 2 complete (kludge parsing)
 - Phase 3 complete (duplicate detection)
-- DecentDB `ftn_networks`, `ftn_links`, `ftn_areas`, `ftn_messages`, `ftn_packets`, `ftn_seen_by`, `ftn_path` tables implemented
+- Phase 0 complete (DecentDB `ftn_networks`, `ftn_links`, `ftn_areas`, `ftn_messages`, `ftn_packets`, `ftn_seen_by`, `ftn_path` tables implemented)
 
 ### Objectives
 
@@ -939,18 +1116,21 @@ struct Tosser {
    e. For echomail messages:
       - Find the local area mapped to the AREA tag.
       - If no mapping exists, quarantine or skip per configuration.
+      - Parse kludge lines (MSGID, REPLY, SEEN-BY, PATH, etc.).
       - Run duplicate detection.
       - If duplicate, log and skip.
-      - Parse kludge lines (MSGID, REPLY, SEEN-BY, PATH, etc.).
-      - Store the message in the local area via `oxidebbs-db`.
+      - Decode display text through the configured network encoding.
+      - Store the message in the local area via `oxidebbs-db` using `author_kind = 'network'`, `author_display_name`, and `author_network_address`.
       - Record SEEN-BY and PATH entries.
       - Record the message in `ftn_messages`.
    f. For netmail messages:
+      - Parse kludge lines (MSGID, INTL, FMPT, TOPT, FLAGS, Via, etc.).
       - Determine if the netmail is addressed to this system.
       - If addressed to this system, route to the local private mail area.
       - If addressed to another system, route to the outbound queue for forwarding.
       - Run duplicate detection.
-      - Store or forward as appropriate.
+      - Decode display text through the configured network encoding.
+      - Store or forward as appropriate using the external-author fields for imported messages.
 5. Move the processed .pkt to an archive directory.
 6. Log the toss results.
 ```
@@ -1020,7 +1200,7 @@ struct TossResult {
 - The tosser must handle both Type-2 and Type-2+ packets transparently.
 - Netmail addressed to this system (matching our address) should be delivered locally.
 - Netmail addressed to another system should be placed in the outbound queue for forwarding.
-- The tosser should process packets atomically per file: if a message fails, the packet is quarantined but previously processed messages from the same packet are retained.
+- The tosser is not all-or-nothing per packet. It records packet-level failures and quarantines the original file when needed, but successfully imported messages from earlier in the same packet are retained and recorded. Message-level failures are logged with enough context to avoid repeated silent retries.
 
 ### Tests required
 
@@ -1069,7 +1249,7 @@ struct TossResult {
 ### Prerequisites
 
 - Phase 4 complete (tosser handles inbound)
-- DecentDB tables for outbound tracking
+- DecentDB `ftn_outbound_queue` table for per-link outbound tracking
 
 ### Objectives
 
@@ -1094,21 +1274,20 @@ struct Scanner {
 
 ```text
 1. For each echomail area that has a network mapping:
-   a. Query DecentDB for messages in the local area that have not been exported
-      (local messages with no corresponding ftn_messages entry with status='exported').
-   b. For each new message:
-      - Compose the full echomail text: AREA tag, kludges, body, tear, origin.
-      - Add the local address to SEEN-BY and PATH.
-      - Create a PacketMessage from the composed text.
-2. Group messages by destination link:
-   - For each link, collect messages for areas the link is subscribed to.
-   - For each link, exclude messages where the link's address already appears in SEEN-BY
-     (loop prevention).
+   a. Query DecentDB for local messages eligible for export.
+   b. For each subscribed link, create a `ftn_outbound_queue` row when no active or successful row already exists for `(link_id, local_message_id)`.
+   c. Exclude messages where the link's address already appears in SEEN-BY before queueing (loop prevention).
+2. For each link with queued outbound rows:
+   a. Load queued messages for that link.
+   b. Add the local address to SEEN-BY and PATH metadata.
+   c. Compose the full echomail text: AREA tag, kludges, body, tear, origin, SEEN-BY, PATH.
+   d. Create a PacketMessage from the composed bytes.
 3. For each link:
-   a. Create a PacketHeader with our address as origin and the link address as destination.
+   a. Create a PacketHeader with our per-network local address as origin and the link address as destination.
    b. Write the messages into a .pkt file.
    c. Record the .pkt in ftn_packets.
-   d. Record each exported message in ftn_messages with status='exported'.
+   d. Record each network representation in ftn_messages with status='exported'.
+   e. Update corresponding `ftn_outbound_queue` rows to `packed` and attach `packet_id`.
 4. Optionally bundle .pkt files into compressed arcmail bundles.
 5. Place .pkt or bundle files in the outbound directory for the link.
 6. Log the scan results.
@@ -1156,7 +1335,8 @@ The scanner must:
 2. Add our own address to SEEN-BY before exporting.
 3. Add our own address to PATH before exporting.
 4. Use 2D format (net/node) for same-zone addresses and 3D format (zone:net/node) for cross-zone addresses in SEEN-BY and PATH.
-5. Sort SEEN-BY and PATH addresses for canonical output.
+5. Sort SEEN-BY addresses for canonical output.
+6. Preserve PATH routing order and append our own address at the end.
 
 #### Scan result
 
@@ -1177,7 +1357,8 @@ struct ScanResult {
 - The origin line must include the BBS name and FTN address in the standard format.
 - SEEN-BY and PATH must be added AFTER the body text and origin line, in that order.
 - For netmail, the INTL kludge is mandatory for cross-zone messages. FMPT and TOPT are mandatory if point addresses are nonzero.
-- The scanner must not export messages that are already marked as exported in `ftn_messages`.
+- The scanner must not create duplicate active queue rows for a `(link_id, local_message_id)` pair.
+- A message may be exported to one link and still remain queued or failed for another link.
 - Messages from moderated areas that are still in `MessageVisibility::PendingModeration` must not be exported until approved.
 
 ### Tests required
@@ -1186,7 +1367,9 @@ struct ScanResult {
 - Scan a local area with no new messages — verify no packets are created
 - Verify SEEN-BY includes our address after scanning
 - Verify PATH includes our address after scanning
-- Verify messages already exported are not scanned again
+- Verify messages with successful queue rows for a link are not queued for that same link again
+- Verify a message exported to one link can still be queued for another subscribed link
+- Verify failed queue rows can be retried without duplicating successful deliveries
 - Verify messages in a moderated area with `PendingModeration` status are not exported
 - Scan for two links — verify each link gets the correct messages based on area subscriptions
 - Verify loop prevention: a message with a link's address in SEEN-BY is not sent to that link
@@ -1214,7 +1397,8 @@ struct ScanResult {
 - [ ] PATH propagation works correctly
 - [ ] Messages are grouped by link and only sent to subscribed links
 - [ ] Outbound packets are written as Type-2+ with correct addresses
-- [ ] Exported messages are tracked in `ftn_messages` with `status='exported'`
+- [ ] Network message representations are tracked in `ftn_messages` with `status='exported'`
+- [ ] Per-link delivery state is tracked in `ftn_outbound_queue`
 - [ ] Moderated messages are not exported until approved
 - [ ] All tests pass
 - [ ] Rustdoc complete
@@ -1246,7 +1430,7 @@ NMNNNNNN.MO?
 
 Where:
 - `NM` = lower 2 hex digits of the source net
-- `NNNNNN` = ... actually the naming convention varies.
+- `NNNNNN` = implementation-specific address-pair encoding; Phase 6 must choose and document the exact convention before code is written.
 
 The most widely used convention (from hpt/GoldED/ifmail):
 
@@ -1395,7 +1579,7 @@ The parser must handle:
 - Entry types: Zone, Region, Host, Hub, Pvt, Hold, Down, and untyped (node entries with no keyword)
 - Keyword lines: `Zone`, `Region`, `Host`, `Hub`, `Pvt`, `Hold`, `Down`
 - Comma-separated fields: keyword, address, name, sysop, location, phone, speed, flags
-- Flags field: semicolon-separated key=value pairs and bare flags (CM, XA, MO, V34, etc.)
+- Flags: remaining comma-separated tokens after the speed field, including bare flags (CM, XA, MO, V34, etc.) and value-style flags such as `INA:host.example.net`
 - The address format in nodelist is `zone:net/node` for Zone entries, `net/node` for others, or just `node` for entries within a known net
 - Multi-line entries using continuation lines (a line starting with `,` continues the previous entry)
 
@@ -1484,7 +1668,7 @@ Indexes:
 - The phone field may contain `-` characters and non-numeric prefixes. Do not validate phone format strictly.
 - The speed field is a baud rate as an integer. Common values: 300, 1200, 2400, 9600, 14400, 28800, 33600, 56000.
 - Some nodelist entries use `Pvt` keyword with no phone number — these nodes are private and do not accept direct connections.
-- The flags field is semicolon-separated. Some flags have values (e.g., `INA:host.example.net`), others are bare (e.g., `CM`, `XA`).
+- Flags are comma-separated fields after speed. Some flags have values (e.g. `INA:host.example.net`), others are bare (e.g. `CM`, `XA`). Tolerate semicolon-separated flag fragments only as a non-standard compatibility fallback.
 - Building the nodelist index should be an idempotent operation — replacing the existing index with a new one.
 
 ### Tests required
@@ -1733,13 +1917,13 @@ Already subscribed: AREA.ALREADY
 
 ### Objectives
 
-Implement the BinkP protocol for TCP/IP-based FTN mail exchange. Create the `oxidebbs-binkp` crate.
+Implement the BinkP protocol for TCP/IP-based network mail exchange. Create the `oxidebbs-binkp` crate.
 
 ### Deliverables
 
 #### BinkP protocol implementation
 
-BinkP is a TCP/IP protocol for exchanging FTN packets and bundles. The protocol uses a series of frames:
+BinkP is a TCP/IP protocol for exchanging packet and bundle files. Legacy FTN uses it for `.pkt` and arcmail bundles; OxideNet may use the same transport for its internal packet files. The protocol uses a series of frames:
 
 | Frame | Description |
 |---|---|
@@ -1748,13 +1932,20 @@ BinkP is a TCP/IP protocol for exchanging FTN packets and bundles. The protocol 
 | M_PWD (2) | Session password |
 | M_FILE (3) | File offer (name, size, time) |
 | M_OK (4) | Password accepted |
-| M_GOT (5) | File received confirmation |
-| M_ERR (6) | Error |
-| M_BSY (7) | Busy / try later |
-| M_SKIP (8) | Skip this file |
-| M_END (9) | End of session |
+| M_EOB (5) | End of batch |
+| M_GOT (6) | File received confirmation |
+| M_ERR (7) | Fatal error |
+| M_BSY (8) | Busy / try later |
+| M_GET (9) | Request/resume file from offset |
+| M_SKIP (10) | Non-destructive skip; try in a later session |
 
-Frame format: `u16 frame_type | u16 length | data[length]`
+Frame format follows FSP-1011:
+
+```text
+u16 header | data[header & 0x7fff]
+```
+
+The two-octet header is read in network byte order. Its high bit marks the frame type. If the high bit is `0`, the frame is a data frame and the payload is file data. If the high bit is `1`, the frame is a command frame and the first payload byte is the command ID (`0..127`), followed by optional command arguments. The lower 15 bits are the payload size, so one frame carries at most 32767 bytes of data.
 
 #### `BinkpClient` (outbound poller)
 
@@ -1765,8 +1956,8 @@ struct BinkpClient {
 }
 
 impl BinkpClient {
-    async fn poll(&self, link: &FtnLinkConfig) -> Result<PollResult, BinkpError>;
-    async fn poll_dry_run(&self, link: &FtnLinkConfig) -> Result<(), BinkpError>;
+    async fn poll(&self, link: &NetworkLinkConfig) -> Result<PollResult, BinkpError>;
+    async fn poll_dry_run(&self, link: &NetworkLinkConfig) -> Result<(), BinkpError>;
 }
 ```
 
@@ -1778,17 +1969,18 @@ Connects to a remote BinkP server, authenticates, sends outbound files, receives
 struct BinkpServer {
     config: BinkpServerConfig,
     tls_config: TlsConfig,
-    links: Vec<FtnLinkConfig>,
+    links: Vec<NetworkLinkConfig>,
 }
 ```
 
 Listens for inbound BinkP connections, authenticates callers, receives their files, sends our files, and disconnects.
 
-#### TLS requirement
+#### Transport security policy
 
-- BinkP sessions must use TLS by default (via `tokio-rustls`).
-- Plaintext BinkP is allowed only with an explicit configuration flag for local testing.
-- Credentials and message content must not traverse unencrypted connections in production.
+- OxideNet and new private-network profiles require TLS by default (via `tokio-rustls`).
+- Legacy FTN links may use plaintext BinkP only when the link explicitly sets `transport_security = "plaintext_legacy"`.
+- Plaintext legacy mode must produce a startup warning and a poll-log warning because reusable BinkP passwords and message content are exposed.
+- `transport_security = "tls_opportunistic"` may be added later for deployments that can attempt TLS first and fall back for known legacy peers, but v1 should prefer either strict TLS or explicit plaintext legacy mode.
 
 #### Poll result
 
@@ -1805,13 +1997,14 @@ struct PollResult {
 
 ### Technical details
 
-- The BinkP protocol is a stateful request-response protocol. The client and server exchange frames in a defined sequence.
+- The BinkP protocol is stateful and full-duplex. Both sides can send command frames and data frames during the file-transfer stage.
 - M_NUL frames carry system information (system name, location, sysop name, timezone) and should be sent before authentication.
-- M_ADR carries one or more FTN addresses (comma-separated for systems with multiple addresses).
-- M_PWD carries the session password. The server compares it against the expected password for the M_ADR address.
+- M_ADR carries one or more FTN addresses separated by spaces.
+- M_PWD carries the session password. BinkP passwords are case-sensitive at the BinkP layer; legacy packet passwords remain case-insensitive where required by FTN packet convention.
 - M_FILE offers a file. The receiver acknowledges with M_GOT when the file has been received completely, or M_SKIP to refuse it.
-- M_END terminates the session gracefully.
-- File transfer uses a streaming protocol within the BinkP session. After M_FILE, the sender transmits the raw file data.
+- M_EOB marks end-of-batch. A session completes after both sides have finished sending files and pending M_GOT/M_SKIP acknowledgements have been processed.
+- File transfer uses BinkP data frames. After M_FILE, subsequent data frames carry bytes for that file until the advertised size is reached; there is no separate end-of-file frame.
+- M_GET supports resume from an offset. Basic v1 may reject resume with a clear error, but the frame parser must understand M_GET.
 - The client should support retry with exponential backoff on connection failure.
 - The client should log all poll activity to `ftn_poll_log`.
 - The server should reject connections from unknown addresses with M_ERR.
@@ -1823,6 +2016,9 @@ struct PollResult {
 - Client connects to a test server and authenticates successfully
 - Client connection fails with wrong password — verify M_ERR response
 - Client sends an outbound file and receives an inbound file
+- File data is sent and received as BinkP data frames, not unframed bytes
+- Session sends and receives M_EOB at end-of-batch
+- M_GET is parsed and handled or rejected explicitly
 - Server accepts an inbound connection from a known link
 - Server rejects an inbound connection from an unknown address
 - Server sends outbound files to a connected client
@@ -1832,7 +2028,7 @@ struct PollResult {
 - Concurrent connections from multiple links
 - Large file transfer (> 1 MB) completes successfully
 - Empty poll (no files to send or receive) completes gracefully
-- Session is terminated gracefully with M_END
+- Session is terminated gracefully after M_EOB and pending acknowledgements complete
 - Poll activity is logged to `ftn_poll_log`
 - Dry-run poll connects and disconnects without transferring files
 
@@ -1840,21 +2036,22 @@ struct PollResult {
 
 - Rustdoc on `BinkpClient`, `BinkpServer`, all frame types
 - BinkP protocol reference in `docs/ftn/binkp.md`
-- ADR for TLS-only policy and local testing exception
+- ADR for profile-aware BinkP transport security
 - Configuration reference for BinkP settings
 
 ### Definition of done
 
 - [ ] `oxidebbs-binkp` crate created in workspace
 - [ ] BinkP frame parser and writer implemented
+- [ ] Command frames and data frames use the FSP-1011 high-bit/15-bit-length header
 - [ ] `BinkpClient` connects, authenticates, sends and receives files
 - [ ] `BinkpServer` accepts connections, authenticates, sends and receives files
-- [ ] TLS is enabled by default, plaintext requires explicit opt-in
+- [ ] TLS is enabled by default for OxideNet/private profiles, plaintext legacy FTN requires explicit per-link opt-in
 - [ ] Retry with exponential backoff works
 - [ ] Poll activity logged to `ftn_poll_log`
 - [ ] All tests pass
 - [ ] Rustdoc complete
-- [ ] ADR written for TLS policy
+- [ ] ADR written for BinkP transport security policy
 - [ ] `dev-check.sh` passes cleanly
 
 ---
@@ -2068,7 +2265,7 @@ Complete documentation for sysops, developers, and FTN network operators.
 | Duplicate detection strategy | MSGID-primary, hash-fallback |
 | Outbound MSGID generation | Random hex vs. content hash vs. counter |
 | Netmail routing strategy | Direct, hub-routed, crash, hold |
-| TLS policy for BinkP | Required in production, optional for localhost testing |
+| BinkP transport security | TLS required for OxideNet/private profiles, explicit plaintext legacy mode for real FTN interop |
 | Bundle compression | ZIP for v1, ARJ deferred |
 | Nodelist differential updates | Full nodelist only for v1, incremental deferred |
 
@@ -2094,7 +2291,7 @@ The FTN networking implementation is complete when:
 5. OxideBBS can parse and index standard nodelist files.
 6. Netmail routing handles direct, hub-routed, crash, and hold scenarios.
 7. AreaFix processes subscription commands via netmail.
-8. BinkP transport works with TLS and plaintext modes.
+8. BinkP transport works with TLS-required profiles and explicit plaintext legacy FTN links.
 9. CLI commands allow the sysop to toss, scan, poll, manage areas, and view status.
 10. All tests pass: `cargo test --workspace --locked`.
 11. All lints pass: `cargo fmt --all --check && cargo clippy --workspace --all-targets --locked -- -D warnings`.
@@ -2108,22 +2305,24 @@ The FTN networking implementation is complete when:
 ## Phase dependency graph
 
 ```text
-Phase 1: Packet format
+Phase 0: Shared network model, schema, and config
   |
-  +-- Phase 2: Echomail message model
-  |     |
-  |     +-- Phase 3: Duplicate detection
-  |           |
-  |           +-- Phase 4: Tosser (inbound)
-  |           |     |
-  |           |     +-- Phase 5: Scanner (outbound)
-  |           |           |
-  |           |           +-- Phase 6: Bundle format
-  |           |           +-- Phase 8: Netmail routing
-  |           |
-  |           +-- Phase 9: AreaFix
-  |
-  +-- Phase 7: Nodelist
+  +-- Phase 1: Packet format
+        |
+        +-- Phase 2: Echomail message model
+        |     |
+        |     +-- Phase 3: Duplicate detection
+        |           |
+        |           +-- Phase 4: Tosser (inbound)
+        |                 |
+        |                 +-- Phase 5: Scanner (outbound)
+        |                       |
+        |                       +-- Phase 6: Bundle format
+        |                       +-- Phase 8: Netmail routing
+        |                             |
+        |                             +-- Phase 9: AreaFix
+        |
+        +-- Phase 7: Nodelist
 
 Phase 10: BinkP transport (depends on Phase 5, Phase 6)
 Phase 11: CLI commands (depends on Phase 4, 5, 7, 9, 10)
@@ -2135,8 +2334,8 @@ Multiple phases can be worked on in parallel once their prerequisites are comple
 
 - Phase 7 (Nodelist) can be done in parallel with Phase 2-5.
 - Phase 6 (Bundle format) can be done in parallel with Phase 4 (Tosser).
-- Phase 8 (Netmail routing) can be done in parallel with Phase 5 (Scanner).
-- Phase 9 (AreaFix) can be done in parallel with Phase 5-6.
+- Phase 8 (Netmail routing) can begin after scanner netmail packet creation and nodelist lookup interfaces exist.
+- Phase 9 (AreaFix) can begin after netmail routing exists, because replies are netmail.
 
 ---
 
