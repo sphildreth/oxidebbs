@@ -217,8 +217,9 @@ This is intended for a local coding agent to work from.
 - [x] Add end-to-end telnet/runtime smoke coverage for connect, new-user
   creation, logoff, shutdown, and lifecycle audit records.
 - [x] Reconcile roadmap/spec v1 readiness items: line input is implemented,
-  direct repository writes are documented as the v1 write model, and dedicated
-  welcome/logoff screen rendering is deferred beyond v1.
+  direct repository writes are documented as the v1 write model, terminal
+  welcome screen rendering is wired on connect, and dedicated logoff screen
+  rendering is deferred beyond v1.
 
 ## Docker Cross-Platform Deployment
 

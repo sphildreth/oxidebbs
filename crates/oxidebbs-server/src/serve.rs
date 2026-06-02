@@ -31,7 +31,10 @@ use oxidebbs_db::{
     insert_audit_event, insert_message, insert_message_area, insert_session, insert_user,
     list_message_areas, list_messages_in_area, update_session_user, update_user_login,
 };
-use oxidebbs_telnet::{TcpTransport, TelnetEvent, TelnetParser, Transport, TransportError};
+use oxidebbs_telnet::{
+    IAC, SB, SE, TELOPT_NAWS, TELOPT_TERMINAL_TYPE, TELOPT_TTYPE_SEND, TelnetCommand,
+    TcpTransport, TelnetEvent, TelnetParser, Transport, TransportError,
+};
 use oxidebbs_term::{
     LoadedScreen, ScreenAsset as TermScreenAsset, TerminalCapabilities, encode_cp437,
 };
@@ -67,6 +70,7 @@ pub(crate) type ServeResult<T> = Result<T, ServeError>;
 const REJECTION_MESSAGE: &str = "System is busy. Please try again later.\r\n";
 const PROMPT_TERMINATOR: &str = "\r\n";
 const MAIN_MENU_POST_LOGIN: &str = "Please choose from the menu.\r\n";
+const TERMINAL_CAPABILITY_NEGOTIATION_TIMEOUT: Duration = Duration::from_millis(300);
 
 pub async fn run(config: &OxideConfig, config_path: &Path) -> ServeResult<()> {
     run_until_shutdown(config, config_path, wait_for_shutdown_signal()).await
@@ -297,8 +301,13 @@ async fn handle_caller(
     let connected_at = current_timestamp(&db)?;
     let mut transport = TcpTransport::new(stream);
     let mut input = InputSession::default();
-    let mut capabilities = TerminalCapabilities::ansi_80();
     let idle_timeout = Duration::from_secs(config.telnet.idle_timeout_seconds);
+    let mut capabilities = negotiate_terminal_capabilities(
+        &mut transport,
+        &mut input,
+        TERMINAL_CAPABILITY_NEGOTIATION_TIMEOUT,
+    )
+    .await?;
     let mut authenticated_user: Option<User> = None;
 
     insert_session(
@@ -344,7 +353,7 @@ async fn handle_caller(
         format!("caller connected from {}", peer.address),
     );
 
-    if config.terminal.clear_screen_on_connect {
+    if config.terminal.clear_screen_on_connect && capabilities.supports_ansi {
         transport
             .write_all(oxidebbs_term::CLEAR_SCREEN_AND_HOME)
             .await
@@ -352,6 +361,13 @@ async fn handle_caller(
     }
 
     runtime.mark_node_login(node_number_u16);
+    send_terminal_asset(
+        &mut transport,
+        &config.terminal.welcome_screen,
+        &config,
+        capabilities,
+    )
+    .await?;
     send_login_flow(&mut transport, &config, &login_menu, &mut capabilities).await?;
 
     let mut in_main_menu = false;
@@ -1881,6 +1897,38 @@ async fn show_post_login_screens(
     send_text(transport, MAIN_MENU_POST_LOGIN).await
 }
 
+async fn send_terminal_asset(
+    transport: &mut TcpTransport,
+    asset_name: &str,
+    config: &OxideConfig,
+    capabilities: TerminalCapabilities,
+) -> ServeResult<()> {
+    let payload = load_terminal_asset_payload(config, asset_name, capabilities)
+        .unwrap_or_else(|error| fallback_screen_payload(asset_name, &error));
+    transport.write_all(&payload).await?;
+    Ok(())
+}
+
+fn load_terminal_asset_payload(
+    config: &OxideConfig,
+    asset_name: &str,
+    capabilities: TerminalCapabilities,
+) -> Result<Vec<u8>, String> {
+    let asset_path = config.paths.ansi.join(asset_name);
+    let bytes = std::fs::read(&asset_path).map_err(|error| {
+        format!(
+            "failed to read terminal asset {}: {error}",
+            asset_path.display()
+        )
+    })?;
+
+    if capabilities.supports_ansi {
+        Ok(bytes)
+    } else {
+        Ok(encode_text(&oxidebbs_term::render_plain_text(&bytes)))
+    }
+}
+
 async fn send_screen(
     transport: &mut TcpTransport,
     config: &OxideConfig,
@@ -2214,6 +2262,29 @@ mod tests {
     }
 
     #[test]
+    fn terminal_asset_payload_loads_from_ansi_path() {
+        let base_dir = temp_dir("terminal-asset");
+        let db_path = base_dir.join("oxidebbs.ddb");
+        let bind_addr = free_loopback_addr();
+        let config = smoke_config(bind_addr, &base_dir, &db_path);
+        std::fs::create_dir_all(&config.paths.ansi).expect("create ANSI dir");
+        std::fs::write(config.paths.ansi.join("welcome.ans"), b"\x1b[1mWelcome\r\n")
+            .expect("write welcome asset");
+
+        let ansi_payload =
+            load_terminal_asset_payload(&config, "welcome.ans", TerminalCapabilities::ansi_80())
+                .expect("load ANSI welcome");
+        assert_eq!(ansi_payload, b"\x1b[1mWelcome\r\n");
+
+        let plain_payload =
+            load_terminal_asset_payload(&config, "welcome.ans", TerminalCapabilities::plain_text())
+                .expect("load plain welcome");
+        assert_eq!(plain_payload, b"Welcome\r\n");
+
+        let _ = std::fs::remove_dir_all(base_dir);
+    }
+
+    #[test]
     fn node_slots_are_reused_after_drop() {
         let runtime = Arc::new(ServerRuntime::new("test".to_string(), 2, 4, 30));
         let first = runtime.try_allocate_node().expect("first slot");
@@ -2239,6 +2310,12 @@ mod tests {
         let bind_addr = free_loopback_addr();
         let mut config = smoke_config(bind_addr, &base_dir, &db_path);
         config.terminal.clear_screen_on_connect = false;
+        std::fs::create_dir_all(&config.paths.ansi).expect("create ANSI dir");
+        std::fs::write(
+            config.paths.ansi.join(&config.terminal.welcome_screen),
+            b"Smoke welcome\r\n",
+        )
+        .expect("write welcome screen");
 
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let server_config = config.clone();
@@ -2252,7 +2329,8 @@ mod tests {
         });
 
         let mut client = connect_with_retry(bind_addr).await;
-        read_until(&mut client, "Login? ").await;
+        let login_output = read_until(&mut client, "Login? ").await;
+        assert!(login_output.contains("Smoke welcome"));
         client.write_all(b"N\r").await.expect("select new user");
         read_until(&mut client, "Choose an alias: ").await;
         client.write_all(b"SmokeUser\r").await.expect("alias");

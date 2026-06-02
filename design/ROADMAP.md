@@ -103,5 +103,5 @@
 - Full FTN tosser/scanner
 - OxideNet network support
 - File transfer support, if still desired
-- Dedicated welcome/logoff screen rendering
+- Dedicated logoff screen rendering
 - DbWriter service if write contention emerges

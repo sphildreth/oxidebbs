@@ -296,10 +296,11 @@ target menu and remain in the resulting menu context at runtime; nested submenu
 navigation is supported. Guest access is not enabled by default in v1: callers
 must create or use an account before reaching the main menu.
 
-The runtime uses `flow.login_screen`, `flow.post_login_screens`, and
-`flow.main_menu` for caller screen routing. The `terminal.welcome_screen` and
-`terminal.logoff_screen` fields remain configuration metadata for future
-dedicated welcome/logoff rendering; logoff currently sends a plain goodbye line.
+The runtime sends `terminal.welcome_screen` from the configured ANSI asset path
+on connect, then uses `flow.login_screen`, `flow.post_login_screens`, and
+`flow.main_menu` for caller screen routing. The `terminal.logoff_screen` field
+remains configuration metadata for future dedicated logoff rendering; logoff
+currently sends a plain goodbye line.
 
 ## 10. Users and authentication
 
