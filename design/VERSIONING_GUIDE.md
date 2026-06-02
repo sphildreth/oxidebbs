@@ -34,8 +34,7 @@ Examples:
 
 ### Public release line
 
-No stable public release exists yet. The current scaffold line is `0.1.x`; the
-first compatibility-stable line begins at `v1.0.0`.
+The first compatibility-stable public release line begins at `v1.0.0`.
 
 ## 2. Source of truth
 
@@ -79,7 +78,7 @@ product releases by themselves.
 
 ### Documentation
 
-- `CHANGELOG.md`  
+- `docs/about/changelog.md`
   Add release notes under `Unreleased` or under the new version heading,
   depending on the release process being used.
 - `README.md`
@@ -144,7 +143,7 @@ package version, refresh and commit the lockfile.
 1. Decide the next version according to SemVer, using the highest-impact rule
    above.
 2. Update OxideBBS crate versions in `crates/*/Cargo.toml`.
-3. Update release notes in `CHANGELOG.md`.
+3. Update release notes in `docs/about/changelog.md`.
 4. Update user-facing docs and examples that changed with the release.
 5. Refresh `Cargo.lock` if package metadata or dependencies changed.
 6. Refresh `package-lock.json` if documentation package metadata or dependencies
@@ -198,7 +197,7 @@ rg 'OLD_VERSION|vOLD_VERSION' \
   Cargo.lock \
   package.json \
   package-lock.json \
-  CHANGELOG.md \
+  docs/about/changelog.md \
   README.md \
   docs \
   design \

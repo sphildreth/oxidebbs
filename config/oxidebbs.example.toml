@@ -113,8 +113,8 @@ label = "New User"
 action = "new_user"
 
 [[menus.main.items]]
-key = "L"
-label = "Logoff"
+key = "G"
+label = "Goodbye"
 action = "logoff"
 
 [doors]

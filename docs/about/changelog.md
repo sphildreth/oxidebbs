@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+No changes yet.
+
+## [1.0.0] - 2026-06-02
+
 ### Added
 
 - Added persistent authentication abuse controls backed by DecentDB
@@ -169,6 +173,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Plain telnet callers now receive terminal-level `.asc`/`.txt` welcome assets
   when available instead of stripped CP437 ANSI art that common telnet clients
   render as mojibake.
+- Default welcome and main-menu assets now show all configured starter menu
+  keys, and the default main-menu goodbye/logoff action uses `[G] Goodbye`
+  consistently with the login menu.
 
 ### Removed
 

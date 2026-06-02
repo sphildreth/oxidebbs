@@ -127,7 +127,7 @@ mod tests {
     fn status_json_shape_matches_contract() {
         let payload = status_json_payload(StatusJsonSummary {
             board_name: "Example BBS",
-            version: "0.2.0",
+            version: "1.0.0",
             database: std::path::Path::new("./data/oxidebbs.ddb"),
             telnet: "127.0.0.1:2323",
             total_nodes: 4,
@@ -139,7 +139,7 @@ mod tests {
 
         let payload = payload.as_object().expect("status payload object");
         assert_eq!(payload.get("board"), Some(&json!("Example BBS")));
-        assert_eq!(payload.get("version"), Some(&json!("0.2.0")));
+        assert_eq!(payload.get("version"), Some(&json!("1.0.0")));
         assert_eq!(payload.get("telnet"), Some(&json!("127.0.0.1:2323")));
         let nodes = payload
             .get("nodes")

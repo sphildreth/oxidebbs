@@ -32,23 +32,22 @@ The CLI should be the source of truth. The TUI should call the same underlying s
 
 ## Command shape
 
-Preferred binary name:
-
-```bash
-oxidebbs
-```
-
-Alternative binary name if split later:
+V1 binary name:
 
 ```bash
 oxidebbs-server
+```
+
+Separate helper crate/binary area:
+
+```bash
 oxidebbs-sysop
 ```
 
 Recommended v1 shape:
 
 ```bash
-oxidebbs <command> [options]
+oxidebbs-server <command> [options]
 ```
 
 Global options:
@@ -68,17 +67,17 @@ list`, `messages areas list`, `doors list`, and `db stats`.
 ## Essential v1 command groups
 
 ```text
-oxidebbs serve
-oxidebbs setup
-oxidebbs check
-oxidebbs status
-oxidebbs users ...
-oxidebbs nodes ...
-oxidebbs messages ...
-oxidebbs doors ...
-oxidebbs ansi ...
-oxidebbs db ...
-oxidebbs logs ...
+oxidebbs-server serve
+oxidebbs-server setup
+oxidebbs-server check
+oxidebbs-server status
+oxidebbs-server users ...
+oxidebbs-server nodes ...
+oxidebbs-server messages ...
+oxidebbs-server doors ...
+oxidebbs-server ansi ...
+oxidebbs-server db ...
+oxidebbs-server logs ...
 ```
 
 Canonical top-level order is currently:
@@ -106,7 +105,7 @@ with Clap help appended after the command list.
 ### 1. Start the BBS
 
 ```bash
-oxidebbs serve --config config/oxidebbs.toml
+oxidebbs-server serve --config config/oxidebbs.toml
 ```
 
 Starts the telnet server and runs the board.
@@ -127,15 +126,15 @@ Required behavior:
 Useful options:
 
 ```bash
-oxidebbs serve --config config/oxidebbs.toml
-oxidebbs serve --bind 0.0.0.0:2323  # explicit plaintext public bind
-oxidebbs serve --dry-run
+oxidebbs-server serve --config config/oxidebbs.toml
+oxidebbs-server serve --bind 0.0.0.0:2323  # explicit plaintext public bind
+oxidebbs-server serve --dry-run
 ```
 
 ### 2. Setup a new board
 
 ```bash
-oxidebbs setup
+oxidebbs-server setup
 ```
 
 Creates a new local OxideBBS instance.
@@ -164,13 +163,13 @@ Create sample ANSI screens? [Y/n]:
 Non-interactive option:
 
 ```bash
-oxidebbs setup --board-name "My BBS" --sysop-alias sysop --nodes 4
+oxidebbs-server setup --board-name "My BBS" --sysop-alias sysop --nodes 4
 ```
 
 ### 3. Validate configuration
 
 ```bash
-oxidebbs check
+oxidebbs-server check
 ```
 
 Required behavior:
@@ -187,13 +186,13 @@ Required behavior:
 
 This should be one of the most polished v1 commands.
 
-`oxidebbs check` is expected to return no errors for
+`oxidebbs-server check` is expected to return no errors for
 `config/oxidebbs.example.toml`.
 
 ### 4. Show board status
 
 ```bash
-oxidebbs status
+oxidebbs-server status
 ```
 
 Required behavior:
@@ -216,7 +215,7 @@ Example output:
 ```text
 OxideBBS Status
 Board:        Blackboard BBS
-Version:      0.2.0
+Version:      1.0.0
 Database:     ./data/oxidebbs.ddb
 Telnet:       127.0.0.1:2323
 Nodes:        4 total, 1 active
@@ -229,24 +228,24 @@ Messages:     5 areas
 ### Essential v1
 
 ```bash
-oxidebbs users list
-oxidebbs users show <alias-or-id>
-oxidebbs users add
-oxidebbs users reset-password <alias-or-id>
-oxidebbs users set-level <alias-or-id> <level>
-oxidebbs users enable <alias-or-id>
-oxidebbs users disable <alias-or-id>
-oxidebbs users promote-sysop <alias-or-id>
-oxidebbs users demote-sysop <alias-or-id>
+oxidebbs-server users list
+oxidebbs-server users show <alias-or-id>
+oxidebbs-server users add
+oxidebbs-server users reset-password <alias-or-id>
+oxidebbs-server users set-level <alias-or-id> <level>
+oxidebbs-server users enable <alias-or-id>
+oxidebbs-server users disable <alias-or-id>
+oxidebbs-server users promote-sysop <alias-or-id>
+oxidebbs-server users demote-sysop <alias-or-id>
 ```
 
 ### Nice for v1.1
 
 ```bash
-oxidebbs users rename <old-alias> <new-alias>
-oxidebbs users audit <alias-or-id>
-oxidebbs users sessions <alias-or-id>
-oxidebbs users delete <alias-or-id>
+oxidebbs-server users rename <old-alias> <new-alias>
+oxidebbs-server users audit <alias-or-id>
+oxidebbs-server users sessions <alias-or-id>
+oxidebbs-server users delete <alias-or-id>
 ```
 
 ### Notes
@@ -258,20 +257,20 @@ oxidebbs users delete <alias-or-id>
 ### Essential v1
 
 ```bash
-oxidebbs nodes list
-oxidebbs nodes watch
-oxidebbs nodes show <node-number>
-oxidebbs nodes disconnect <node-number>
-oxidebbs nodes message <node-number> "Message text"
-oxidebbs nodes broadcast "Message text"
+oxidebbs-server nodes list
+oxidebbs-server nodes watch
+oxidebbs-server nodes show <node-number>
+oxidebbs-server nodes disconnect <node-number>
+oxidebbs-server nodes message <node-number> "Message text"
+oxidebbs-server nodes broadcast "Message text"
 ```
 
 ### Nice for v1.1
 
 ```bash
-oxidebbs nodes disable <node-number>
-oxidebbs nodes enable <node-number>
-oxidebbs nodes reset-stale
+oxidebbs-server nodes disable <node-number>
+oxidebbs-server nodes enable <node-number>
+oxidebbs-server nodes reset-stale
 ```
 
 ### Required node states
@@ -330,24 +329,24 @@ proceed until CSRF and replay protections are in place.
 ### Essential v1
 
 ```bash
-oxidebbs messages areas list
-oxidebbs messages areas add <key> --name "General"
-oxidebbs messages areas show <key>
-oxidebbs messages areas enable <key>
-oxidebbs messages areas disable <key>
-oxidebbs messages list --area <key>
-oxidebbs messages show <message-id>
-oxidebbs messages delete <message-id>
+oxidebbs-server messages areas list
+oxidebbs-server messages areas add <key> --name "General"
+oxidebbs-server messages areas show <key>
+oxidebbs-server messages areas enable <key>
+oxidebbs-server messages areas disable <key>
+oxidebbs-server messages list --area <key>
+oxidebbs-server messages show <message-id>
+oxidebbs-server messages delete <message-id>
 ```
 
 ### Nice for v1.1
 
 ```bash
-oxidebbs messages areas set-level <key> --read <level> --post <level>
-oxidebbs messages move <message-id> --to-area <key>
-oxidebbs messages lock <message-id>
-oxidebbs messages unlock <message-id>
-oxidebbs messages search <query>
+oxidebbs-server messages areas set-level <key> --read <level> --post <level>
+oxidebbs-server messages move <message-id> --to-area <key>
+oxidebbs-server messages lock <message-id>
+oxidebbs-server messages unlock <message-id>
+oxidebbs-server messages search <query>
 ```
 
 ### Notes
@@ -361,23 +360,23 @@ Door commands are essential because DOS door support is a flagship OxideBBS feat
 ### Essential v1
 
 ```bash
-oxidebbs doors list
-oxidebbs doors show <door-key>
-oxidebbs doors check <door-key>
-oxidebbs doors enable <door-key>
-oxidebbs doors disable <door-key>
-oxidebbs doors test <door-key> --user <alias>
-oxidebbs doors dropfile <door-key> --user <alias> --node <number>
+oxidebbs-server doors list
+oxidebbs-server doors show <door-key>
+oxidebbs-server doors check <door-key>
+oxidebbs-server doors enable <door-key>
+oxidebbs-server doors disable <door-key>
+oxidebbs-server doors test <door-key> --user <alias>
+oxidebbs-server doors dropfile <door-key> --user <alias> --node <number>
 ```
 
 ### Nice for v1.1
 
 ```bash
-oxidebbs doors add
-oxidebbs doors edit <door-key>
-oxidebbs doors runs
-oxidebbs doors runs show <run-id>
-oxidebbs doors cleanup
+oxidebbs-server doors add
+oxidebbs-server doors edit <door-key>
+oxidebbs-server doors runs
+oxidebbs-server doors runs show <run-id>
+oxidebbs-server doors cleanup
 ```
 
 ### `doors check`
@@ -399,7 +398,7 @@ Should run a door in a controlled sysop test mode.
 It should be possible to test drop-file generation without launching the door:
 
 ```bash
-oxidebbs doors test lord --user sysop --dry-run
+oxidebbs-server doors test lord --user sysop --dry-run
 ```
 
 ### `doors dropfile`
@@ -407,8 +406,8 @@ oxidebbs doors test lord --user sysop --dry-run
 This is important for troubleshooting. It should print or write the generated drop file for inspection:
 
 ```bash
-oxidebbs doors dropfile lord --user sysop --node 1 --format door.sys
-oxidebbs doors dropfile lord --user sysop --node 1 --format dorinfo1.def
+oxidebbs-server doors dropfile lord --user sysop --node 1 --format door.sys
+oxidebbs-server doors dropfile lord --user sysop --node 1 --format dorinfo1.def
 ```
 
 ## ANSI/screen commands
@@ -416,18 +415,18 @@ oxidebbs doors dropfile lord --user sysop --node 1 --format dorinfo1.def
 ### Essential v1
 
 ```bash
-oxidebbs ansi list
-oxidebbs ansi show <screen-name>
-oxidebbs ansi validate <screen-name>
-oxidebbs ansi install-defaults
+oxidebbs-server ansi list
+oxidebbs-server ansi show <screen-name>
+oxidebbs-server ansi validate <screen-name>
+oxidebbs-server ansi install-defaults
 ```
 
 ### Nice for v1.1
 
 ```bash
-oxidebbs ansi preview <screen-name>
-oxidebbs ansi convert <input> --from utf8 --to cp437
-oxidebbs ansi inspect <screen-name>
+oxidebbs-server ansi preview <screen-name>
+oxidebbs-server ansi convert <input> --from utf8 --to cp437
+oxidebbs-server ansi inspect <screen-name>
 ```
 
 ### Notes
@@ -441,19 +440,19 @@ configured ANSI/screen paths without overwriting customized files.
 ### Essential v1
 
 ```bash
-oxidebbs db init
-oxidebbs db doctor
-oxidebbs db stats
-oxidebbs db backup <output-path>
+oxidebbs-server db init
+oxidebbs-server db doctor
+oxidebbs-server db stats
+oxidebbs-server db backup <output-path>
 ```
 
 ### Nice for v1.1
 
 ```bash
-oxidebbs db export --format json
-oxidebbs db import --format json <path>
-oxidebbs db compact
-oxidebbs db verify
+oxidebbs-server db export --format json
+oxidebbs-server db import --format json <path>
+oxidebbs-server db compact
+oxidebbs-server db verify
 ```
 
 ### Notes
@@ -473,18 +472,18 @@ audit events.
 ### Essential v1
 
 ```bash
-oxidebbs logs tail
-oxidebbs logs recent
-oxidebbs audit recent
-oxidebbs audit user <alias-or-id>
+oxidebbs-server logs tail
+oxidebbs-server logs recent
+oxidebbs-server audit recent
+oxidebbs-server audit user <alias-or-id>
 ```
 
 ### Nice for v1.1
 
 ```bash
-oxidebbs logs search <query>
-oxidebbs audit node <node-number>
-oxidebbs audit door <door-key>
+oxidebbs-server logs search <query>
+oxidebbs-server audit node <node-number>
+oxidebbs-server audit door <door-key>
 ```
 
 ## Config commands
@@ -492,16 +491,16 @@ oxidebbs audit door <door-key>
 ### Essential v1
 
 ```bash
-oxidebbs config show
-oxidebbs config check
-oxidebbs config paths
+oxidebbs-server config show
+oxidebbs-server config check
+oxidebbs-server config paths
 ```
 
 ### Nice for v1.1
 
 ```bash
-oxidebbs config set <key> <value>
-oxidebbs config get <key>
+oxidebbs-server config set <key> <value>
+oxidebbs-server config get <key>
 ```
 
 ### Notes
@@ -515,7 +514,7 @@ The Ratatui console should be v1.x unless implementation momentum is very high.
 Launch command:
 
 ```bash
-oxidebbs sysop
+oxidebbs-server sysop
 ```
 
 Recommended first screen:
@@ -555,40 +554,40 @@ The TUI should not duplicate business logic. It should call the same application
 If v1 has to be ruthless, these are the must-have commands:
 
 ```bash
-oxidebbs setup
-oxidebbs check
-oxidebbs serve
-oxidebbs status
+oxidebbs-server setup
+oxidebbs-server check
+oxidebbs-server serve
+oxidebbs-server status
 
-oxidebbs users list
-oxidebbs users show <alias-or-id>
-oxidebbs users add
-oxidebbs users reset-password <alias-or-id>
-oxidebbs users set-level <alias-or-id> <level>
-oxidebbs users disable <alias-or-id>
+oxidebbs-server users list
+oxidebbs-server users show <alias-or-id>
+oxidebbs-server users add
+oxidebbs-server users reset-password <alias-or-id>
+oxidebbs-server users set-level <alias-or-id> <level>
+oxidebbs-server users disable <alias-or-id>
 
-oxidebbs nodes list
-oxidebbs nodes disconnect <node-number>
-oxidebbs nodes broadcast "Message text"
+oxidebbs-server nodes list
+oxidebbs-server nodes disconnect <node-number>
+oxidebbs-server nodes broadcast "Message text"
 
-oxidebbs messages areas list
-oxidebbs messages areas add <key> --name "Name"
-oxidebbs messages delete <message-id>
+oxidebbs-server messages areas list
+oxidebbs-server messages areas add <key> --name "Name"
+oxidebbs-server messages delete <message-id>
 
-oxidebbs doors list
-oxidebbs doors show <door-key>
-oxidebbs doors check <door-key>
-oxidebbs doors test <door-key> --user <alias> --dry-run
-oxidebbs doors dropfile <door-key> --user <alias> --node <number>
+oxidebbs-server doors list
+oxidebbs-server doors show <door-key>
+oxidebbs-server doors check <door-key>
+oxidebbs-server doors test <door-key> --user <alias> --dry-run
+oxidebbs-server doors dropfile <door-key> --user <alias> --node <number>
 
-oxidebbs ansi list
-oxidebbs ansi validate <screen-name>
+oxidebbs-server ansi list
+oxidebbs-server ansi validate <screen-name>
 
-oxidebbs db doctor
-oxidebbs db backup <output-path>
+oxidebbs-server db doctor
+oxidebbs-server db backup <output-path>
 
-oxidebbs logs tail
-oxidebbs audit recent
+oxidebbs-server logs tail
+oxidebbs-server audit recent
 ```
 
 ## Commands that can wait
@@ -596,13 +595,13 @@ oxidebbs audit recent
 These should not block v1:
 
 ```bash
-oxidebbs users delete
-oxidebbs messages search
-oxidebbs doors add
-oxidebbs doors edit
-oxidebbs ansi convert
-oxidebbs config set
-oxidebbs sysop
+oxidebbs-server users delete
+oxidebbs-server messages search
+oxidebbs-server doors add
+oxidebbs-server doors edit
+oxidebbs-server ansi convert
+oxidebbs-server config set
+oxidebbs-server sysop
 ```
 
 ## Implementation recommendation

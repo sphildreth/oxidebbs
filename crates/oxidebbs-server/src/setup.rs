@@ -407,8 +407,8 @@ pub fn build_setup_toml(answers: &SetupAnswers) -> io::Result<String> {
                     action: "new_user".to_string(),
                 },
                 GeneratedMenuItemConfig {
-                    key: "L".to_string(),
-                    label: "Logoff".to_string(),
+                    key: "G".to_string(),
+                    label: "Goodbye".to_string(),
                     action: "logoff".to_string(),
                 },
             ],
@@ -708,7 +708,7 @@ fn prompt_yes_no<R: BufRead, W: Write>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::OxideConfig;
+    use crate::config::{MenuItemConfig, OxideConfig};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_path(tag: &str) -> PathBuf {
@@ -775,6 +775,41 @@ mod tests {
         assert!(parsed.doors.enabled);
         assert_eq!(parsed.doors.definitions.len(), 1);
         assert!(parsed.doors.definitions[0].enabled);
+    }
+
+    #[test]
+    fn generated_default_menu_assets_show_all_default_menu_keys() {
+        let generated = build_setup_toml(&SetupAnswers::default()).expect("generate setup config");
+        let parsed: OxideConfig = toml::from_str(&generated).expect("parse generated config");
+        parsed.validate().expect("validate generated config");
+
+        assert_default_menu_asset_contains_items(
+            include_str!("../../../assets/screens/login/login.asc"),
+            &parsed.menus["login"].items,
+        );
+        assert_default_menu_asset_contains_items(
+            include_str!("../../../assets/screens/menus/main/main.asc"),
+            &parsed.menus["main"].items,
+        );
+        assert_default_menu_asset_contains_items(
+            include_str!("../../../assets/screens/menus/main/main.txt"),
+            &parsed.menus["main"].items,
+        );
+    }
+
+    fn assert_default_menu_asset_contains_items(asset: &str, items: &[MenuItemConfig]) {
+        for item in items {
+            assert!(
+                asset.contains(&format!("[{}]", item.key)) || asset.contains(&item.key),
+                "default menu asset should show key {}",
+                item.key
+            );
+            assert!(
+                asset.contains(&item.label),
+                "default menu asset should show label {}",
+                item.label
+            );
+        }
     }
 
     #[test]
