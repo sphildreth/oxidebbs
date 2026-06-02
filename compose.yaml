@@ -1,0 +1,30 @@
+services:
+  oxidebbs:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: oxidebbs:local
+    init: true
+    environment:
+      OXIDEBBS_BOARD_NAME: ${OXIDEBBS_BOARD_NAME:-OxideBBS}
+      OXIDEBBS_SYSOP_ALIAS: ${OXIDEBBS_SYSOP_ALIAS:-sysop}
+      OXIDEBBS_SYSOP_PASSWORD: ${OXIDEBBS_SYSOP_PASSWORD:-change-this-before-going-live}
+      OXIDEBBS_NODES: ${OXIDEBBS_NODES:-4}
+      OXIDEBBS_TELNET_PORT: 2323
+      OXIDEBBS_ENABLE_TEST_DOOR: ${OXIDEBBS_ENABLE_TEST_DOOR:-1}
+      RUST_LOG: ${RUST_LOG:-oxidebbs=info}
+    ports:
+      - "${OXIDEBBS_HOST_TELNET_PORT:-2323}:2323"
+    volumes:
+      - oxidebbs-config:/srv/oxidebbs/config
+      - oxidebbs-data:/srv/oxidebbs/data
+      - oxidebbs-doors:/srv/oxidebbs/doors
+      - oxidebbs-logs:/srv/oxidebbs/logs
+      - oxidebbs-runtime:/srv/oxidebbs/runtime
+
+volumes:
+  oxidebbs-config:
+  oxidebbs-data:
+  oxidebbs-doors:
+  oxidebbs-logs:
+  oxidebbs-runtime:

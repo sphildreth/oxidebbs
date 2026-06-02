@@ -53,6 +53,14 @@ v1:
 - COM1 PTY bridge (`OXCOM1.PTY`)
 - Host byte bridge to caller transport
 
-Future:
+## Deployment
+
+v1:
+
+- Linux runtime target
+- Docker/Compose cross-platform deployment path for Windows, macOS, and Linux
+- Docker named volumes for config, DecentDB data, doors, logs, and runtime PTYs
+
+## Future Door Runtime
 
 - native door API (server-local)

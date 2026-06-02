@@ -107,6 +107,22 @@ cargo run -p oxidebbs-server -- setup
 The wizard writes `config/oxidebbs.toml` by default and creates the starter
 paths for data, assets, doors, runtime files, and logs.
 
+## Docker quick start
+
+Docker Compose is the supported cross-platform deployment path for Windows,
+macOS, and Linux while OxideBBS remains a Linux-targeted runtime:
+
+```bash
+OXIDEBBS_SYSOP_PASSWORD='choose-a-real-password' docker compose up -d --build
+```
+
+Connect to `localhost:2323` with telnet or SyncTERM. The Docker image includes
+DOSEMU2 and the bundled Oxide-owned `oxide-check` DOS test door, so host systems
+do not need a native DOSEMU2 install for Docker deployment.
+Use `OXIDEBBS_HOST_TELNET_PORT` to publish a different host port.
+
+See `docs/project/docker.md` for volume, reset, and door-testing details.
+
 ## Run the server
 
 Start the telnet listener with:

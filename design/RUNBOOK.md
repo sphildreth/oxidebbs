@@ -6,6 +6,29 @@
 cargo run -p oxidebbs-server -- serve
 ```
 
+## Docker operator flow
+
+Docker Compose is the preferred cross-platform evaluation/deployment path when
+the host is Windows, macOS, or any system where the sysop does not want to
+install Rust, DecentDB build headers, or DOSEMU2 natively:
+
+```bash
+OXIDEBBS_SYSOP_PASSWORD='choose-a-real-password' docker compose up -d --build
+docker compose run --rm oxidebbs status
+docker compose run --rm oxidebbs doors check oxide-check
+```
+
+The container uses Docker named volumes for config, data, doors, logs, and
+runtime paths. Do not bind-mount runtime or data directories from Windows/macOS
+for normal operation; the DOSEMU2 PTY bridge and DecentDB storage should remain
+on Linux filesystems.
+
+Reset a Docker board with:
+
+```bash
+docker compose down -v
+```
+
 ## Operator flow
 
 1. bootstrap once:

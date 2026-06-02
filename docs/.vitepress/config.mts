@@ -19,6 +19,7 @@ export default defineConfig({
     siteTitle: 'OxideBBS',
     nav: [
       { text: 'Guide', link: '/project/getting-started' },
+      { text: 'Docker', link: '/project/docker' },
       { text: 'Setup', link: '/project/setup' },
       { text: 'Architecture', link: '/project/architecture' },
       { text: 'Menus', link: '/project/menus' },
@@ -32,7 +33,9 @@ export default defineConfig({
         items: [
           { text: 'Overview', link: '/' },
           { text: 'Getting Started', link: '/project/getting-started' },
+          { text: 'Docker Deployment', link: '/project/docker' },
           { text: 'Setup Wizard', link: '/project/setup' },
+          { text: 'DOSEMU2 On Fedora', link: '/project/dosemu2-fedora' },
           { text: 'Architecture', link: '/project/architecture' },
           { text: 'Menu System', link: '/project/menus' },
           { text: 'Sysop CLI', link: '/project/sysop-cli' },

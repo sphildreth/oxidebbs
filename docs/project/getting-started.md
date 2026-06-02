@@ -24,6 +24,10 @@ From repository root, the normal validation command is:
 ./scripts/dev-check.sh
 ```
 
+For Windows, macOS, or sysops who want the packaged Linux runtime with DOSEMU2
+included, start with [Docker Deployment](/project/docker) instead of installing
+native build prerequisites.
+
 ## 1) Create a board
 
 ```bash
@@ -71,6 +75,10 @@ dosemu --version
 ```
 
 The version output should identify DOSEMU2, not `dosemu-1.x`.
+
+Fedora users should follow the [DOSEMU2 on Fedora](/project/dosemu2-fedora)
+guide because the validated package set requires the `stsp/dosemu2` Copr
+packages and a DJ64 loader-path check.
 
 For Debian 13 LXC hosts, verify PTYs are present and writable by the runtime
 user; DOSEMU2 uses this for `COM1` bridging:

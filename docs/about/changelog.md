@@ -44,6 +44,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `OXIDECHK.RPT` creation.
 - Added ADRs and a phased refactor plan documenting DOSEMU2 as the v1 DOS door
   runtime.
+- Added Docker and Docker Compose deployment support for a Linux runtime image
+  that includes `oxidebbs-server`, DOSEMU2, bundled assets, and the checked-in
+  `OXIDECHK.EXE` test door fixture.
+- Added ADR 0012 documenting Docker as the cross-platform deployment path for
+  Windows, macOS, and Linux hosts while keeping OxideBBS a single Linux target.
+- Added Docker deployment documentation covering first boot, named volumes,
+  Windows/macOS usage, sysop commands, and DOSEMU2 door smoke tests.
+- Docker Compose now uses `OXIDEBBS_HOST_TELNET_PORT` for host-port publishing
+  so the container listener remains fixed at `2323`.
 
 ### Changed
 
@@ -103,6 +112,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the node runtime directory and launches it by DOS filename so drop files and
   report files stay in the per-node runtime. Headless DOSEMU2 launches keep
   stdin open to avoid `-dumb` keyboard EOF shutdown.
+- Added Fedora-specific DOSEMU2 setup documentation covering the `stsp/dosemu2`
+  Copr package set, legacy `dosemu-1.x` detection, the `libdj64.so.0`
+  loader-cache requirement, and the Oxide Door Check smoke tests.
+- Added non-interactive setup support for `--enable-example-door`, used by
+  Docker first boot to enable the bundled `oxide-check` door without requiring
+  ad hoc TOML editing.
+- Hardened the optional DOSEMU2 smoke script so child-originated hangup signals
+  do not terminate sequential multi-node checks inside Docker.
 
 ### Removed
 

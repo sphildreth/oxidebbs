@@ -219,3 +219,18 @@ This is intended for a local coding agent to work from.
 - [x] Reconcile roadmap/spec v1 readiness items: line input is implemented,
   direct repository writes are documented as the v1 write model, and dedicated
   welcome/logoff screen rendering is deferred beyond v1.
+
+## Docker Cross-Platform Deployment
+
+- [x] Add a Linux Docker image that builds `oxidebbs-server` and includes
+  bundled assets, config examples, scripts, the checked-in `OXIDECHK.EXE`
+  fixture, and DOSEMU2.
+- [x] Add Docker Compose with named volumes for config, DecentDB data, doors,
+  logs, and runtime files.
+- [x] Add a first-boot container entrypoint that runs non-interactive setup,
+  seeds the sysop account, validates config, and enables the bundled
+  `oxide-check` door for Docker evaluation.
+- [x] Add ADR 0012 documenting Docker as the cross-platform deployment path
+  while keeping OxideBBS a single Linux runtime target.
+- [x] Add user-facing Docker deployment documentation covering first boot,
+  Windows/macOS usage, volumes, resets, sysop commands, and door smoke tests.

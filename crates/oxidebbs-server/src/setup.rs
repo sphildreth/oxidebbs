@@ -31,6 +31,7 @@ pub struct SetupAnswers {
     pub node_count: u16,
     pub database_path: PathBuf,
     pub include_example_door: bool,
+    pub example_door_enabled: bool,
     pub include_sample_ansi: bool,
 }
 
@@ -47,6 +48,7 @@ impl Default for SetupAnswers {
             node_count: DEFAULT_NODE_COUNT,
             database_path: PathBuf::from(DEFAULT_DATABASE_PATH),
             include_example_door: true,
+            example_door_enabled: false,
             include_sample_ansi: true,
         }
     }
@@ -276,7 +278,7 @@ pub fn build_setup_toml(answers: &SetupAnswers) -> io::Result<String> {
                 drop_file: "DORINFO1.DEF".to_string(),
                 exclusive: false,
                 time_limit_minutes: 5,
-                enabled: false,
+                enabled: answers.example_door_enabled,
             }],
         }
     } else {
@@ -428,6 +430,7 @@ fn interactive_answers<R: BufRead, W: Write>(
         node_count,
         database_path,
         include_example_door,
+        example_door_enabled: false,
         include_sample_ansi,
     })
 }
@@ -526,6 +529,20 @@ mod tests {
         parsed.validate().expect("validate generated config");
         assert!(!parsed.doors.enabled);
         assert!(parsed.doors.definitions.is_empty());
+    }
+
+    #[test]
+    fn generated_setup_config_can_enable_example_door() {
+        let answers = SetupAnswers {
+            example_door_enabled: true,
+            ..SetupAnswers::default()
+        };
+        let generated = build_setup_toml(&answers).expect("generate setup config");
+        let parsed: OxideConfig = toml::from_str(&generated).expect("parse generated config");
+        parsed.validate().expect("validate generated config");
+        assert!(parsed.doors.enabled);
+        assert_eq!(parsed.doors.definitions.len(), 1);
+        assert!(parsed.doors.definitions[0].enabled);
     }
 
     #[test]

@@ -88,6 +88,8 @@ cargo run -p oxidebbs-server -- setup \
 
 Non-interactive setup requires `--sysop-password`. Optional flags can override
 the board name, sysop alias, telnet port, node count, and sample ANSI creation.
+Use `--enable-example-door` when a generated config should enable the bundled
+`oxide-check` test door immediately, as the Docker first-boot path does.
 
 ## After Setup
 
@@ -138,6 +140,10 @@ Before first live test:
 ```bash
 dosemu --version
 ```
+
+   On Fedora, follow [DOSEMU2 on Fedora](/project/dosemu2-fedora) before live
+   door testing. The validated Fedora setup uses the `stsp/dosemu2` Copr
+   packages and must expose `libdj64.so.0` through `ldconfig`.
 
 2. Confirm `/dev/pts` is available when running in Debian 13 LXC:
 

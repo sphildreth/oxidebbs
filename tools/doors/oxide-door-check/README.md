@@ -65,6 +65,9 @@ The executable is commonly named `dosemu`, but it must be DOSEMU2. Legacy
 `dosemu-1.x` does not accept OxideBBS's run-local `pts <path>` COM1 mapping, so
 the smoke script skips that runtime with exit `77`.
 
+On Fedora, see `docs/project/dosemu2-fedora.md` for the validated Copr package
+set and the `libdj64.so.0` loader-cache check.
+
 To run on systems with custom DOSEMU2 binaries:
 
 ```bash

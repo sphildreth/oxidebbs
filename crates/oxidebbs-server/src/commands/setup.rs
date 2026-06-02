@@ -46,6 +46,10 @@ pub struct SetupArgs {
     /// Skip bundled sample ANSI screen directories
     #[arg(long)]
     pub no_sample_ansi: bool,
+
+    /// Enable the bundled Oxide Door Check definition in generated config
+    #[arg(long)]
+    pub enable_example_door: bool,
 }
 
 pub fn run_setup_command(
@@ -88,7 +92,8 @@ fn setup_answers(args: SetupArgs) -> CliResult<setup::SetupAnswers> {
         || args.sysop_password.is_some()
         || args.telnet_port.is_some()
         || args.nodes.is_some()
-        || args.no_sample_ansi;
+        || args.no_sample_ansi
+        || args.enable_example_door;
 
     if !has_noninteractive {
         return setup::interactive_setup_answers().map_err(CliError::Io);
@@ -121,6 +126,10 @@ fn setup_answers(args: SetupArgs) -> CliResult<setup::SetupAnswers> {
     }
     if args.no_sample_ansi {
         answers.include_sample_ansi = false;
+    }
+    if args.enable_example_door {
+        answers.include_example_door = true;
+        answers.example_door_enabled = true;
     }
     Ok(answers)
 }
@@ -203,6 +212,7 @@ mod tests {
             telnet_port: Some(2324),
             nodes: Some(4),
             no_sample_ansi: true,
+            enable_example_door: false,
         };
 
         run_setup_command(args, Some(db_override.clone()), false).expect("setup command");

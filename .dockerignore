@@ -1,0 +1,14 @@
+.git
+.github
+target
+debug
+node_modules
+docs/.vitepress/cache
+docs/.vitepress/dist
+data
+runtime
+logs
+doors
+config/oxidebbs.toml
+**/mutants.out*
+*.pdb

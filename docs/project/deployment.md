@@ -3,6 +3,11 @@
 OxideBBS runs as a local binary (`oxidebbs-server`) plus a local CLI. Remote
 admin access is intentionally not supported in this release.
 
+For cross-platform deployments on Windows, macOS, and Linux hosts with Docker,
+use [Docker Deployment](/project/docker). That path keeps the runtime Linux,
+includes DOSEMU2 inside the image, and stores DecentDB/runtime/door state on
+Docker named volumes.
+
 ## Runtime deployment workflow
 
 1. Generate config and scaffold:
@@ -35,6 +40,11 @@ cargo run -p oxidebbs-server -- --config /etc/oxidebbs/oxidebbs.toml serve
 ```bash
 dosemu --version
 ```
+
+Fedora hosts should follow [DOSEMU2 on Fedora](/project/dosemu2-fedora). The
+validated Fedora setup uses the `stsp/dosemu2` Copr packages and requires
+`libdj64.so.0` to be visible through `ldconfig`; otherwise DOSEMU2 can fail while
+booting `COMMAND.COM`.
 
 `DOSEMU2` in the v1 path is headless and does not need SDL or a display server.
 
