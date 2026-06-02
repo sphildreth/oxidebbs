@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   macOS, and Windows `oxidebbs-server` packages plus SHA-256 checksums when a
   release is published, with manual dispatch support for existing releases.
 
+### Changed
+
+- Updated GitHub workflow action versions for checkout and Node setup to current
+  Node 24-backed majors.
+
 ## [1.0.0] - 2026-06-02
 
 ### Added
