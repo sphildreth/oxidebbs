@@ -1,4 +1,10 @@
+#![cfg_attr(
+    not(unix),
+    allow(dead_code, unreachable_code, unused_imports, unused_variables)
+)]
+
 use std::fs;
+#[cfg(unix)]
 use std::io;
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
@@ -6,12 +12,16 @@ use std::os::unix::fs::MetadataExt;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::path::PathBuf;
+#[cfg(unix)]
 use std::pin::Pin;
 use std::process::Stdio;
+#[cfg(unix)]
 use std::task::{Context, Poll, ready};
 use std::time::Duration;
 
+#[cfg(unix)]
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
+#[cfg(unix)]
 use nix::sys::termios::{SetArg, cfmakeraw, tcgetattr, tcsetattr};
 #[cfg(unix)]
 use nix::unistd::geteuid;
@@ -30,9 +40,13 @@ use oxidebbs_door::{
 };
 use oxidebbs_telnet::Transport;
 use oxidebbs_term::encode_cp437;
+#[cfg(unix)]
 use tokio::io::unix::AsyncFd;
+#[cfg(unix)]
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
+#[cfg(unix)]
 use tokio::process::{Child, Command};
+#[cfg(unix)]
 use tokio::time::{self, Instant as TokioInstant};
 use tracing::{info, warn};
 
@@ -40,8 +54,11 @@ use crate::config::{DoorDefConfig, OxideConfig};
 use crate::control::ServerRuntime;
 use crate::serve::{ServeError, ServeResult};
 
+#[cfg(unix)]
 const DOOR_BRIDGE_POLL: Duration = Duration::from_millis(250);
+#[cfg(unix)]
 const DOOR_KILL_WAIT: Duration = Duration::from_secs(2);
+#[cfg(unix)]
 const DOOR_EXIT_WAIT: Duration = Duration::from_secs(5);
 const DOSEMU2_CONFIG_FILE: &str = "OXDOSEMU2.CONF";
 const DOSEMU2_COM1_PTY: &str = "OXCOM1.PTY";
@@ -146,10 +163,12 @@ impl Drop for DoorRuntimeDirectoryGuard {
     }
 }
 
+#[cfg(unix)]
 struct AsyncPty {
     inner: AsyncFd<fs::File>,
 }
 
+#[cfg(unix)]
 impl AsyncPty {
     fn new(file: fs::File) -> io::Result<Self> {
         Ok(Self {
@@ -158,6 +177,7 @@ impl AsyncPty {
     }
 }
 
+#[cfg(unix)]
 impl AsyncRead for AsyncPty {
     fn poll_read(
         self: Pin<&mut Self>,
@@ -186,6 +206,7 @@ impl AsyncRead for AsyncPty {
     }
 }
 
+#[cfg(unix)]
 impl AsyncWrite for AsyncPty {
     fn poll_write(
         self: Pin<&mut Self>,
@@ -247,6 +268,13 @@ impl<'a> DoorService<'a> {
         if !(1..=240).contains(&door.time_limit_minutes) {
             return Err(format!(
                 "Door {} time limit must be between 1 and 240 minutes.",
+                door.key
+            ));
+        }
+        #[cfg(not(unix))]
+        {
+            return Err(format!(
+                "Door {} cannot be launched natively on this platform yet. Live DOS doors require Linux or a Docker deployment with DOSEMU2.",
                 door.key
             ));
         }
@@ -394,6 +422,7 @@ impl<'a> DoorService<'a> {
         })
     }
 
+    #[cfg(unix)]
     pub(crate) async fn execute_interactive<T: Transport>(
         &self,
         transport: &mut T,
@@ -582,6 +611,34 @@ impl<'a> DoorService<'a> {
             launch_error: None,
             stdout_log: runner_logs.stdout,
             stderr_log: runner_logs.stderr,
+        })
+    }
+
+    #[cfg(not(unix))]
+    pub(crate) async fn execute_interactive<T: Transport>(
+        &self,
+        _transport: &mut T,
+        _runtime: &ServerRuntime,
+        _user: &User,
+        _node_number: u16,
+        door: &DoorDefinitionRecord,
+    ) -> ServeResult<DoorExecutionSummary> {
+        Ok(DoorExecutionSummary {
+            door_name: door.name.clone(),
+            run_id: None,
+            exit_code: None,
+            timed_out: false,
+            disconnect_forced: false,
+            caller_disconnected: false,
+            disconnect_reason: None,
+            early_exit_before_com1: false,
+            bytes_in: 0,
+            bytes_out: 0,
+            launch_error: Some(
+                "live DOS door execution is not supported on this platform; use Linux or Docker with DOSEMU2".to_string(),
+            ),
+            stdout_log: None,
+            stderr_log: None,
         })
     }
 
@@ -791,6 +848,7 @@ pub(crate) fn select_door<'a>(
         .unwrap_or(DoorSelection::Invalid)
 }
 
+#[cfg(unix)]
 fn prepare_dosemu2_com1_bridge(
     plan: &mut DoorRunPlan,
     runtime_dir: &Path,
@@ -808,6 +866,7 @@ fn prepare_dosemu2_com1_bridge(
     })
 }
 
+#[cfg(unix)]
 fn dosemu2_serial_config(pty_path: &Path) -> String {
     format!(
         "$_cpu_vm = \"emulated\"\n$_cpu_vm_dpmi = \"emulated\"\n$_sound = (off)\n$_mouse_internal = (off)\n$_joy_device = \"\"\n$_pktdriver = (off)\n$_tcpdriver = (off)\n$_ttylocks = \"\"\n$_com1 = \"pts {}\"\n",
@@ -815,6 +874,7 @@ fn dosemu2_serial_config(pty_path: &Path) -> String {
     )
 }
 
+#[cfg(unix)]
 fn escape_dosemu2_config_path(path: &Path) -> String {
     path.display()
         .to_string()
@@ -822,6 +882,7 @@ fn escape_dosemu2_config_path(path: &Path) -> String {
         .replace('"', "\\\"")
 }
 
+#[cfg(unix)]
 fn add_dosemu2_config(plan: &mut DoorRunPlan, config_path: &Path) {
     let mut args = Vec::with_capacity(plan.args.len() + 2);
     args.push("-f".to_string());
@@ -900,6 +961,7 @@ fn sanitize_log_component(value: &str) -> String {
     }
 }
 
+#[cfg(unix)]
 fn door_start_details(
     run_id: &str,
     request: &DoorRunRequest,
@@ -946,6 +1008,7 @@ fn append_runner_log_details(details: &mut String, runner_logs: &DoorRunnerLogs)
     }
 }
 
+#[cfg(unix)]
 pub(crate) async fn run_door_bridge<T: Transport>(
     transport: &mut T,
     runtime: &ServerRuntime,
@@ -999,6 +1062,7 @@ pub(crate) async fn run_door_bridge<T: Transport>(
     Ok(result)
 }
 
+#[cfg(unix)]
 async fn wait_for_com1_pty<T: Transport>(
     transport: &mut T,
     runtime: &ServerRuntime,
@@ -1051,6 +1115,7 @@ async fn wait_for_com1_pty<T: Transport>(
     }
 }
 
+#[cfg(unix)]
 fn open_com1_pty(path: &Path) -> ServeResult<AsyncPty> {
     let mut options = fs::OpenOptions::new();
     options.read(true).write(true);
@@ -1067,6 +1132,7 @@ fn open_com1_pty(path: &Path) -> ServeResult<AsyncPty> {
     AsyncPty::new(file).map_err(ServeError::Network)
 }
 
+#[cfg(unix)]
 fn set_raw_mode(file: &fs::File) -> ServeResult<()> {
     let mut termios = tcgetattr(file).map_err(|error| {
         ServeError::Runtime(format!("failed to read DOSEMU2 COM1 PTY mode: {error}"))
@@ -1077,6 +1143,7 @@ fn set_raw_mode(file: &fs::File) -> ServeResult<()> {
     })
 }
 
+#[cfg(unix)]
 fn set_nonblocking(file: &fs::File) -> ServeResult<()> {
     let flags = fcntl(file, FcntlArg::F_GETFL)
         .map_err(|error| ServeError::Runtime(format!("failed to read COM1 PTY flags: {error}")))?;
@@ -1087,10 +1154,12 @@ fn set_nonblocking(file: &fs::File) -> ServeResult<()> {
     Ok(())
 }
 
+#[cfg(unix)]
 fn errno_to_io_error(error: nix::errno::Errno) -> io::Error {
     io::Error::from_raw_os_error(error as i32)
 }
 
+#[cfg(unix)]
 async fn bridge_connected_serial<T, S>(
     transport: &mut T,
     runtime: &ServerRuntime,
@@ -1295,6 +1364,7 @@ fn door_caller(user: &User) -> DoorCaller {
     }
 }
 
+#[cfg(unix)]
 async fn write_bridge_message<T: Transport>(
     transport: &mut T,
     message: &str,
@@ -1309,6 +1379,7 @@ async fn write_bridge_message<T: Transport>(
     Ok(())
 }
 
+#[cfg(unix)]
 async fn finish_child_after_serial_eof(
     child: &mut Child,
     result: &mut DoorBridgeResult,
@@ -1333,6 +1404,7 @@ async fn finish_child_after_serial_eof(
     }
 }
 
+#[cfg(unix)]
 async fn terminate_child(child: &mut Child) -> ServeResult<Option<i32>> {
     match child.try_wait()? {
         Some(status) => Ok(status.code()),

@@ -114,10 +114,15 @@ new DecentDB tag changes schema behavior or data compatibility, document that in
 
 - `.github/workflows/ci.yml`
 - `.github/workflows/pages.yml`
+- `.github/workflows/release.yml`
 
 CI and Pages workflows should not hard-code an OxideBBS release version unless a
 future release process explicitly needs it. Git tags remain the release trigger
 for published versions.
+
+The release-artifact workflow runs when a GitHub release is published and uploads
+platform packages for the release tag. Use the manual `workflow_dispatch` input
+only to backfill artifacts for an existing GitHub release.
 
 ## 3. Files that usually do **not** need a version bump
 
@@ -217,3 +222,8 @@ When publishing, use Git tags with a leading `v`:
 
 Release automation should convert those tags into package versions without the
 leading `v` only where a downstream package format requires it.
+
+GitHub release artifacts are built from the release tag by default and are named
+with the leading `v` tag plus the target triple, such as
+`oxidebbs-v1.0.0-x86_64-unknown-linux-gnu.tar.gz`. Each uploaded archive should
+include a matching `.sha256` checksum file.

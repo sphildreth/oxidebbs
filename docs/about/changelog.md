@@ -7,7 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-No changes yet.
+### Added
+
+- Added a GitHub release-artifact workflow that builds and uploads Linux,
+  macOS, and Windows `oxidebbs-server` packages plus SHA-256 checksums when a
+  release is published, with manual dispatch support for existing releases.
 
 ## [1.0.0] - 2026-06-02
 

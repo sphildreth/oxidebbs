@@ -1,3 +1,5 @@
+#![cfg_attr(not(unix), allow(dead_code))]
+
 use std::collections::BTreeMap;
 #[cfg(unix)]
 use std::io::{BufRead, BufReader, Write as IoWrite};

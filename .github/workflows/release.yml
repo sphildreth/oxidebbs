@@ -1,0 +1,161 @@
+name: Release Artifacts
+
+on:
+  release:
+    # `published` covers stable and prerelease publication and avoids the
+    # draft-release caveat on `created`.
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: Existing release tag to build and upload artifacts for
+        required: true
+        default: v1.0.0
+      source_ref:
+        description: Git ref to build; defaults to tag_name
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            exe_suffix: ""
+            archive: tar.gz
+          - os: macos-13
+            target: x86_64-apple-darwin
+            exe_suffix: ""
+            archive: tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            exe_suffix: ".exe"
+            archive: zip
+
+    steps:
+      - name: Resolve release tag
+        id: release
+        shell: bash
+        run: |
+          event_tag="${{ github.event.release.tag_name }}"
+          input_tag="${{ github.event.inputs.tag_name }}"
+          input_ref="${{ github.event.inputs.source_ref }}"
+          tag="${event_tag:-${input_tag}}"
+          source_ref="${event_tag:-${input_ref}}"
+          if [[ -z "${source_ref}" ]]; then
+            source_ref="${tag}"
+          fi
+          if [[ -z "${tag}" ]]; then
+            echo "release tag could not be resolved" >&2
+            exit 1
+          fi
+          package="oxidebbs-${tag}-${{ matrix.target }}"
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+          echo "source_ref=${source_ref}" >> "${GITHUB_OUTPUT}"
+          echo "package=${package}" >> "${GITHUB_OUTPUT}"
+
+      - name: Checkout source ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.release.outputs.source_ref }}
+
+      - name: Verify GitHub release exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: gh release view "${{ steps.release.outputs.tag }}" --repo "${GITHUB_REPOSITORY}"
+
+      - name: Install Linux native build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev
+
+      - name: Install macOS native build dependencies
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          brew list llvm >/dev/null 2>&1 || brew install llvm
+          echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "${GITHUB_ENV}"
+
+      - name: Install Windows native build dependencies
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install llvm -y --no-progress
+          "C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "LIBCLANG_PATH=C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust builds
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --release --locked --target ${{ matrix.target }} -p oxidebbs-server --bin oxidebbs-server
+
+      - name: Stage package contents
+        shell: bash
+        run: |
+          package="${{ steps.release.outputs.package }}"
+          stage="dist/${package}"
+          binary="target/${{ matrix.target }}/release/oxidebbs-server${{ matrix.exe_suffix }}"
+
+          mkdir -p "${stage}"
+          cp "${binary}" "${stage}/"
+          cp README.md LICENSE NOTICE SECURITY.md "${stage}/"
+          cp -R assets config "${stage}/"
+
+          if [[ "${{ runner.os }}" != "Windows" ]] && command -v strip >/dev/null 2>&1; then
+            strip "${stage}/oxidebbs-server" || true
+          fi
+
+      - name: Create tarball
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        run: |
+          package="${{ steps.release.outputs.package }}"
+          tar -C dist -czf "dist/${package}.tar.gz" "${package}"
+
+      - name: Create zip
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          $package = "${{ steps.release.outputs.package }}"
+          Compress-Archive -Path "dist/$package" -DestinationPath "dist/$package.zip" -Force
+
+      - name: Create checksum
+        shell: bash
+        run: |
+          package="${{ steps.release.outputs.package }}"
+          archive="dist/${package}.${{ matrix.archive }}"
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "${archive}" > "${archive}.sha256"
+          else
+            shasum -a 256 "${archive}" > "${archive}.sha256"
+          fi
+
+      - name: Upload release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          shopt -s nullglob
+          artifacts=(dist/${{ steps.release.outputs.package }}.*)
+          gh release upload "${{ steps.release.outputs.tag }}" "${artifacts[@]}" --clobber --repo "${GITHUB_REPOSITORY}"
