@@ -31,9 +31,12 @@ use oxidebbs_db::{
     insert_audit_event, insert_message, insert_message_area, insert_session, insert_user,
     list_message_areas, list_messages_in_area, update_session_user, update_user_login,
 };
+use oxidebbs_telnet::telnet::{
+    DO, IAC, SB, SE, TELOPT_ECHO, TELOPT_SUPPRESS_GO_AHEAD, TELOPT_TTYPE_SEND, WILL,
+};
 use oxidebbs_telnet::{
-    IAC, SB, SE, TELOPT_NAWS, TELOPT_TERMINAL_TYPE, TELOPT_TTYPE_SEND, TelnetCommand,
-    TcpTransport, TelnetEvent, TelnetParser, Transport, TransportError,
+    TELOPT_NAWS, TELOPT_TERMINAL_TYPE, TcpTransport, TelnetCommand, TelnetEvent, TelnetParser,
+    Transport, TransportError,
 };
 use oxidebbs_term::{
     LoadedScreen, ScreenAsset as TermScreenAsset, TerminalCapabilities, encode_cp437,
@@ -302,12 +305,6 @@ async fn handle_caller(
     let mut transport = TcpTransport::new(stream);
     let mut input = InputSession::default();
     let idle_timeout = Duration::from_secs(config.telnet.idle_timeout_seconds);
-    let mut capabilities = negotiate_terminal_capabilities(
-        &mut transport,
-        &mut input,
-        TERMINAL_CAPABILITY_NEGOTIATION_TIMEOUT,
-    )
-    .await?;
     let mut authenticated_user: Option<User> = None;
 
     insert_session(
@@ -352,6 +349,13 @@ async fn handle_caller(
         Some(node_number),
         format!("caller connected from {}", peer.address),
     );
+
+    let mut capabilities = negotiate_terminal_capabilities(
+        &mut transport,
+        &mut input,
+        TERMINAL_CAPABILITY_NEGOTIATION_TIMEOUT,
+    )
+    .await?;
 
     if config.terminal.clear_screen_on_connect && capabilities.supports_ansi {
         transport
@@ -711,6 +715,109 @@ enum PromptLineResult {
     Value(String),
     Disconnected,
     IdleTimeout,
+}
+
+async fn negotiate_terminal_capabilities<T: Transport>(
+    transport: &mut T,
+    input: &mut InputSession,
+    negotiation_timeout: Duration,
+) -> ServeResult<TerminalCapabilities> {
+    let mut capabilities = TerminalCapabilities::plain_text();
+    transport.write_all(&terminal_capability_requests()).await?;
+
+    let Ok(result) = timeout(negotiation_timeout, async {
+        loop {
+            match next_event(transport, input, negotiation_timeout).await? {
+                CallerInput::Event(TelnetEvent::Data(byte)) => {
+                    input
+                        .pending_inputs
+                        .push_front(CallerInput::Event(TelnetEvent::Data(byte)));
+                    return Ok(()) as ServeResult<()>;
+                }
+                CallerInput::Event(event) => {
+                    if apply_capability_event(transport, &mut capabilities, event).await? {
+                        return Ok(()) as ServeResult<()>;
+                    }
+                }
+                CallerInput::IdleTimeout => return Ok(()),
+                other @ CallerInput::Disconnected => {
+                    input.pending_inputs.push_front(other);
+                    return Ok(());
+                }
+            }
+        }
+    })
+    .await
+    else {
+        return Ok(capabilities);
+    };
+
+    result?;
+    Ok(capabilities)
+}
+
+fn terminal_capability_requests() -> [u8; 15] {
+    [
+        IAC,
+        WILL,
+        TELOPT_ECHO,
+        IAC,
+        WILL,
+        TELOPT_SUPPRESS_GO_AHEAD,
+        IAC,
+        DO,
+        TELOPT_SUPPRESS_GO_AHEAD,
+        IAC,
+        DO,
+        TELOPT_TERMINAL_TYPE,
+        IAC,
+        DO,
+        TELOPT_NAWS,
+    ]
+}
+
+async fn apply_capability_event<T: Transport>(
+    transport: &mut T,
+    capabilities: &mut TerminalCapabilities,
+    event: TelnetEvent,
+) -> ServeResult<bool> {
+    match event {
+        TelnetEvent::Negotiation {
+            command: TelnetCommand::Will,
+            option: TELOPT_TERMINAL_TYPE,
+            accepted: true,
+        } => {
+            transport
+                .write_all(&[IAC, SB, TELOPT_TERMINAL_TYPE, TELOPT_TTYPE_SEND, IAC, SE])
+                .await?;
+        }
+        TelnetEvent::TerminalType(terminal_type) => {
+            capabilities.supports_ansi = terminal_type_supports_ansi(&terminal_type);
+        }
+        TelnetEvent::WindowSize { columns, .. } if columns > 0 => {
+            capabilities.width = columns;
+        }
+        TelnetEvent::Data(_) => return Ok(true),
+        TelnetEvent::Negotiation { .. }
+        | TelnetEvent::TerminalTypeRequest
+        | TelnetEvent::WindowSize { .. }
+        | TelnetEvent::Subnegotiation { .. } => {}
+    }
+
+    Ok(false)
+}
+
+fn terminal_type_supports_ansi(terminal_type: &[u8]) -> bool {
+    let terminal_type = String::from_utf8_lossy(terminal_type);
+    let normalized = terminal_type.trim().to_ascii_lowercase();
+
+    normalized.contains("syncterm")
+        || normalized == "ansi"
+        || normalized.contains("ansi.sys")
+        || normalized.contains("ansi-bbs")
+        || normalized.contains("bbs-ansi")
+        || normalized == "pc-ansi"
+        || normalized.contains("pcansi")
 }
 
 struct AuthFlowState<'a> {
@@ -2206,7 +2313,10 @@ mod tests {
 
     use oxidebbs_telnet::{
         LoopbackTransport,
-        telnet::{DO, IAC, TELOPT_SUPPRESS_GO_AHEAD},
+        telnet::{
+            DO, IAC, SB, SE, TELOPT_NAWS, TELOPT_SUPPRESS_GO_AHEAD, TELOPT_TERMINAL_TYPE,
+            TELOPT_TTYPE_IS, WILL,
+        },
     };
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::sync::oneshot;
@@ -2222,6 +2332,197 @@ mod tests {
         assert_eq!(normalize_key(b'\n'), None);
         assert_eq!(normalize_key(0x00), None);
         assert_eq!(normalize_key(0x1b), None);
+    }
+
+    #[test]
+    fn terminal_type_supports_only_explicit_ansi_clients() {
+        assert!(terminal_type_supports_ansi(b"SyncTERM"));
+        assert!(terminal_type_supports_ansi(b"ANSI"));
+        assert!(terminal_type_supports_ansi(b"ANSI-BBS"));
+        assert!(terminal_type_supports_ansi(b"BBS-ANSI"));
+        assert!(terminal_type_supports_ansi(b"ANSI.SYS"));
+        assert!(terminal_type_supports_ansi(b"PC-ANSI"));
+        assert!(terminal_type_supports_ansi(b"pcansi"));
+        assert!(!terminal_type_supports_ansi(b"xterm-256color"));
+        assert!(!terminal_type_supports_ansi(b"vt100"));
+    }
+
+    #[tokio::test]
+    async fn capability_negotiation_defaults_to_plain_text_without_response() {
+        let (mut transport, mut client) = LoopbackTransport::new();
+        let mut input = InputSession::default();
+
+        let capabilities =
+            negotiate_terminal_capabilities(&mut transport, &mut input, Duration::from_millis(5))
+                .await
+                .expect("negotiate capabilities");
+        let request = client.read_output_bytes();
+
+        assert_eq!(
+            request,
+            [
+                IAC,
+                WILL,
+                TELOPT_ECHO,
+                IAC,
+                WILL,
+                TELOPT_SUPPRESS_GO_AHEAD,
+                IAC,
+                DO,
+                TELOPT_SUPPRESS_GO_AHEAD,
+                IAC,
+                DO,
+                TELOPT_TERMINAL_TYPE,
+                IAC,
+                DO,
+                TELOPT_NAWS
+            ]
+        );
+        assert_eq!(capabilities, TerminalCapabilities::plain_text());
+    }
+
+    #[tokio::test]
+    async fn capability_negotiation_detects_syncterm_and_naws_width() {
+        let (mut transport, client) = LoopbackTransport::new();
+        let mut input = InputSession::default();
+        client
+            .write_bytes(&[
+                IAC,
+                WILL,
+                TELOPT_TERMINAL_TYPE,
+                IAC,
+                WILL,
+                TELOPT_NAWS,
+                IAC,
+                SB,
+                TELOPT_TERMINAL_TYPE,
+                TELOPT_TTYPE_IS,
+                b'S',
+                b'y',
+                b'n',
+                b'c',
+                b'T',
+                b'E',
+                b'R',
+                b'M',
+                IAC,
+                SE,
+                IAC,
+                SB,
+                TELOPT_NAWS,
+                0,
+                40,
+                0,
+                24,
+                IAC,
+                SE,
+            ])
+            .expect("write negotiation frames");
+
+        let capabilities =
+            negotiate_terminal_capabilities(&mut transport, &mut input, Duration::from_millis(20))
+                .await
+                .expect("negotiate capabilities");
+
+        assert!(capabilities.supports_ansi);
+        assert_eq!(capabilities.width, 40);
+    }
+
+    #[tokio::test]
+    async fn capability_negotiation_selects_40_column_ansi_screen() {
+        let base_dir = temp_dir("ansi-40-screen");
+        let db_path = base_dir.join("oxidebbs.ddb");
+        let bind_addr = free_loopback_addr();
+        let mut config = smoke_config(bind_addr, &base_dir, &db_path);
+        write_login_screen_variants(&mut config);
+
+        let (mut transport, client) = LoopbackTransport::new();
+        let mut input = InputSession::default();
+        client
+            .write_bytes(&[
+                IAC,
+                WILL,
+                TELOPT_TERMINAL_TYPE,
+                IAC,
+                WILL,
+                TELOPT_NAWS,
+                IAC,
+                SB,
+                TELOPT_TERMINAL_TYPE,
+                TELOPT_TTYPE_IS,
+                b'S',
+                b'y',
+                b'n',
+                b'c',
+                b'T',
+                b'E',
+                b'R',
+                b'M',
+                IAC,
+                SE,
+                IAC,
+                SB,
+                TELOPT_NAWS,
+                0,
+                40,
+                0,
+                24,
+                IAC,
+                SE,
+            ])
+            .expect("write negotiation frames");
+
+        let capabilities =
+            negotiate_terminal_capabilities(&mut transport, &mut input, Duration::from_millis(20))
+                .await
+                .expect("negotiate capabilities");
+        let payload = load_screen_payload(&config, &config.flow.login_screen, capabilities)
+            .expect("load login screen");
+
+        assert_eq!(payload, b"ANSI40\r\n");
+
+        let _ = std::fs::remove_dir_all(base_dir);
+    }
+
+    #[tokio::test]
+    async fn capability_negotiation_selects_plain_screen_for_plain_40_column_client() {
+        let base_dir = temp_dir("plain-40-screen");
+        let db_path = base_dir.join("oxidebbs.ddb");
+        let bind_addr = free_loopback_addr();
+        let mut config = smoke_config(bind_addr, &base_dir, &db_path);
+        write_login_screen_variants(&mut config);
+
+        let (mut transport, client) = LoopbackTransport::new();
+        let mut input = InputSession::default();
+        client
+            .write_bytes(&[
+                IAC,
+                WILL,
+                TELOPT_NAWS,
+                IAC,
+                SB,
+                TELOPT_NAWS,
+                0,
+                40,
+                0,
+                24,
+                IAC,
+                SE,
+            ])
+            .expect("write negotiation frames");
+
+        let capabilities =
+            negotiate_terminal_capabilities(&mut transport, &mut input, Duration::from_millis(20))
+                .await
+                .expect("negotiate capabilities");
+        let payload = load_screen_payload(&config, &config.flow.login_screen, capabilities)
+            .expect("load login screen");
+
+        assert!(!capabilities.supports_ansi);
+        assert_eq!(capabilities.width, 40);
+        assert_eq!(payload, b"ASCII\r\n");
+
+        let _ = std::fs::remove_dir_all(base_dir);
     }
 
     #[test]
@@ -2574,6 +2875,26 @@ mod tests {
         path
     }
 
+    fn write_login_screen_variants(config: &mut OxideConfig) {
+        config.screens.insert(
+            "login".to_string(),
+            crate::config::ScreenConfig {
+                ansi: Some("login/login.ans".to_string()),
+                ansi_40: Some("login/login-40.ans".to_string()),
+                ascii: Some("login/login.asc".to_string()),
+                text: Some("login/login.txt".to_string()),
+                pause: false,
+            },
+        );
+
+        let login_dir = config.paths.screens.join("login");
+        std::fs::create_dir_all(&login_dir).expect("create login screen dir");
+        std::fs::write(login_dir.join("login.ans"), b"ANSI80\r\n").expect("write 80-col ANSI");
+        std::fs::write(login_dir.join("login-40.ans"), b"ANSI40\r\n").expect("write 40-col ANSI");
+        std::fs::write(login_dir.join("login.asc"), b"ASCII\r\n").expect("write ASCII");
+        std::fs::write(login_dir.join("login.txt"), b"TEXT\r\n").expect("write text");
+    }
+
     fn smoke_config(bind_addr: SocketAddr, base_dir: &Path, db_path: &Path) -> OxideConfig {
         let mut config: OxideConfig = toml::from_str(
             r#"
@@ -2662,7 +2983,11 @@ action = "logoff"
             loop {
                 let mut byte = [0u8; 1];
                 let read = client.read(&mut byte).await.expect("read smoke output");
-                assert!(read > 0, "server closed before {needle:?}");
+                assert!(
+                    read > 0,
+                    "server closed before {needle:?}; output was {:?}",
+                    String::from_utf8_lossy(&output)
+                );
                 output.push(byte[0]);
                 if String::from_utf8_lossy(&output).contains(needle) {
                     break;

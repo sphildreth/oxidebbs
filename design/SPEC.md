@@ -290,6 +290,12 @@ are single ASCII characters and route case-insensitively. Screen assets are
 selected from the best variant supported by the caller, with 40-column ANSI
 preferred for ANSI callers at 40 columns or less.
 
+Telnet callers default to plain text until terminal capability negotiation proves
+otherwise. The server requests terminal type and NAWS before the first caller
+screen; SyncTERM and explicit ANSI-family terminal types receive ANSI assets,
+while generic telnet clients such as `xterm`/`vt100` receive ASCII or text
+assets. NAWS column width can select 40-column ANSI variants for ANSI callers.
+
 Current v1 runtime behavior supports login, new user, doors, messages, logoff,
 show screen, submenu, and no-op. `submenu` actions now resolve to the configured
 target menu and remain in the resulting menu context at runtime; nested submenu
