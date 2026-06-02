@@ -1,8 +1,14 @@
 use std::fs;
+use std::io;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
+use std::pin::Pin;
 use std::process::Stdio;
+use std::task::{Context, Poll, ready};
 use std::time::Duration;
 
+use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use nix::sys::termios::{SetArg, cfmakeraw, tcgetattr, tcsetattr};
 use oxidebbs_core::door::DoorDefinition;
 use oxidebbs_core::user::User;
@@ -19,7 +25,8 @@ use oxidebbs_door::{
 };
 use oxidebbs_telnet::Transport;
 use oxidebbs_term::encode_cp437;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::unix::AsyncFd;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 use tokio::process::{Child, Command};
 use tokio::time::{self, Instant as TokioInstant};
 use tracing::{info, warn};
@@ -87,6 +94,73 @@ struct DoorRunnerLogs {
     stdout: Option<std::path::PathBuf>,
     stderr: Option<std::path::PathBuf>,
     capture_errors: Vec<String>,
+}
+
+struct AsyncPty {
+    inner: AsyncFd<fs::File>,
+}
+
+impl AsyncPty {
+    fn new(file: fs::File) -> io::Result<Self> {
+        Ok(Self {
+            inner: AsyncFd::new(file)?,
+        })
+    }
+}
+
+impl AsyncRead for AsyncPty {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        if buf.remaining() == 0 {
+            return Poll::Ready(Ok(()));
+        }
+
+        loop {
+            let mut guard = ready!(self.inner.poll_read_ready(cx))?;
+            let read = guard.try_io(|inner| {
+                nix::unistd::read(inner.get_ref(), buf.initialize_unfilled())
+                    .map_err(errno_to_io_error)
+            });
+            match read {
+                Ok(Ok(count)) => {
+                    buf.advance(count);
+                    return Poll::Ready(Ok(()));
+                }
+                Ok(Err(error)) => return Poll::Ready(Err(error)),
+                Err(_would_block) => continue,
+            }
+        }
+    }
+}
+
+impl AsyncWrite for AsyncPty {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        loop {
+            let mut guard = ready!(self.inner.poll_write_ready(cx))?;
+            let write = guard.try_io(|inner| {
+                nix::unistd::write(inner.get_ref(), buf).map_err(errno_to_io_error)
+            });
+            match write {
+                Ok(result) => return Poll::Ready(result),
+                Err(_would_block) => continue,
+            }
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
 }
 
 impl<'a> DoorService<'a> {
@@ -820,7 +894,7 @@ async fn wait_for_com1_pty<T: Transport>(
     com_bridge: &Dosemu2ComBridge,
     deadline: TokioInstant,
     result: &mut DoorBridgeResult,
-) -> ServeResult<Option<tokio::fs::File>> {
+) -> ServeResult<Option<AsyncPty>> {
     loop {
         if let Some(status) = child.try_wait()? {
             result.exit_code = status.code();
@@ -864,19 +938,20 @@ async fn wait_for_com1_pty<T: Transport>(
     }
 }
 
-fn open_com1_pty(path: &Path) -> ServeResult<tokio::fs::File> {
-    let file = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(path)
-        .map_err(|error| {
-            ServeError::Runtime(format!(
-                "failed to open DOSEMU2 COM1 PTY {}: {error}",
-                path.display()
-            ))
-        })?;
+fn open_com1_pty(path: &Path) -> ServeResult<AsyncPty> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true).write(true);
+    #[cfg(unix)]
+    options.custom_flags(OFlag::O_NONBLOCK.bits());
+    let file = options.open(path).map_err(|error| {
+        ServeError::Runtime(format!(
+            "failed to open DOSEMU2 COM1 PTY {}: {error}",
+            path.display()
+        ))
+    })?;
     set_raw_mode(&file)?;
-    Ok(tokio::fs::File::from_std(file))
+    set_nonblocking(&file)?;
+    AsyncPty::new(file).map_err(ServeError::Network)
 }
 
 fn set_raw_mode(file: &fs::File) -> ServeResult<()> {
@@ -887,6 +962,20 @@ fn set_raw_mode(file: &fs::File) -> ServeResult<()> {
     tcsetattr(file, SetArg::TCSANOW, &termios).map_err(|error| {
         ServeError::Runtime(format!("failed to set DOSEMU2 COM1 PTY raw mode: {error}"))
     })
+}
+
+fn set_nonblocking(file: &fs::File) -> ServeResult<()> {
+    let flags = fcntl(file, FcntlArg::F_GETFL)
+        .map_err(|error| ServeError::Runtime(format!("failed to read COM1 PTY flags: {error}")))?;
+    let flags = OFlag::from_bits_truncate(flags);
+    fcntl(file, FcntlArg::F_SETFL(flags | OFlag::O_NONBLOCK)).map_err(|error| {
+        ServeError::Runtime(format!("failed to set COM1 PTY nonblocking: {error}"))
+    })?;
+    Ok(())
+}
+
+fn errno_to_io_error(error: nix::errno::Errno) -> io::Error {
+    io::Error::from_raw_os_error(error as i32)
 }
 
 async fn bridge_connected_serial<T, S>(
@@ -1097,6 +1186,7 @@ fn encode_text(text: &str) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::io::{Read, Write};
 
     use oxidebbs_core::user::UserStatus;
     use oxidebbs_db::{UserRecord, find_door_run_by_id, insert_user};
@@ -1320,6 +1410,36 @@ mod tests {
         assert!(stderr.is_file());
 
         let _ = fs::remove_dir_all(base);
+    }
+
+    #[tokio::test]
+    async fn async_pty_reads_and_writes_without_file_seek() {
+        let pty = nix::pty::openpty(None, None).expect("open pty");
+        let mut master = fs::File::from(pty.master);
+        let slave = fs::File::from(pty.slave);
+        set_raw_mode(&slave).expect("raw mode");
+        set_nonblocking(&slave).expect("nonblocking mode");
+        let serial = AsyncPty::new(slave).expect("async pty");
+        let (mut serial_reader, mut serial_writer) = tokio::io::split(serial);
+
+        master.write_all(b"from-master").expect("write master");
+        let mut inbound = [0_u8; 11];
+        time::timeout(
+            Duration::from_secs(1),
+            serial_reader.read_exact(&mut inbound),
+        )
+        .await
+        .expect("serial read timeout")
+        .expect("serial read");
+        assert_eq!(&inbound, b"from-master");
+
+        serial_writer
+            .write_all(b"to-master")
+            .await
+            .expect("write serial");
+        let mut outbound = [0_u8; 9];
+        master.read_exact(&mut outbound).expect("read master");
+        assert_eq!(&outbound, b"to-master");
     }
 
     #[test]
