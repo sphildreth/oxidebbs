@@ -222,6 +222,11 @@ the configured logs directory, early-exit-before-COM1 diagnostics, and `in_door`
 live node state. Additional drop-file formats remain compatible with this
 boundary.
 
+Generated drop files use the active board configuration for board and sysop
+identity. `DORINFO1.DEF` maps the caller's user-profile real name into its
+first-name and last-name fields because that format has no separate alias field.
+`DOOR.SYS` includes both alias and real name.
+
 The live caller door bridge is DOSEMU2-specific. Door runner values must resolve
 to a DOSEMU2-compatible binary such as `dosemu`; DOSBox/DOSBox-Staging is not a
 supported runner for the v1 COM1 PTY bridge.

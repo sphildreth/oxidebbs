@@ -73,6 +73,8 @@ pub struct DoorCaller {
 pub struct DoorRunRequest {
     pub door: DoorDefinition,
     pub caller: DoorCaller,
+    pub board_name: String,
+    pub sysop_name: String,
     pub node_number: u16,
     pub runtime_dir: PathBuf,
 }
@@ -214,7 +216,9 @@ pub fn prepare_door_run(request: &DoorRunRequest) -> Result<DoorRunPlan, DoorErr
     fs::create_dir_all(&request.runtime_dir)?;
     let drop_file_path = request.runtime_dir.join(&request.door.drop_file);
     let drop_contents = match request.door.drop_file.to_ascii_uppercase().as_str() {
-        "DORINFO1.DEF" => render_dorinfo1_def("OxideBBS", "Sysop", &request.caller),
+        "DORINFO1.DEF" => {
+            render_dorinfo1_def(&request.board_name, &request.sysop_name, &request.caller)
+        }
         _ => render_door_sys(&request.caller, request.node_number, 38_400),
     };
     fs::write(&drop_file_path, drop_contents)?;
@@ -538,6 +542,8 @@ command = "LORD.EXE"
         let request = DoorRunRequest {
             door: door_with_working_dir("DOOR.SYS", &working_dir),
             caller: caller(),
+            board_name: "Test Board".to_string(),
+            sysop_name: "Test Sysop".to_string(),
             node_number: 1,
             runtime_dir: runtime_dir.clone(),
         };
@@ -559,6 +565,8 @@ command = "LORD.EXE"
         let request = DoorRunRequest {
             door: door_with_working_dir("DOOR.SYS", &working_dir),
             caller: caller(),
+            board_name: "Test Board".to_string(),
+            sysop_name: "Test Sysop".to_string(),
             node_number: 1,
             runtime_dir: runtime_dir.clone(),
         };
@@ -582,6 +590,8 @@ command = "LORD.EXE"
         let request = DoorRunRequest {
             door: door_with_working_dir("DORINFO1.DEF", &door_dir),
             caller: caller(),
+            board_name: "Test Board".to_string(),
+            sysop_name: "Test Sysop".to_string(),
             node_number: 1,
             runtime_dir: runtime_dir.clone(),
         };
@@ -614,6 +624,8 @@ command = "LORD.EXE"
         let request = DoorRunRequest {
             door,
             caller: caller(),
+            board_name: "Test Board".to_string(),
+            sysop_name: "Test Sysop".to_string(),
             node_number: 1,
             runtime_dir: runtime_dir.clone(),
         };
@@ -639,6 +651,8 @@ command = "LORD.EXE"
                 command_door
             },
             caller: caller(),
+            board_name: "Test Board".to_string(),
+            sysop_name: "Test Sysop".to_string(),
             node_number: 1,
             runtime_dir: runtime_dir.clone(),
         };
@@ -696,6 +710,8 @@ command = "LORD.EXE"
                 empty_command
             },
             caller: caller(),
+            board_name: "Test Board".to_string(),
+            sysop_name: "Test Sysop".to_string(),
             node_number: 1,
             runtime_dir: runtime_dir.clone(),
         };
@@ -720,13 +736,17 @@ command = "LORD.EXE"
         let request = DoorRunRequest {
             door: door_with_working_dir("DORINFO1.DEF", &working_dir),
             caller: caller(),
+            board_name: "Test Board".to_string(),
+            sysop_name: "Test Sysop".to_string(),
             node_number: 1,
             runtime_dir: runtime_dir.clone(),
         };
 
         DryRunDoorRunner.run(&request).expect("dry run");
 
-        assert!(runtime_dir.join("DORINFO1.DEF").is_file());
+        let drop_file = fs::read_to_string(runtime_dir.join("DORINFO1.DEF")).expect("drop file");
+        assert!(drop_file.starts_with("Test Board\r\nTest Sysop\r\n"));
+        assert!(drop_file.contains("Alice\r\nSysop\r\n"));
 
         cleanup_node_runtime_dir(&base).expect("cleanup");
     }
@@ -740,6 +760,8 @@ command = "LORD.EXE"
         let request = DoorRunRequest {
             door: door_with_working_dir("DOOR.SYS", &working_dir),
             caller: caller(),
+            board_name: "Test Board".to_string(),
+            sysop_name: "Test Sysop".to_string(),
             node_number: 1,
             runtime_dir: runtime_dir.clone(),
         };

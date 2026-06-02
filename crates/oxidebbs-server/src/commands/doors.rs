@@ -322,6 +322,8 @@ pub fn run_door_test(
     let request = DoorRunRequest {
         door: door_to_core(&door),
         caller: door_caller(&user),
+        board_name: ctx.config.board.name.clone(),
+        sysop_name: ctx.config.board.sysop_name.clone(),
         node_number: args.node,
         runtime_dir,
     };

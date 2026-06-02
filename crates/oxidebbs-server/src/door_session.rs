@@ -37,6 +37,7 @@ use crate::serve::{ServeError, ServeResult};
 
 const DOOR_BRIDGE_POLL: Duration = Duration::from_millis(250);
 const DOOR_KILL_WAIT: Duration = Duration::from_secs(2);
+const DOOR_EXIT_WAIT: Duration = Duration::from_secs(5);
 const DOSEMU2_CONFIG_FILE: &str = "OXDOSEMU2.CONF";
 const DOSEMU2_COM1_PTY: &str = "OXCOM1.PTY";
 const DOOR_LOG_DIR: &str = "doors";
@@ -511,6 +512,8 @@ impl<'a> DoorService<'a> {
         Ok(DoorRunRequest {
             door: door_to_core(door)?,
             caller: door_caller(user),
+            board_name: self.config.board.name.clone(),
+            sysop_name: self.config.board.sysop_name.clone(),
             node_number,
             runtime_dir: node_runtime_dir(&self.config.paths.runtime, node_number),
         })
@@ -1046,7 +1049,7 @@ where
             read = serial_reader.read(&mut serial_buf) => {
                 let count = read?;
                 if count == 0 {
-                    result.exit_code = terminate_child(child).await?;
+                    finish_child_after_serial_eof(child, result).await?;
                     return Ok(());
                 } else {
                     runtime.heartbeat_node(node_number);
@@ -1132,6 +1135,30 @@ async fn write_bridge_message<T: Transport>(
         .bytes_out
         .saturating_add(i64::try_from(bytes.len()).unwrap_or(i64::MAX));
     Ok(())
+}
+
+async fn finish_child_after_serial_eof(
+    child: &mut Child,
+    result: &mut DoorBridgeResult,
+) -> ServeResult<()> {
+    match child.try_wait()? {
+        Some(status) => {
+            result.exit_code = status.code();
+            Ok(())
+        }
+        None => match time::timeout(DOOR_EXIT_WAIT, child.wait()).await {
+            Ok(Ok(status)) => {
+                result.exit_code = status.code();
+                Ok(())
+            }
+            Ok(Err(error)) => Err(ServeError::Network(error)),
+            Err(_) => {
+                result.disconnect_forced = true;
+                result.exit_code = terminate_child(child).await?;
+                Ok(())
+            }
+        },
+    }
 }
 
 async fn terminate_child(child: &mut Child) -> ServeResult<Option<i32>> {
@@ -1585,6 +1612,45 @@ mod tests {
         assert!(output.contains("serial-ready"));
         assert_eq!(result.bytes_in, 6);
         assert!(result.bytes_out >= 14);
+        assert!(result.com1_connected);
+    }
+
+    #[tokio::test]
+    async fn serial_eof_waits_for_child_exit_before_forcing_disconnect() {
+        let (serial_bridge, serial_peer) = tokio::io::duplex(1024);
+        drop(serial_peer);
+        let (mut transport, _client) = LoopbackTransport::new();
+        let runtime = ServerRuntime::new("test".to_string(), 1, 1, 30);
+        runtime.mark_node_connected(
+            1,
+            "session".to_string(),
+            "127.0.0.1:23".to_string(),
+            "now".to_string(),
+        );
+        let mut child = Command::new("sh")
+            .arg("-c")
+            .arg("sleep 0.05; exit 7")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn exit helper");
+        let mut result = DoorBridgeResult::default();
+
+        bridge_connected_serial(
+            &mut transport,
+            &runtime,
+            1,
+            &mut child,
+            serial_bridge,
+            TokioInstant::now() + Duration::from_secs(2),
+            &mut result,
+        )
+        .await
+        .expect("bridge");
+
+        assert_eq!(result.exit_code, Some(7));
+        assert!(!result.disconnect_forced);
         assert!(result.com1_connected);
     }
 
