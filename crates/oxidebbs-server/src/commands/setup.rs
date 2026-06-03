@@ -207,9 +207,29 @@ mod tests {
         path
     }
 
+    struct SetupTestCleanup {
+        base_dir: PathBuf,
+    }
+
+    impl Drop for SetupTestCleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all("doors/oxide-door-check");
+            let _ = std::fs::remove_dir("doors");
+            let _ = std::fs::remove_dir("assets/ansi");
+            let _ = std::fs::remove_dir("assets/screens");
+            let _ = std::fs::remove_dir("assets");
+            let _ = std::fs::remove_dir("logs");
+            let _ = std::fs::remove_dir("runtime");
+            let _ = std::fs::remove_dir_all(&self.base_dir);
+        }
+    }
+
     #[test]
     fn setup_accepts_global_data_override() {
         let base_dir = temp_path("setup-data");
+        let _cleanup = SetupTestCleanup {
+            base_dir: base_dir.clone(),
+        };
         let output = base_dir.join("oxidebbs.toml");
         let db_override = base_dir.join("data").join("oxidebbs.ddb");
 
@@ -231,8 +251,5 @@ mod tests {
         let output_contents = std::fs::read_to_string(&output).expect("read setup config");
         assert!(output_contents.contains(&db_override.to_string_lossy().to_string()));
         assert!(db_override.exists());
-        let _ = std::fs::remove_file(&output);
-        let _ = std::fs::remove_file(&db_override);
-        let _ = std::fs::remove_dir_all(&base_dir);
     }
 }

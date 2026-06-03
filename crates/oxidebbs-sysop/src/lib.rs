@@ -11,6 +11,18 @@ use ratatui::text::{Line, Text};
 use ratatui::widgets::{Block, Borders, Paragraph, Widget};
 use thiserror::Error;
 
+pub mod app;
+pub mod command_palette;
+pub mod events;
+pub mod input;
+pub mod screens;
+pub mod services;
+pub mod theme;
+pub mod widgets;
+
+// Re-export the main entry point
+pub use app::{AppConfig, run_tui};
+
 pub const CRATE_NAME: &str = "oxidebbs-sysop";
 
 #[derive(Debug, Error)]
@@ -20,6 +32,15 @@ pub enum SysopError {
 
     #[error("door config error: {0}")]
     DoorConfig(#[from] DoorError),
+
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("control socket error: {0}")]
+    Control(String),
+
+    #[error("{0}")]
+    Message(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

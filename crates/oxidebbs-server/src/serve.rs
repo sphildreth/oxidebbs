@@ -96,7 +96,7 @@ pub(crate) fn validate_startup_database(config: &OxideConfig) -> ServeResult<()>
     validate_startup_database_health(&db)
 }
 
-async fn run_until_shutdown<S>(
+pub(crate) async fn run_until_shutdown<S>(
     config: &OxideConfig,
     config_path: &Path,
     shutdown_signal: S,

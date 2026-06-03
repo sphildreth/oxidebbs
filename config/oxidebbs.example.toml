@@ -48,6 +48,9 @@ logs = "./logs"
 [nodes]
 count = 4
 
+[sysop]
+confirm_quit = true
+
 [terminal]
 default_encoding = "cp437"
 clear_screen_on_connect = true
@@ -132,7 +135,7 @@ allowed_runners = ["dosemu", "dosemu2"]
 key = "oxide-check"
 name = "Oxide Door Check"
 runner = "dosemu"
-working_dir = "./tools/doors/oxide-door-check/dist"
+working_dir = "./doors/oxide-door-check/dist"
 command = "OXIDECHK.EXE"
 drop_file = "DORINFO1.DEF"
 exclusive = false

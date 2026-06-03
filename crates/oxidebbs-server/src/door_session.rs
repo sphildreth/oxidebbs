@@ -1485,7 +1485,7 @@ mod tests {
     use crate::config::{
         AuditConfig, AuthConfig, BoardConfig, DatabaseConfig, DoorDefConfig, DoorsConfig,
         FlowConfig, FtnConfig, LoggingConfig, MenuConfig, NodesConfig, PathsConfig, ScreenConfig,
-        TelnetConfig, TerminalConfig,
+        SysopConfig, TelnetConfig, TerminalConfig,
     };
 
     const USER_ID: &str = "00000000-0000-4000-8000-000000000701";
@@ -1528,6 +1528,7 @@ mod tests {
                 logs: working_dir.join("logs"),
             },
             nodes: NodesConfig::default(),
+            sysop: SysopConfig::default(),
             terminal: TerminalConfig::default(),
             flow: FlowConfig::default(),
             screens: HashMap::<String, ScreenConfig>::new(),

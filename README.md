@@ -1,171 +1,224 @@
+<p align="center">
+    <img src="graphics/logo.png" alt="OxideBBS logo" width="220" />
+</p>
+
+<p align="center">
+    <a href="https://www.rust-lang.org">
+        <img src="https://img.shields.io/badge/language-Rust-orange" alt="Language: Rust" />
+    </a>
+    <a href="LICENSE">
+        <img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License: Apache-2.0" />
+    </a>
+    <a href="https://github.com/sphildreth/oxidebbs/actions/workflows/ci.yml">
+        <img src="https://github.com/sphildreth/oxidebbs/actions/workflows/ci.yml/badge.svg" alt="CI" />
+    </a>
+    <a href="https://github.com/sphildreth/oxidebbs/releases">
+        <img src="https://img.shields.io/github/v/release/sphildreth/oxidebbs?sort=semver" alt="Latest release" />
+    </a>
+    <a href="https://oxidebbs.com">
+        <img src="https://img.shields.io/badge/docs-oxidebbs.com-2ea44f" alt="Documentation" />
+    </a>
+</p>
+
 # OxideBBS
 
-**OxideBBS** is a modern, Rust-built BBS engine for classic ANSI/telnet culture, DOS door games, and FTN-style message networking.
+**OxideBBS** is a modern Rust BBS engine for telnet callers, ANSI/CP437
+screens, DecentDB persistence, local sysop operations, and DOS door games.
 
-The project is intentionally retro in user experience and modern in implementation:
+It keeps the caller experience byte-oriented and classic while giving sysops a
+clean Rust codebase, a real database layer, auditable runtime operations, Docker
+deployment, and a GitHub-native release workflow.
 
-- Rust-first BBS runtime
-- Telnet-only for v1
-- ANSI/CP437-first terminal rendering
-- DecentDB as the only system database
-- DOSBox/DOSEMU-compatible door runner architecture
-- Future-ready transport layer for physical serial/modem support
-- Future-ready message-network layer for OxideNet / FTN-style networks
+> **Built for sysops. Driven by code.**
 
-> Working motto: **Built for sysops. Driven by code.**
-
-## Current status
-
-This is a starter implementation with tested Rust crates for configuration,
-terminal assets, telnet negotiation, DecentDB repositories, menu routing, local
-message commands, door drop files, a CLI-first sysop interface, and a first
-telnet `serve` runtime that accepts callers and routes the configured starter
-menus.
-
-## Repository layout
+The canonical repository is:
 
 ```text
-.
-├── crates/
-│   ├── oxidebbs-server/     # main daemon binary
-│   ├── oxidebbs-core/       # users, sessions, nodes, permissions, menu routing
-│   ├── oxidebbs-term/       # ANSI/CP437 rendering and terminal input helpers
-│   ├── oxidebbs-telnet/     # telnet transport and negotiation
-│   ├── oxidebbs-db/         # DecentDB repository layer and schema helpers
-│   ├── oxidebbs-door/       # door metadata, drop files, runners
-│   └── oxidebbs-sysop/      # local sysop/admin TUI and CLI helpers
-├── design/
-│   ├── adr/                 # architecture decision records
-│   ├── ARCHITECTURE.md
-│   ├── ANSI_CP437.md
-│   ├── DECENTDB_SCHEMA.md
-│   ├── DOORS.md
-│   ├── FTN_NETWORKING.md
-│   ├── PRD.md
-│   ├── ROADMAP.md
-│   ├── RUNBOOK.md
-│   ├── SPEC.md
-│   ├── TASKS.md
-│   └── TELNET.md
-├── docs/
-│   ├── .vitepress/          # VitePress config
-│   ├── index.md             # documentation home
-│   ├── project/             # project documentation pages
-│   └── public/              # static files copied into the site build
-├── config/
-│   ├── doors.example.toml
-│   └── oxidebbs.example.toml
-├── assets/
-│   ├── ansi/
-│   └── screens/             # login, info, and menu screen assets
-├── Cargo.lock
-├── package.json
-├── package-lock.json
-└── AGENTS.md
+https://github.com/sphildreth/oxidebbs
 ```
 
-## Non-goals for v1
+## Features
 
-OxideBBS v1 is not trying to be every BBS ever written.
+- 📡 **Telnet Caller Runtime** - Multi-node telnet serving with session
+  lifecycle tracking, idle timeout handling, graceful shutdown, and live node
+  state.
+- 🎨 **ANSI/CP437-First UI** - Raw ANSI assets, CP437 conversion, 40-column and
+  80-column screen profiles, paging, caller-safe prompts, and CRLF-normalized
+  telnet output.
+- 🧭 **Configurable Menus** - Login, main, info, message, door, logoff, and
+  nested submenu routing with hotkey-driven caller commands.
+- 👤 **Accounts And Auth** - New-user creation, Argon2id password hashing,
+  sysop accounts, security levels, persistent lockout state, and audit-friendly
+  login outcomes.
+- 💬 **Local Message Areas** - DecentDB-backed message areas, posting, reading,
+  replies, private-mail foundation, moderation fields, and SQL-side visibility
+  filtering.
+- 🕹️ **DOS Door Support** - DOSEMU2-based live door launches, `DOOR.SYS` and
+  `DORINFO1.DEF` drop files, per-node runtime directories, byte bridging,
+  timeout cleanup, and durable `door_runs` records.
+- 🧪 **Bundled Door Fixture** - Oxide-owned `oxide-check` DOS test door for
+  validating drop files, DOSEMU2 command planning, and live COM1 byte flow
+  without bundling third-party doorware.
+- 🗄️ **DecentDB Persistence** - [DecentDB](https://github.com/sphildreth/decentdb) is the only system database, with
+  schema markers, migrations, users, sessions, messages, doors, audit events,
+  backup/export/import, and doctor checks.
+- 🧑‍💻 **Sysop CLI And TUI** - Local CLI commands plus a Ratatui sysop console
+  for dashboard, nodes, users, doors, messages, database, logs, config, ANSI,
+  audit, doctor, and read-only workflows.
+- 🔌 **Local Control Socket** - Same-UID Unix control channel for live status,
+  node list/show, disconnects, direct node messages, broadcasts, and stale-node
+  recovery.
+- 📝 **Operational Logs And Audit Trail** - Configurable text or JSON logs,
+  rotation, audit retention, startup/shutdown events, door events, auth events,
+  and sysop action records.
+- 🐳 **Docker Deployment** - Cross-platform Docker Compose path for Windows,
+  macOS, and Linux hosts with OxideBBS, DOSEMU2, assets, config, and the test
+  door inside a Linux runtime image.
+- 🧱 **Modular Rust Workspace** - Focused crates for server, core domain, term,
+  telnet, DecentDB repositories, doors, and local sysop tooling.
 
-Explicit non-goals:
+## Sysop TUI
 
-- No web-first architecture
-- No PostgreSQL, SQLite, MySQL, or external system database
-- No file-transfer subsystem as a primary v1 feature
-- No physical modem support until the telnet version is stable
-- No attempt to perfectly emulate Telegard, Renegade, WWIV, Synchronet, or Mystic feature-for-feature
-- No bundling of questionable abandonware doors
+<p align="center">
+    <img src="graphics/screenshots/sysop-tui-oxide-theme.png" alt="OxideBBS sysop TUI dashboard showing node map, recent events, health, and alerts" width="900" />
+</p>
 
-## First development target
+## Quick Start With Docker
 
-The first useful milestone is:
-
-```text
-A caller can connect over telnet, create/log into an account, view ANSI menus,
-read/post a local message, launch one configured DOS door, and disconnect cleanly.
-```
-
-## Development commands
-
-```bash
-cargo fmt --all
-cargo check --workspace --locked
-cargo test --workspace --locked
-cargo clippy --workspace --all-targets --locked -- -D warnings
-```
-
-## Setup wizard
-
-Create a starter local board config with:
-
-```bash
-cargo run -p oxidebbs-server -- setup
-```
-
-The wizard writes `config/oxidebbs.toml` by default and creates the starter
-paths for data, assets, doors, runtime files, and logs.
-
-## Docker quick start
-
-Docker Compose is the supported cross-platform deployment path for Windows,
-macOS, and Linux while OxideBBS remains a Linux-targeted runtime:
+Docker Compose is the recommended cross-platform deployment path. It includes
+DOSEMU2 and the bundled Oxide-owned test door fixture.
 
 ```bash
 OXIDEBBS_SYSOP_PASSWORD='choose-a-real-password' docker compose up -d --build
 ```
 
-Connect to `localhost:2323` with telnet or SyncTERM. The Docker image includes
-DOSEMU2 and the bundled Oxide-owned `oxide-check` DOS test door, so host systems
-do not need a native DOSEMU2 install for Docker deployment.
-Use `OXIDEBBS_HOST_TELNET_PORT` to publish a different host port.
-The generated and example configs bind OxideBBS to `127.0.0.1:2323` by default;
-binding telnet to a public interface is an operator choice because telnet sends
-credentials and caller traffic in plaintext.
+Connect with SyncTERM or telnet:
 
-See `docs/project/docker.md` for volume, reset, and door-testing details.
+```bash
+telnet localhost 2323
+```
 
-## Run the server
+Common Docker sysop commands:
 
-Start the telnet listener with:
+```bash
+docker compose run --rm oxidebbs status
+docker compose run --rm oxidebbs nodes list
+docker compose run --rm oxidebbs doors check oxide-check
+docker compose run --rm oxidebbs doors test oxide-check --user sysop --dry-run
+```
+
+See [docs/project/docker.md](docs/project/docker.md) for first-boot variables,
+volumes, reset steps, door testing, and Windows/macOS notes.
+
+## Install From Releases
+
+GitHub Releases publish `oxidebbs-server` packages and SHA-256 checksums for:
+
+- `oxidebbs-<tag>-x86_64-unknown-linux-gnu.tar.gz`
+- `oxidebbs-<tag>-x86_64-apple-darwin.tar.gz`
+- `oxidebbs-<tag>-x86_64-pc-windows-msvc.zip`
+
+Each package includes the server binary, bundled assets, example configs, the
+Oxide-owned `oxide-check` test door fixture, license files, and security policy.
+Docker remains the simplest deployment path for Windows and macOS sysops who
+want DOS door support because live door execution targets a Linux runtime with
+DOSEMU2.
+
+## Build From Source
+
+Prerequisites:
+
+- Rust stable with `rustfmt` and `clippy`
+- `clang` and `libclang-dev` for DecentDB's native build integration
+- DOSEMU2 for live DOS door execution
+- Node.js for building the documentation site
+
+On Debian/Ubuntu:
+
+```bash
+sudo apt-get install -y clang libclang-dev
+```
+
+Create a local board:
+
+```bash
+cargo run -p oxidebbs-server -- setup
+```
+
+Validate the configuration:
+
+```bash
+cargo run -p oxidebbs-server -- check
+cargo run -p oxidebbs-server -- config check
+```
+
+Start the telnet listener:
 
 ```bash
 cargo run -p oxidebbs-server -- serve
 ```
 
-After `setup`, the CLI uses `config/oxidebbs.toml` by default. A clean checkout
+After `setup`, OxideBBS uses `config/oxidebbs.toml` by default. A clean checkout
 without that file falls back to `config/oxidebbs.example.toml`.
 
-The current runtime accepts telnet callers, assigns node slots, writes session
-and audit records to DecentDB, renders configured login/main menu screens, and
-routes starter menu keys. User registration, login authentication, and local
-message reading/posting are wired into DecentDB-backed sessions. The caller
-`Doors` menu lists enabled configured doors, validates the selection, launches
-the configured runner, bridges caller/process bytes, records `door_runs`, and
-returns normal exits or timeouts to the main menu.
+## Sysop Operations
 
-During pre-alpha, OxideBBS migrates supported older development `.ddb` schemas
-before startup and refuses unsupported stale, missing, or future schema markers.
-
-## Sysop CLI
-
-Common local administration uses top-level command groups:
+OxideBBS is local-admin-first: there is no remote web admin surface in the
+current release line. Use the CLI, the local sysop TUI, and the local control
+socket from the host running `oxidebbs-server`.
 
 ```bash
-cargo run -p oxidebbs-server -- check
 cargo run -p oxidebbs-server -- status
-cargo run -p oxidebbs-server -- users list
 cargo run -p oxidebbs-server -- nodes list
+cargo run -p oxidebbs-server -- users list
 cargo run -p oxidebbs-server -- messages areas list
 cargo run -p oxidebbs-server -- doors list
-cargo run -p oxidebbs-server -- ansi list
+cargo run -p oxidebbs-server -- logs recent
 cargo run -p oxidebbs-server -- db doctor
 ```
 
-## Documentation site
+Launch the local sysop TUI:
 
-The documentation site is built with VitePress from `docs/` and deployed to
-GitHub Pages for `https://oxidebbs.com`.
+```bash
+cargo run -p oxidebbs-server -- sysop
+```
+
+The TUI can attach to a running server through
+`runtime/oxidebbs-control.sock`; when no socket is available it can start an
+embedded serve runtime for the TUI session. Selectable themes include
+`oxide-classic`, `wildcat`, `telegard`, `vbbs`, `mystic`, `midnight`, and
+`high-contrast`.
+
+## Doors
+
+OxideBBS isolates door execution from core session logic. A live DOS door
+session uses this byte path:
+
+```text
+caller telnet client
+  <-> OxideBBS caller transport
+  <-> OxideBBS PTY byte bridge
+  <-> DOSEMU2 COM1 pts backend
+  <-> DOSEMU2-emulated COM1 UART
+  <-> DOS door program
+```
+
+Validate the bundled `oxide-check` fixture without launching a live caller
+session:
+
+```bash
+cargo run -p oxidebbs-server -- --config config/oxidebbs.example.toml doors check oxide-check
+cargo run -p oxidebbs-server -- --config config/oxidebbs.example.toml doors dropfile oxide-check --user sysop --node 1 --format DORINFO1.DEF
+cargo run -p oxidebbs-server -- --config config/oxidebbs.example.toml doors test oxide-check --user sysop --dry-run
+```
+
+OxideBBS does not bundle copyrighted or abandonware DOS doors. Add third-party
+doors only when you have the rights to run and distribute them.
+
+## Documentation
+
+The documentation site is published at [oxidebbs.com](https://oxidebbs.com).
+Source lives in [docs/](docs/).
 
 ```bash
 npm ci
@@ -173,18 +226,84 @@ npm run docs:dev
 npm run docs:build
 ```
 
-## Canonical repository
+Useful docs:
 
-GitHub is the canonical home for OxideBBS:
+- [Getting Started](docs/project/getting-started.md)
+- [Deployment and Operations](docs/project/deployment.md)
+- [Docker Deployment](docs/project/docker.md)
+- [Sysop CLI](docs/project/sysop-cli.md)
+- [Caller Commands](docs/project/caller-commands.md)
+- [Architecture](docs/project/architecture.md)
+- [Changelog](docs/about/changelog.md)
+
+## Repository Layout
 
 ```text
-https://github.com/sphildreth/oxidebbs
+.
+├── crates/
+│   ├── oxidebbs-server/     # binary entrypoint, CLI, telnet server
+│   ├── oxidebbs-core/       # users, sessions, nodes, permissions, menus
+│   ├── oxidebbs-term/       # ANSI/CP437 rendering and terminal helpers
+│   ├── oxidebbs-telnet/     # telnet transport and negotiation
+│   ├── oxidebbs-db/         # DecentDB repository layer and schema helpers
+│   ├── oxidebbs-door/       # door metadata, drop files, runners
+│   └── oxidebbs-sysop/      # local Ratatui sysop console and services
+├── assets/                  # bundled ANSI, ASCII, text, and screen assets
+├── config/                  # example board and door configuration
+├── design/                  # specs, roadmap, ADRs, and architecture notes
+├── docs/                    # VitePress documentation site
+├── graphics/                # project logo and README graphics
+├── scripts/                 # development and door validation scripts
+└── tools/doors/             # Oxide-owned DOS test door fixture
 ```
 
-A Codeberg mirror may be added later if the project wants a secondary FOSS-community presence.
+## Development
+
+The CI gate is:
+
+```bash
+./scripts/dev-check.sh
+```
+
+It runs:
+
+```bash
+cargo fmt --all --check
+cargo check --workspace --locked
+cargo test --workspace --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
+```
+
+Use `--locked` when validating Rust changes because `Cargo.lock` is committed.
+Meaningful behavior, architecture, config, or product-scope changes should also
+update the relevant design docs and ADRs.
+
+## Current Boundaries
+
+- Telnet is the supported caller transport for the v1 release line.
+- DecentDB is the only system database.
+- Remote caller UI is ANSI/CP437 byte-oriented, not Unicode-first.
+- Ratatui is used only for the local sysop console, not caller screens.
+- Physical modem/serial support, BinkP polling, full FTN/OxideNet runtime, and
+  file transfer support are future work.
+- Public telnet exposure is an operator decision. Telnet sends credentials and
+  caller traffic in plaintext; the generated config binds to `127.0.0.1:2323`
+  by default.
+
+## Contributing
+
+Issues and pull requests are welcome. Start with
+[CONTRIBUTING.md](CONTRIBUTING.md), keep the caller experience ANSI-first, and
+run `./scripts/dev-check.sh` before submitting changes.
+
+## Security
+
+Report security issues privately to the repository owner. See
+[SECURITY.md](SECURITY.md) for the current policy and priorities.
 
 ## License
 
-OxideBBS is licensed under the Apache License, Version 2.0. See `LICENSE`.
-The repository licensing decision and contribution/asset policy are recorded in
-`design/adr/0007-use-github-and-apache-2.md`.
+OxideBBS is licensed under the Apache License, Version 2.0. See
+[LICENSE](LICENSE) and [NOTICE](NOTICE). The repository licensing decision and
+contribution policy are recorded in
+[design/adr/0007-use-github-and-apache-2.md](design/adr/0007-use-github-and-apache-2.md).

@@ -74,9 +74,7 @@ When OxideNet exists, the sysop TUI should include network applications, node re
 
 The sysop interface is the local administrative surface for running, inspecting, and maintaining an OxideBBS instance.
 
-For v1, the sysop interface should be **CLI-first**.
-
-A local Ratatui-based TUI is desirable, but it should come after the core server, telnet sessions, users, local messages, DecentDB persistence, and basic door launching are stable.
+For v1, the sysop interface was **CLI-first**. A local Ratatui-based TUI shipped in **v1.1** once the core server, telnet sessions, users, local messages, DecentDB persistence, and basic door launching were stable.
 
 ### Design goals
 
@@ -94,7 +92,7 @@ OxideBBS should have three admin layers over time:
 
 ```text
 v1      CLI admin commands
-v1.x    Local Ratatui sysop console
+v1.1    Local Ratatui sysop console
 v2+     Optional read-only status web dashboard, if desired
 ```
 
@@ -507,13 +505,19 @@ Editing config through commands is not essential for v1. It is enough to validat
 
 ### Local Ratatui sysop console
 
-The Ratatui console should be v1.x unless implementation momentum is very high.
+The Ratatui console shipped in v1.1.
 
 Launch command:
 
 ```bash
-oxidebbs sysop
+oxidebbs-server sysop
 ```
+
+The current `oxidebbs-server` binary launches the full local TUI from `sysop`
+by default. `--tui` remains as a compatibility flag, and `--readonly` disables
+destructive TUI actions. `sysop` attaches to an already-running `serve` control
+socket when available; otherwise it starts an embedded `serve` runtime for the
+lifetime of the TUI. `--connect-only` disables embedded startup.
 
 Recommended first screen:
 
@@ -532,7 +536,7 @@ Recommended first screen:
 └───────────────┴────────────────────────────────────────────────────┘
 ```
 
-#### TUI v1.x screens
+#### TUI v1.1 screens
 
 - Dashboard
 - Nodes
@@ -601,7 +605,6 @@ oxidebbs ansi convert
 oxidebbs db import
 oxidebbs db compact
 oxidebbs config set
-oxidebbs sysop
 ```
 
 ### Implementation recommendation
@@ -627,11 +630,11 @@ oxidebbs-server/src/commands/logs.rs
 
 ### Final recommendation
 
-For v1, build the sysop interface as:
+For v1, the sysop interface was built as:
 
 ```text
 CLI first.
-Ratatui console later.
+Ratatui console in v1.1.
 No web admin.
 No remote sysop UI until local administration is solid.
 ```
@@ -713,16 +716,16 @@ For the initial TUI:
 ### Recommended command
 
 ```bash
-oxidebbs sysop
+oxidebbs-server sysop
 ```
 
 Optional flags:
 
 ```bash
-oxidebbs sysop --config config/oxidebbs.toml
-oxidebbs sysop --connect /run/oxidebbs/admin.sock
-oxidebbs sysop --theme oxide-classic
-oxidebbs sysop --readonly
+oxidebbs-server --config config/oxidebbs.toml sysop
+oxidebbs-server sysop --readonly
+oxidebbs-server sysop --connect-only
+oxidebbs-server sysop --theme oxide-classic
 ```
 
 ### Implementation stack
@@ -1224,6 +1227,22 @@ Visual inspiration:
 - Gray and off-white for neutral text
 - Box drawing with selective heavy borders
 - Minimal blinking; use sparingly and only for urgent alerts
+
+The implemented TUI theme registry includes these selectable presets:
+
+- `oxide-classic`: charcoal, oxide orange, green success, amber warnings.
+- `wildcat`: black/gray shell with bright cyan accents.
+- `telegard`: dark blue sysop-console palette with blue highlights.
+- `vbbs`: dark green/teal console palette.
+- `mystic`: dark violet/purple console palette.
+- `midnight`: black and charcoal palette with muted gray accents.
+- `high-contrast`: black, white, yellow, green, and red accessibility palette.
+
+Select a preset with:
+
+```bash
+oxidebbs-server sysop --theme telegard
+```
 
 Suggested semantic colors:
 
@@ -1973,70 +1992,66 @@ This screen should appear only when the module is enabled or installed.
 
 ### Feature requirements by milestone
 
-#### Milestone TUI-0: Foundation
+#### Milestone TUI-0: Foundation ✅ (v1.1)
 
 - App shell.
 - Theme system.
 - Navigation rail.
 - Header/footer.
-- Command palette shell.
+- Command palette shell with fuzzy search.
 - Help modal shell.
-- Read-only dashboard mock data.
 - Keyboard handling.
+- Async crossterm event loop.
 
-#### Milestone TUI-1: Live dashboard and nodes
+#### Milestone TUI-1: Live dashboard and nodes ✅ (v1.1)
 
 - Dashboard backed by real service data.
-- Node list.
+- Node list/table/grid views.
 - Node detail.
-- Disconnect node.
+- Disconnect node with confirmation.
 - Message node.
 - Broadcast.
 - Recent events.
 - Auto-refresh.
+- Filter/sort nodes.
 
-#### Milestone TUI-2: Users
+#### Milestone TUI-2: Users ✅ (v1.1)
 
-- User list.
+- User list with sortable columns.
 - User search/filter.
 - User detail.
-- Add user.
-- Edit user basics.
-- Reset password.
+- Reset password (Argon2 hashed via `UserAdminService`).
 - Set security level.
 - Enable/disable user.
-- User audit view.
+- Promote/demote sysop.
 
-#### Milestone TUI-3: Doors
+#### Milestone TUI-3: Doors ✅ (v1.1)
 
 - Door list.
 - Door detail.
-- Door config check.
-- Drop-file viewer.
-- Door dry-run.
-- Door test launch.
-- Door run history.
-- Door logs.
-- Runtime cleanup.
+- Door run history (50 recent runs).
+- Enable/disable door.
 
-#### Milestone TUI-4: Messages
+_Note: door config check, drop-file viewer, dry-run, test launch, and runtime cleanup remain CLI-only for v1.1 and are planned for a future TUI enhancement._
+
+#### Milestone TUI-4: Messages ✅ (v1.1)
 
 - Message area list.
-- Area detail.
-- Message list.
+- Message list by area.
 - Message detail.
-- Delete message.
-- Pin/move later.
-- Network metadata display later.
+- Delete message with confirmation.
+- Soft-delete via `MessageAdminService`.
 
-#### Milestone TUI-5: Database, logs, audit
+_Note: area add/edit, pin/move, and network metadata remain planned for future enhancement._
 
-- Database status.
-- Backup command.
-- Doctor/check command.
-- Live logs.
-- Audit search/filter.
-- Export audit/logs later.
+#### Milestone TUI-5: Database, logs, audit ✅ (v1.1)
+
+- Database status (schema version, row counts, health checks).
+- Live logs tail.
+- Audit recent events.
+- Audit user filter.
+
+_Note: backup command, doctor/check command, and export remain CLI-only for v1.1._
 
 #### Milestone TUI-6: OxideNet
 
@@ -2050,51 +2065,56 @@ This screen should appear only when the module is enabled or installed.
 - Poll logs.
 - Nodelist generation.
 
-### V1 minimum TUI
+_Note: OxideNet is not yet implemented; this milestone is pending._
 
-If scope needs to be controlled, the first useful TUI should include:
+### V1.1 shipped TUI
+
+The v1.1 TUI includes:
 
 ```text
 Dashboard
 Nodes
 Users
 Doors
-Logs
-Database
-Help
-```
-
-Minimum actions:
-
-```text
-Disconnect node
-Broadcast message
-Reset user password
-Disable user
-Check door
-Dry-run door
-View generated drop file
-Backup database
-Tail logs
-```
-
-### V1.5 ideal TUI
-
-The first “feature rich” version should include:
-
-```text
-Dashboard
-Nodes
-Users
 Messages
-Doors
-ANSI
 Database
 Logs
 Audit
 Config
-Command palette
-Context help
+ANSI
+Help
+```
+
+Implemented actions:
+
+```text
+Disconnect node (with confirmation)
+Broadcast message
+Message node
+Reset user password
+Set security level
+Enable/disable user
+Promote/demote sysop
+Delete message (with confirmation)
+View door run history
+Filter and sort lists
+Command palette (fuzzy search)
+```
+
+### V1.5 ideal TUI enhancements
+
+Future enhancements may include:
+
+```text
+Add/edit door definitions
+Door config check in TUI
+Drop-file viewer in TUI
+Door dry-run/test in TUI
+Database backup from TUI
+Message area add/edit
+Audit export
+Config editing
+OxideNet administration
 ```
 
 ### V2 / OxideNet TUI
@@ -2141,7 +2161,7 @@ oxidebbs-sysop
 
 #### Screen contract
 
-Each screen should implement a common trait/concept:
+The original design proposed a common `Screen` trait:
 
 ```rust
 trait Screen {
@@ -2151,7 +2171,7 @@ trait Screen {
 }
 ```
 
-The exact Ratatui types can differ, but screens should be isolated and testable.
+In the v1.1 implementation, this trait was **removed** because different screens required different parameters (e.g., some need `AppConfig` for control socket paths, some need service references). Instead, `app.rs` dispatches events and render calls directly to each screen struct. A shared `UiAction` enum lives in `screens/common.rs` for cross-screen communication and modal handling.
 
 #### Actions
 
@@ -2190,7 +2210,7 @@ Do not put DecentDB queries directly in widgets.
 The TUI should support read-only mode:
 
 ```bash
-oxidebbs sysop --readonly
+oxidebbs-server sysop --readonly
 ```
 
 In read-only mode:

@@ -29,6 +29,8 @@ WORKDIR /build/oxidebbs
 
 COPY rust-toolchain.toml Cargo.toml Cargo.lock ./
 COPY crates ./crates
+COPY assets ./assets
+COPY tools ./tools
 
 RUN cargo build --workspace --locked --release -p oxidebbs-server
 

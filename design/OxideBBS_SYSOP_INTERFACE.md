@@ -4,9 +4,7 @@
 
 The sysop interface is the local administrative surface for running, inspecting, and maintaining an OxideBBS instance.
 
-For v1, the sysop interface should be **CLI-first**.
-
-A local Ratatui-based TUI is desirable, but it should come after the core server, telnet sessions, users, local messages, DecentDB persistence, and basic door launching are stable.
+For v1, the sysop interface was **CLI-first**. A local Ratatui-based TUI shipped in **v1.1** once the core server, telnet sessions, users, local messages, DecentDB persistence, and basic door launching were stable.
 
 ## Design goals
 
@@ -24,7 +22,7 @@ OxideBBS should have three admin layers over time:
 
 ```text
 v1      CLI admin commands
-v1.x    Local Ratatui sysop console
+v1.1    Local Ratatui sysop console
 v2+     Optional read-only status web dashboard, if desired
 ```
 
@@ -511,13 +509,21 @@ Editing config through commands is not essential for v1. It is enough to validat
 
 ## Local Ratatui sysop console
 
-The Ratatui console should be v1.x unless implementation momentum is very high.
+The Ratatui console shipped in v1.1.
 
 Launch command:
 
 ```bash
 oxidebbs-server sysop
 ```
+
+The `sysop` command launches the full local TUI by default. `--tui` is retained
+only as a compatibility flag, and `--readonly` starts the same TUI with
+destructive actions disabled. The command attaches to an already-running
+`serve` control socket when available; otherwise it starts an embedded `serve`
+runtime for the lifetime of the TUI. `--connect-only` disables embedded startup.
+`--theme <name>` selects one of `oxide-classic`, `wildcat`, `telegard`, `vbbs`,
+`mystic`, `midnight`, or `high-contrast`.
 
 Recommended first screen:
 
@@ -536,7 +542,7 @@ Recommended first screen:
 └───────────────┴────────────────────────────────────────────────────┘
 ```
 
-### TUI v1.x screens
+### TUI v1.1 screens
 
 - Dashboard
 - Nodes
@@ -603,7 +609,6 @@ oxidebbs-server doors add
 oxidebbs-server doors edit
 oxidebbs-server ansi convert
 oxidebbs-server config set
-oxidebbs-server sysop
 ```
 
 ## Implementation recommendation
@@ -629,11 +634,11 @@ oxidebbs-server/src/commands/logs.rs
 
 ## Final recommendation
 
-For v1, build the sysop interface as:
+For v1, the sysop interface was built as:
 
 ```text
 CLI first.
-Ratatui console later.
+Ratatui console in v1.1.
 No web admin.
 No remote sysop UI until local administration is solid.
 ```

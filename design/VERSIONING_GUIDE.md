@@ -14,9 +14,10 @@ OxideBBS uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html):
 - **Patch (`X.Y.Z`)** for backwards-compatible fixes, packaging adjustments, CI
   fixes, and documentation updates that do not change the public contract.
 
-Before `v1.0.0`, OxideBBS may make breaking changes more freely, but release
-notes must still call out anything that affects config files, DecentDB data,
-ANSI assets, door definitions, or operator workflows.
+Before the historical `v1.0.0` milestone, OxideBBS may make breaking changes
+more freely, but release notes should still call out anything that affects
+config files, DecentDB data, ANSI assets, door definitions, or operator
+workflows.
 
 ### Choosing the bump when a branch has mixed changes
 

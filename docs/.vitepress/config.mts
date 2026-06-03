@@ -26,6 +26,7 @@ export default defineConfig({
       { text: 'Caller Commands', link: '/project/caller-commands' },
       { text: 'Security Levels', link: '/project/security-levels' },
       { text: 'Sysop CLI', link: '/project/sysop-cli' },
+      { text: 'Sysop Themes', link: '/project/sysop-tui-themes' },
       { text: 'Versioning', link: '/project/versioning' },
       { text: 'Changelog', link: '/about/changelog' }
     ],
@@ -43,6 +44,7 @@ export default defineConfig({
           { text: 'Caller Commands', link: '/project/caller-commands' },
           { text: 'User Security Levels', link: '/project/security-levels' },
           { text: 'Sysop CLI', link: '/project/sysop-cli' },
+          { text: 'Sysop TUI Themes', link: '/project/sysop-tui-themes' },
           { text: 'Versioning', link: '/project/versioning' },
           { text: 'Deployment', link: '/project/deployment' }
         ]

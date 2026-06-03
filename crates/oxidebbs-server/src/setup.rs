@@ -23,6 +23,7 @@ const DEFAULT_DATABASE_PATH: &str = "./data/oxidebbs.ddb";
 const DEFAULT_ANSI_PATH: &str = "./assets/ansi";
 const DEFAULT_SCREENS_PATH: &str = "./assets/screens";
 const DEFAULT_DOORS_PATH: &str = "./doors";
+const DEFAULT_OXIDE_CHECK_WORKING_DIR: &str = "./doors/oxide-door-check/dist";
 const DEFAULT_RUNTIME_PATH: &str = "./runtime";
 const DEFAULT_LOGS_PATH: &str = "./logs";
 const DEFAULT_DOSEMU: &str = "dosemu";
@@ -40,6 +41,17 @@ struct DefaultAsset {
     path: &'static str,
     bytes: &'static [u8],
 }
+
+#[derive(Debug, Clone, Copy)]
+struct DefaultDoorAsset {
+    path: &'static str,
+    bytes: &'static [u8],
+}
+
+const DEFAULT_DOOR_ASSETS: &[DefaultDoorAsset] = &[DefaultDoorAsset {
+    path: "oxide-door-check/dist/OXIDECHK.EXE",
+    bytes: include_bytes!("../../../tools/doors/oxide-door-check/dist/OXIDECHK.EXE"),
+}];
 
 const DEFAULT_ASSETS: &[DefaultAsset] = &[
     DefaultAsset {
@@ -190,6 +202,7 @@ struct GeneratedConfig {
     database: GeneratedDatabaseConfig,
     paths: GeneratedPathsConfig,
     nodes: GeneratedNodesConfig,
+    sysop: GeneratedSysopConfig,
     terminal: GeneratedTerminalConfig,
     flow: GeneratedFlowConfig,
     screens: BTreeMap<String, GeneratedScreenConfig>,
@@ -265,6 +278,11 @@ struct GeneratedPathsConfig {
 #[derive(Serialize)]
 struct GeneratedNodesConfig {
     count: u16,
+}
+
+#[derive(Serialize)]
+struct GeneratedSysopConfig {
+    confirm_quit: bool,
 }
 
 #[derive(Serialize)]
@@ -439,7 +457,7 @@ pub fn build_setup_toml(answers: &SetupAnswers) -> io::Result<String> {
                 key: "oxide-check".to_string(),
                 name: "Oxide Door Check".to_string(),
                 runner: DEFAULT_DOSEMU.to_string(),
-                working_dir: "./tools/doors/oxide-door-check/dist".to_string(),
+                working_dir: DEFAULT_OXIDE_CHECK_WORKING_DIR.to_string(),
                 command: "OXIDECHK.EXE".to_string(),
                 drop_file: "DORINFO1.DEF".to_string(),
                 exclusive: false,
@@ -507,6 +525,7 @@ pub fn build_setup_toml(answers: &SetupAnswers) -> io::Result<String> {
         nodes: GeneratedNodesConfig {
             count: answers.node_count,
         },
+        sysop: GeneratedSysopConfig { confirm_quit: true },
         terminal: GeneratedTerminalConfig {
             default_encoding: "cp437".to_string(),
             clear_screen_on_connect: true,
@@ -537,8 +556,10 @@ pub fn setup_required_directories(output_path: &Path, answers: &SetupAnswers) ->
     if let Some(parent) = output_path.parent() {
         dirs.insert(parent.to_path_buf());
     }
-    dirs.insert(PathBuf::from(DEFAULT_ANSI_PATH));
-    dirs.insert(PathBuf::from(DEFAULT_SCREENS_PATH));
+    if answers.include_sample_ansi {
+        dirs.insert(PathBuf::from(DEFAULT_ANSI_PATH));
+        dirs.insert(PathBuf::from(DEFAULT_SCREENS_PATH));
+    }
     dirs.insert(PathBuf::from(DEFAULT_DOORS_PATH));
     dirs.insert(PathBuf::from(DEFAULT_RUNTIME_PATH));
     dirs.insert(PathBuf::from(DEFAULT_LOGS_PATH));
@@ -585,6 +606,10 @@ pub fn run_setup_with_answers(
         )?;
     }
 
+    if answers.include_example_door {
+        install_default_door_fixture(Path::new(DEFAULT_DOORS_PATH))?;
+    }
+
     if let Some(parent) = output_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -606,6 +631,26 @@ pub fn install_default_assets(
             DefaultAssetRoot::Screens => screens_root,
         };
         let destination = root.join(asset.path);
+        if destination.exists() {
+            skipped += 1;
+            continue;
+        }
+        if let Some(parent) = destination.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(destination, asset.bytes)?;
+        installed += 1;
+    }
+
+    Ok(DefaultAssetInstallSummary { installed, skipped })
+}
+
+pub fn install_default_door_fixture(doors_root: &Path) -> io::Result<DefaultAssetInstallSummary> {
+    let mut installed = 0;
+    let mut skipped = 0;
+
+    for asset in DEFAULT_DOOR_ASSETS {
+        let destination = doors_root.join(asset.path);
         if destination.exists() {
             skipped += 1;
             continue;
@@ -762,10 +807,15 @@ mod tests {
         assert_eq!(parsed.auth.argon2.iterations, 2);
         assert_eq!(parsed.auth.argon2.parallelism, 1);
         assert_eq!(parsed.audit.retention_days, 365);
+        assert!(parsed.sysop.confirm_quit);
         assert!(parsed.doors.enabled);
         assert_eq!(parsed.doors.definitions.len(), 1);
         assert_eq!(parsed.doors.definitions[0].key, "oxide-check");
         assert_eq!(parsed.doors.definitions[0].command, "OXIDECHK.EXE");
+        assert_eq!(
+            parsed.doors.definitions[0].working_dir,
+            "./doors/oxide-door-check/dist"
+        );
         assert!(!parsed.doors.definitions[0].enabled);
         assert_eq!(
             parsed.doors.allowed_runners,
@@ -798,6 +848,27 @@ mod tests {
         assert!(parsed.doors.enabled);
         assert_eq!(parsed.doors.definitions.len(), 1);
         assert!(parsed.doors.definitions[0].enabled);
+    }
+
+    #[test]
+    fn default_door_fixture_installs_under_doors_root_without_overwriting() {
+        let base_dir = temp_path("door-fixture");
+        let doors_root = base_dir.join("doors");
+
+        let first = install_default_door_fixture(&doors_root).expect("install fixture");
+        assert_eq!(first.installed, 1);
+        assert_eq!(first.skipped, 0);
+        assert!(
+            doors_root
+                .join("oxide-door-check/dist/OXIDECHK.EXE")
+                .exists()
+        );
+
+        let second = install_default_door_fixture(&doors_root).expect("skip existing fixture");
+        assert_eq!(second.installed, 0);
+        assert_eq!(second.skipped, 1);
+
+        let _ = std::fs::remove_dir_all(&base_dir);
     }
 
     #[test]
@@ -877,6 +948,20 @@ mod tests {
         let dirs = setup_required_directories(Path::new("config/oxidebbs.toml"), &answers);
         assert!(dirs.contains(&PathBuf::from("/tmp/oxidebbs")));
         assert!(dirs.contains(&PathBuf::from("./assets/ansi")));
+    }
+
+    #[test]
+    fn setup_required_directories_skip_sample_asset_roots_when_disabled() {
+        let answers = SetupAnswers {
+            include_sample_ansi: false,
+            database_path: PathBuf::from("/tmp/oxidebbs/custom.ddb"),
+            ..SetupAnswers::default()
+        };
+        let dirs = setup_required_directories(Path::new("config/oxidebbs.toml"), &answers);
+
+        assert!(!dirs.contains(&PathBuf::from("./assets/ansi")));
+        assert!(!dirs.contains(&PathBuf::from("./assets/screens")));
+        assert!(dirs.contains(&PathBuf::from("./doors")));
     }
 
     #[test]

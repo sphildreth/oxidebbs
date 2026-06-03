@@ -22,7 +22,7 @@ OxideBBS should make old DOS door games feel native.
 key = "oxide-check"
 name = "Oxide Door Check"
 runner = "dosemu"
-working_dir = "./tools/doors/oxide-door-check/dist"
+working_dir = "./doors/oxide-door-check/dist"
 command = "OXIDECHK.EXE"
 drop_file = "DORINFO1.DEF"
 exclusive = false
