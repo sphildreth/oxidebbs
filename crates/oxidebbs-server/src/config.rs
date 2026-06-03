@@ -120,6 +120,20 @@ pub struct LoggingConfig {
     pub file_enabled: bool,
     #[serde(default = "default_logging_file_name")]
     pub file_name: String,
+    #[serde(default = "default_logging_format")]
+    pub format: String,
+    #[serde(default)]
+    pub rotation: LoggingRotationConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct LoggingRotationConfig {
+    #[serde(default = "default_logging_rotation_strategy")]
+    pub strategy: String,
+    #[serde(default = "default_logging_rotation_max_size_mb")]
+    pub max_size_mb: u64,
+    #[serde(default = "default_logging_rotation_max_files")]
+    pub max_files: usize,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -366,6 +380,19 @@ impl OxideConfig {
         }
         validate_logging_level(&self.logging.level).map_err(ConfigError::Validation)?;
         validate_logging_file_name(&self.logging.file_name).map_err(ConfigError::Validation)?;
+        validate_logging_format(&self.logging.format).map_err(ConfigError::Validation)?;
+        validate_logging_rotation_strategy(&self.logging.rotation.strategy)
+            .map_err(ConfigError::Validation)?;
+        if self.logging.rotation.max_size_mb == 0 {
+            return Err(ConfigError::Validation(
+                "logging.rotation.max_size_mb must be greater than 0".into(),
+            ));
+        }
+        if self.logging.rotation.max_files == 0 {
+            return Err(ConfigError::Validation(
+                "logging.rotation.max_files must be greater than 0".into(),
+            ));
+        }
         if self.doors.allowed_runners.is_empty() {
             return Err(ConfigError::Validation(
                 "doors.allowed_runners must include at least one runner".into(),
@@ -574,6 +601,18 @@ fn default_logging_level() -> String {
 fn default_logging_file_name() -> String {
     "oxidebbs-server.log".into()
 }
+fn default_logging_format() -> String {
+    "text".into()
+}
+fn default_logging_rotation_strategy() -> String {
+    "daily".into()
+}
+fn default_logging_rotation_max_size_mb() -> u64 {
+    50
+}
+fn default_logging_rotation_max_files() -> usize {
+    14
+}
 fn default_max_connections() -> u32 {
     4
 }
@@ -640,6 +679,24 @@ pub(crate) fn validate_logging_level(level: &str) -> Result<(), String> {
         "error" | "warn" | "info" | "debug" | "trace" => Ok(()),
         other => Err(format!(
             "logging.level must be one of error, warn, info, debug, or trace, got {other:?}"
+        )),
+    }
+}
+
+pub(crate) fn validate_logging_format(format: &str) -> Result<(), String> {
+    match format.trim().to_ascii_lowercase().as_str() {
+        "text" | "json" => Ok(()),
+        other => Err(format!(
+            "logging.format must be one of text or json, got {other:?}"
+        )),
+    }
+}
+
+pub(crate) fn validate_logging_rotation_strategy(strategy: &str) -> Result<(), String> {
+    match strategy.trim().to_ascii_lowercase().as_str() {
+        "never" | "daily" | "size" => Ok(()),
+        other => Err(format!(
+            "logging.rotation.strategy must be one of never, daily, or size, got {other:?}"
         )),
     }
 }
@@ -748,6 +805,18 @@ impl Default for LoggingConfig {
             level: default_logging_level(),
             file_enabled: default_true(),
             file_name: default_logging_file_name(),
+            format: default_logging_format(),
+            rotation: LoggingRotationConfig::default(),
+        }
+    }
+}
+
+impl Default for LoggingRotationConfig {
+    fn default() -> Self {
+        Self {
+            strategy: default_logging_rotation_strategy(),
+            max_size_mb: default_logging_rotation_max_size_mb(),
+            max_files: default_logging_rotation_max_files(),
         }
     }
 }
@@ -901,6 +970,10 @@ name = "Minimal"
         assert_eq!(config.logging.level, "info");
         assert!(config.logging.file_enabled);
         assert_eq!(config.logging.file_name, "oxidebbs-server.log");
+        assert_eq!(config.logging.format, "text");
+        assert_eq!(config.logging.rotation.strategy, "daily");
+        assert_eq!(config.logging.rotation.max_size_mb, 50);
+        assert_eq!(config.logging.rotation.max_files, 14);
         assert_eq!(
             config.doors.allowed_runners,
             vec!["dosemu".to_string(), "dosemu2".to_string()]
@@ -971,6 +1044,42 @@ file_name = "../server.log"
             error
                 .to_string()
                 .contains("logging.file_name must be a file name")
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_logging_format() {
+        let toml = r#"
+[board]
+name = "Bad Logging Format"
+
+[logging]
+format = "yaml"
+"#;
+        let config: OxideConfig = toml::from_str(toml).expect("parse");
+        let error = config.validate().expect_err("invalid format rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("logging.format must be one of text or json")
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_logging_rotation() {
+        let toml = r#"
+[board]
+name = "Bad Logging Rotation"
+
+[logging.rotation]
+strategy = "weekly"
+"#;
+        let config: OxideConfig = toml::from_str(toml).expect("parse");
+        let error = config.validate().expect_err("invalid rotation rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("logging.rotation.strategy must be one of never, daily, or size")
         );
     }
 

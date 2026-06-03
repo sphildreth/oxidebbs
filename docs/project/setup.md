@@ -62,8 +62,8 @@ Generated configs also include `[audit].retention_days = 365`; retention cleanup
 is an explicit maintenance operation, not an automatic side effect of audit
 inserts.
 Generated configs also enable file logging under `logs/oxidebbs-server.log`.
-See [Sysop CLI](./sysop-cli.md#logging) for logging levels and override
-precedence.
+See [Sysop CLI](./sysop-cli.md#logging) for logging levels, JSON file format,
+rotation, and override precedence.
 
 After setup, `serve` can use the generated file directly:
 

@@ -396,17 +396,32 @@ The board config includes:
 level = "info"
 file_enabled = true
 file_name = "oxidebbs-server.log"
+format = "text"
+
+[logging.rotation]
+strategy = "daily"
+max_size_mb = 50
+max_files = 14
 ```
 
-Accepted levels are `error`, `warn`, `info`, `debug`, and `trace`. File logs are
-written under `paths.logs`. `serve --log-level <level>` overrides
-`[logging].level` for that serve run. The global `-v` override maps to `debug`,
-and repeated `-v` maps to `trace`.
+Accepted levels are `error`, `warn`, `info`, `debug`, and `trace`. Accepted file
+formats are `text` and newline-delimited `json`. File logs are written under
+`paths.logs`. `serve --log-level <level>` overrides `[logging].level` for that
+serve run. The global `-v` override maps to `debug`, and repeated `-v` maps to
+`trace`.
+
+File rotation supports `daily`, `size`, and `never`. Daily rotation is based on
+UTC date boundaries for the running process. Size rotation rotates before a write
+would exceed `logging.rotation.max_size_mb`. `logging.rotation.max_files` is the
+number of rotated archives retained.
 
 At `debug` and `trace`, logs should include connections, session opens, menu
 selections, audit events, login outcomes, door activity, message activity, and
 disconnect reasons. DecentDB audit events remain the durable activity record;
-file logs are the operational troubleshooting stream.
+file logs are the operational troubleshooting stream. JSON log files include
+standard formatter fields plus event fields such as caller address, node,
+session, menu key, user id/alias, audit event type, door key/name, message area,
+message id, and outcome fields when applicable.
 
 All sysop control is local in v1. There is no remote admin API or remote
 interactive interface in this phase.

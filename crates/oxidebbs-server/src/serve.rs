@@ -221,6 +221,8 @@ where
                     info!(
                         node = %allocation.node_number,
                         remote = %peer.address,
+                        remote_ip = %peer.ip,
+                        remote_port = peer.port,
                         "caller connection accepted"
                     );
                     emit_audit_event_with_runtime(
@@ -246,7 +248,12 @@ where
                         }
                     });
                 } else {
-                    warn!(remote = %peer.address, "caller rejected because no node is available");
+                    warn!(
+                        remote = %peer.address,
+                        remote_ip = %peer.ip,
+                        remote_port = peer.port,
+                        "caller rejected because no node is available"
+                    );
                     tokio::spawn(async move {
                         if let Err(error) = reject_connection(stream).await {
                             warn!("failed to reject caller: {error}");
@@ -419,6 +426,8 @@ async fn handle_caller(
         node = %node_number,
         session_id = %session_id,
         remote = %peer.address,
+        remote_ip = %peer.ip,
+        remote_port = peer.port,
         "caller session opened"
     );
     let mut current_menu = Arc::clone(&login_menu);
@@ -438,6 +447,16 @@ async fn handle_caller(
         TERMINAL_CAPABILITY_NEGOTIATION_TIMEOUT,
     )
     .await?;
+    debug!(
+        node = %node_number,
+        session_id = %session_id,
+        remote = %peer.address,
+        remote_ip = %peer.ip,
+        remote_port = peer.port,
+        supports_ansi = capabilities.supports_ansi,
+        terminal_width = capabilities.width,
+        "terminal capabilities negotiated"
+    );
 
     if config.terminal.clear_screen_on_connect && capabilities.supports_ansi {
         transport
@@ -1036,6 +1055,12 @@ async fn run_login_flow(
     if is_auth_scope_locked(db.db(), "ip", state.remote_ip, &login_at)?
         || is_auth_scope_locked(db.db(), "alias", &alias_scope_key, &login_at)?
     {
+        debug!(
+            node = %node_number,
+            remote_ip = %state.remote_ip,
+            alias_scope = %alias_scope_key,
+            "login rejected by rate limiter"
+        );
         send_text(transport, LOGIN_LOCKOUT_MESSAGE).await?;
         return Ok(AuthFlowResult::Retry);
     }
@@ -1057,6 +1082,12 @@ async fn run_login_flow(
             Some(node_number),
             format!("login failed for alias {alias_scope_key}"),
             Some(state.runtime),
+        );
+        debug!(
+            node = %node_number,
+            remote_ip = %state.remote_ip,
+            alias_scope = %alias_scope_key,
+            "login rejected for unknown alias"
         );
         send_text(transport, INVALID_LOGIN_MESSAGE).await?;
         return Ok(AuthFlowResult::Retry);
@@ -1095,6 +1126,15 @@ async fn run_login_flow(
             Some(node_number),
             format!("login failed for user {}", user.alias),
             Some(state.runtime),
+        );
+        debug!(
+            node = %node_number,
+            remote_ip = %state.remote_ip,
+            user_id = %user.id,
+            alias = %user.alias,
+            status = ?user.status,
+            verification = ?verification,
+            "login rejected for user"
         );
         send_text(transport, INVALID_LOGIN_MESSAGE).await?;
         return Ok(AuthFlowResult::Retry);
@@ -1145,6 +1185,14 @@ async fn run_login_flow(
         Some(node_number),
         format!("login successful for {}", user.alias),
         Some(state.runtime),
+    );
+    debug!(
+        node = %node_number,
+        remote_ip = %state.remote_ip,
+        user_id = %user.id,
+        alias = %user.alias,
+        security_level = user.security_level,
+        "caller login accepted"
     );
 
     *authenticated_user = Some(user);
@@ -1330,6 +1378,12 @@ async fn run_new_user_flow(
     if let Err(error) = insert_user_if_alias_available(db.db(), &record) {
         match error {
             UserInsertError::DuplicateAlias { .. } => {
+                debug!(
+                    node = %node_number,
+                    remote_ip = %state.remote_ip,
+                    alias = %user.alias,
+                    "new-user alias rejected as duplicate"
+                );
                 send_text(transport, "That alias is already in use.\r\n").await?;
                 return Ok(AuthFlowResult::Retry);
             }
@@ -1401,6 +1455,14 @@ async fn run_new_user_flow(
         format!("new user logged in as {}", user.alias),
         Some(state.runtime),
     );
+    debug!(
+        node = %node_number,
+        remote_ip = %state.remote_ip,
+        user_id = %user.id,
+        alias = %user.alias,
+        security_level = user.security_level,
+        "new user created and signed in"
+    );
 
     send_text(transport, "Account created. Welcome.\r\n").await?;
     Ok(AuthFlowResult::Success)
@@ -1459,6 +1521,14 @@ async fn run_doors_flow(
                 continue;
             }
         };
+        debug!(
+            node = %state.node_number,
+            user_id = %user.id,
+            alias = %user.alias,
+            door_key = %door.key,
+            door_name = %door.name,
+            "caller selected door"
+        );
 
         if let Err(message) = service.validate_door(door, state.node_number) {
             warn!(
@@ -1486,6 +1556,21 @@ async fn run_doors_flow(
         let summary = service
             .execute_interactive(transport, state.runtime, user, state.node_number, door)
             .await?;
+        debug!(
+            node = %state.node_number,
+            user_id = %user.id,
+            alias = %user.alias,
+            door_key = %door.key,
+            door_name = %door.name,
+            run_id = ?summary.run_id,
+            exit_code = ?summary.exit_code,
+            timed_out = summary.timed_out,
+            caller_disconnected = summary.caller_disconnected,
+            disconnect_forced = summary.disconnect_forced,
+            bytes_in = summary.bytes_in,
+            bytes_out = summary.bytes_out,
+            "door run completed"
+        );
 
         if summary.caller_disconnected {
             *state.disconnect_reason = "caller_dropped_during_door".to_string();
@@ -1619,6 +1704,14 @@ async fn run_messages_flow(
             }
         };
         let area = message_area_from_record(area_record)?;
+        debug!(
+            node = %node_number,
+            user_id = %user.id,
+            alias = %user.alias,
+            area_key = %area.key,
+            area_id = %area.id,
+            "caller selected message area"
+        );
 
         loop {
             runtime.mark_node_reading_messages(node_number);
@@ -1672,6 +1765,15 @@ async fn run_messages_flow(
                         MessageIndexPromptResult::Retry => continue,
                         MessageIndexPromptResult::Exit => return Ok(MenuFlowResult::Exit),
                     };
+                    debug!(
+                        node = %node_number,
+                        user_id = %user.id,
+                        alias = %user.alias,
+                        area_key = %area.key,
+                        message_id = %visible[index].id,
+                        action = "read",
+                        "caller selected message"
+                    );
                     display_message(transport, db, &visible[index]).await?;
                 }
                 Some('P') => {
@@ -1759,6 +1861,15 @@ async fn run_messages_flow(
                         );
                         return Err(ServeError::Database(error));
                     }
+                    debug!(
+                        node = %node_number,
+                        user_id = %user.id,
+                        alias = %user.alias,
+                        area_key = %area.key,
+                        message_id = %message.id,
+                        action = "post",
+                        "caller posted message"
+                    );
                     send_text(transport, "Message posted.\r\n").await?;
                     runtime.mark_node_reading_messages(node_number);
                 }
@@ -1835,6 +1946,16 @@ async fn run_messages_flow(
                         );
                         return Err(ServeError::Database(error));
                     }
+                    debug!(
+                        node = %node_number,
+                        user_id = %user.id,
+                        alias = %user.alias,
+                        area_key = %area.key,
+                        message_id = %message.id,
+                        reply_to_id = ?message.reply_to_id,
+                        action = "reply",
+                        "caller posted reply"
+                    );
                     send_text(transport, "Reply posted.\r\n").await?;
                     runtime.mark_node_reading_messages(node_number);
                 }

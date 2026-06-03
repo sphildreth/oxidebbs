@@ -120,6 +120,7 @@ possibly OxideNet.
 - Edit users
 - Test door configuration
 - View logs
+- Configure text or JSON log files with daily or size-based rotation
 
 ## 5. v1.1 / v1.2 requirements
 

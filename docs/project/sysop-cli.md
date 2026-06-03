@@ -46,9 +46,16 @@ The configured logging policy is:
 level = "info"
 file_enabled = true
 file_name = "oxidebbs-server.log"
+format = "text"
+
+[logging.rotation]
+strategy = "daily"
+max_size_mb = 50
+max_files = 14
 ```
 
 Accepted levels are `error`, `warn`, `info`, `debug`, and `trace`.
+Accepted file formats are `text` and `json`.
 
 When file logging is enabled, logs are appended under `paths.logs`. With the
 default paths this is:
@@ -56,6 +63,22 @@ default paths this is:
 ```text
 logs/oxidebbs-server.log
 ```
+
+Set `format = "json"` for newline-delimited JSON log files. JSON lines include
+the formatter fields `timestamp`, `level`, and `target`, plus event fields such
+as `message`, `node`, `remote`, `remote_ip`, `remote_port`, `session_id`,
+`menu`, `key`, `user_id`, `alias`, `event_type`, `door_key`, `door_name`,
+`area_key`, `message_id`, `reason`, and related outcome fields when they apply.
+
+Rotation strategies are:
+
+- `daily`: rotates when the running process crosses a UTC date boundary, keeping
+  dated archives such as `oxidebbs-server.2026-06-03.log`.
+- `size`: rotates before a write would exceed `max_size_mb`, keeping numbered
+  archives such as `oxidebbs-server.log.1`.
+- `never`: appends indefinitely.
+
+`max_files` is the number of rotated archives to retain.
 
 `serve --log-level <level>` overrides `[logging].level` for that serve run:
 

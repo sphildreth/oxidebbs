@@ -237,6 +237,15 @@ struct GeneratedLoggingConfig {
     level: String,
     file_enabled: bool,
     file_name: String,
+    format: String,
+    rotation: GeneratedLoggingRotationConfig,
+}
+
+#[derive(Serialize)]
+struct GeneratedLoggingRotationConfig {
+    strategy: String,
+    max_size_mb: u64,
+    max_files: usize,
 }
 
 #[derive(Serialize)]
@@ -478,6 +487,12 @@ pub fn build_setup_toml(answers: &SetupAnswers) -> io::Result<String> {
             level: "info".to_string(),
             file_enabled: true,
             file_name: "oxidebbs-server.log".to_string(),
+            format: "text".to_string(),
+            rotation: GeneratedLoggingRotationConfig {
+                strategy: "daily".to_string(),
+                max_size_mb: 50,
+                max_files: 14,
+            },
         },
         database: GeneratedDatabaseConfig {
             path: answers.database_path.to_string_lossy().into_owned(),

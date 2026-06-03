@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or unenforced security-level fields.
 - Added `[logging]` config with file logging to `paths.logs`, plus
   `serve --log-level` and global `-v` overrides for sysop-controlled verbosity.
+- Added configurable log file format and rotation, including newline-delimited
+  JSON logs and daily or size-based archive retention.
 
 ### Changed
 

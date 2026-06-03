@@ -1,7 +1,8 @@
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use argon2::password_hash::{PasswordHash, PasswordHasher, SaltString};
 use argon2::{Algorithm, Argon2, Params, PasswordVerifier as Argon2PasswordVerifier, Version};
@@ -16,7 +17,10 @@ use oxidebbs_db::{
     find_user_by_alias_ci, find_user_by_id, insert_audit_event,
 };
 
-use crate::config::{DoorDefConfig, OxideConfig, normalize_database_path, validate_logging_level};
+use crate::config::{
+    DoorDefConfig, LoggingRotationConfig, OxideConfig, normalize_database_path,
+    validate_logging_format, validate_logging_level,
+};
 use crate::serve;
 
 use crate::commands::{
@@ -242,41 +246,58 @@ fn effective_log_level(verbose: u8, command: &Command, config: &OxideConfig) -> 
 }
 
 fn init_console_logging(verbose: u8) -> CliResult<()> {
-    init_logging_with_file(verbose_log_level(verbose), None)
+    init_logging_with_file(verbose_log_level(verbose), None, "text")
 }
 
 pub(crate) fn init_logging(config: &OxideConfig, level: &str) -> CliResult<()> {
+    validate_logging_format(&config.logging.format).map_err(CliError::Message)?;
     let file = if config.logging.file_enabled {
         std::fs::create_dir_all(&config.paths.logs)?;
         let path = config.paths.logs.join(config.logging.file_name.trim());
-        let file = OpenOptions::new().create(true).append(true).open(path)?;
-        Some(file)
+        Some(RotatingLogFile::open(
+            path,
+            LogRotationPolicy::from_config(&config.logging.rotation)?,
+        )?)
     } else {
         None
     };
-    init_logging_with_file(level, file)
+    init_logging_with_file(level, file, &config.logging.format)
 }
 
-fn init_logging_with_file(level: &str, file: Option<File>) -> CliResult<()> {
+fn init_logging_with_file(
+    level: &str,
+    file: Option<RotatingLogFile>,
+    file_format: &str,
+) -> CliResult<()> {
     use tracing_subscriber::prelude::*;
 
     let env_filter = tracing_subscriber::EnvFilter::new(level);
     let console_layer = tracing_subscriber::fmt::layer().with_writer(io::stderr);
+    let file_format = file_format.trim().to_ascii_lowercase();
 
     match file {
-        Some(file) => {
-            let file_layer = tracing_subscriber::fmt::layer()
-                .with_ansi(false)
-                .with_writer(SharedLogFile::new(file));
-            tracing_subscriber::registry()
-                .with(env_filter)
-                .with(console_layer)
-                .with(file_layer)
-                .try_init()
-                .map_err(|error| {
-                    CliError::Message(format!("failed to initialize logging: {error}"))
-                })
-        }
+        Some(file) if file_format == "json" => tracing_subscriber::registry()
+            .with(env_filter)
+            .with(console_layer)
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .json()
+                    .flatten_event(true)
+                    .with_ansi(false)
+                    .with_writer(file),
+            )
+            .try_init()
+            .map_err(|error| CliError::Message(format!("failed to initialize logging: {error}"))),
+        Some(file) => tracing_subscriber::registry()
+            .with(env_filter)
+            .with(console_layer)
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_ansi(false)
+                    .with_writer(file),
+            )
+            .try_init()
+            .map_err(|error| CliError::Message(format!("failed to initialize logging: {error}"))),
         None => tracing_subscriber::registry()
             .with(env_filter)
             .with(console_layer)
@@ -286,48 +307,273 @@ fn init_logging_with_file(level: &str, file: Option<File>) -> CliResult<()> {
 }
 
 #[derive(Clone)]
-struct SharedLogFile {
-    file: Arc<Mutex<File>>,
+struct RotatingLogFile {
+    state: Arc<Mutex<RotatingLogState>>,
 }
 
-impl SharedLogFile {
-    fn new(file: File) -> Self {
-        Self {
-            file: Arc::new(Mutex::new(file)),
-        }
+impl RotatingLogFile {
+    fn open(path: PathBuf, policy: LogRotationPolicy) -> io::Result<Self> {
+        let file = open_log_file(&path)?;
+        let current_size = file.metadata()?.len();
+        Ok(Self {
+            state: Arc::new(Mutex::new(RotatingLogState {
+                path,
+                policy,
+                file,
+                current_size,
+                active_date: current_utc_date_string(),
+            })),
+        })
     }
 }
 
-impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SharedLogFile {
-    type Writer = SharedLogFileWriter;
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for RotatingLogFile {
+    type Writer = RotatingLogFileWriter;
 
     fn make_writer(&'a self) -> Self::Writer {
-        SharedLogFileWriter {
-            file: Arc::clone(&self.file),
+        RotatingLogFileWriter {
+            state: Arc::clone(&self.state),
         }
     }
 }
 
-struct SharedLogFileWriter {
-    file: Arc<Mutex<File>>,
+struct RotatingLogFileWriter {
+    state: Arc<Mutex<RotatingLogState>>,
 }
 
-impl Write for SharedLogFileWriter {
+impl Write for RotatingLogFileWriter {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let mut file = self
-            .file
+        let mut state = self
+            .state
             .lock()
             .map_err(|_| io::Error::other("log file lock poisoned"))?;
-        file.write(buf)
+        state.write(buf)
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        let mut file = self
-            .file
+        let mut state = self
+            .state
             .lock()
             .map_err(|_| io::Error::other("log file lock poisoned"))?;
-        file.flush()
+        state.file.flush()
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LogRotationStrategy {
+    Never,
+    Daily,
+    Size,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LogRotationPolicy {
+    strategy: LogRotationStrategy,
+    max_size_bytes: u64,
+    max_files: usize,
+}
+
+impl LogRotationPolicy {
+    fn from_config(config: &LoggingRotationConfig) -> CliResult<Self> {
+        let strategy = match config.strategy.trim().to_ascii_lowercase().as_str() {
+            "never" => LogRotationStrategy::Never,
+            "daily" => LogRotationStrategy::Daily,
+            "size" => LogRotationStrategy::Size,
+            other => {
+                return Err(CliError::Message(format!(
+                    "logging.rotation.strategy must be one of never, daily, or size, got {other:?}"
+                )));
+            }
+        };
+        if config.max_size_mb == 0 {
+            return Err(CliError::Message(
+                "logging.rotation.max_size_mb must be greater than 0".to_string(),
+            ));
+        }
+        if config.max_files == 0 {
+            return Err(CliError::Message(
+                "logging.rotation.max_files must be greater than 0".to_string(),
+            ));
+        }
+
+        Ok(Self {
+            strategy,
+            max_size_bytes: config.max_size_mb.saturating_mul(1024 * 1024),
+            max_files: config.max_files,
+        })
+    }
+}
+
+struct RotatingLogState {
+    path: PathBuf,
+    policy: LogRotationPolicy,
+    file: File,
+    current_size: u64,
+    active_date: String,
+}
+
+impl RotatingLogState {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.rotate_if_needed(buf.len() as u64)?;
+        self.file.write_all(buf)?;
+        self.current_size = self.current_size.saturating_add(buf.len() as u64);
+        Ok(buf.len())
+    }
+
+    fn rotate_if_needed(&mut self, incoming_bytes: u64) -> io::Result<()> {
+        match self.policy.strategy {
+            LogRotationStrategy::Never => Ok(()),
+            LogRotationStrategy::Daily => {
+                let today = current_utc_date_string();
+                if today != self.active_date {
+                    let previous_date = std::mem::replace(&mut self.active_date, today);
+                    self.rotate_daily(&previous_date)?;
+                }
+                Ok(())
+            }
+            LogRotationStrategy::Size => {
+                if self.current_size > 0
+                    && self.current_size.saturating_add(incoming_bytes) > self.policy.max_size_bytes
+                {
+                    self.rotate_size()?;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn rotate_daily(&mut self, date: &str) -> io::Result<()> {
+        self.file.flush()?;
+        let archive_path = unique_daily_archive_path(&self.path, date);
+        if self.path.exists() && self.current_size > 0 {
+            std::fs::rename(&self.path, archive_path)?;
+        }
+        prune_daily_archives(&self.path, self.policy.max_files)?;
+        self.file = open_log_file(&self.path)?;
+        self.current_size = self.file.metadata()?.len();
+        Ok(())
+    }
+
+    fn rotate_size(&mut self) -> io::Result<()> {
+        self.file.flush()?;
+        let oldest = numbered_archive_path(&self.path, self.policy.max_files);
+        if oldest.exists() {
+            std::fs::remove_file(oldest)?;
+        }
+        for index in (1..self.policy.max_files).rev() {
+            let source = numbered_archive_path(&self.path, index);
+            if source.exists() {
+                std::fs::rename(source, numbered_archive_path(&self.path, index + 1))?;
+            }
+        }
+        if self.path.exists() && self.current_size > 0 {
+            std::fs::rename(&self.path, numbered_archive_path(&self.path, 1))?;
+        }
+        self.file = open_log_file(&self.path)?;
+        self.current_size = self.file.metadata()?.len();
+        Ok(())
+    }
+}
+
+fn open_log_file(path: &Path) -> io::Result<File> {
+    OpenOptions::new().create(true).append(true).open(path)
+}
+
+fn unique_daily_archive_path(path: &Path, date: &str) -> PathBuf {
+    let mut attempt = 0usize;
+    loop {
+        let candidate = daily_archive_path(path, date, attempt);
+        if !candidate.exists() {
+            return candidate;
+        }
+        attempt += 1;
+    }
+}
+
+fn daily_archive_path(path: &Path, date: &str, attempt: usize) -> PathBuf {
+    let parent = path.parent().unwrap_or_else(|| Path::new(""));
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("oxidebbs-server");
+    let suffix = if attempt == 0 {
+        date.to_string()
+    } else {
+        format!("{date}.{attempt}")
+    };
+    let file_name = match path.extension().and_then(|value| value.to_str()) {
+        Some(extension) => format!("{stem}.{suffix}.{extension}"),
+        None => format!("{stem}.{suffix}"),
+    };
+    parent.join(file_name)
+}
+
+fn numbered_archive_path(path: &Path, index: usize) -> PathBuf {
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("oxidebbs-server.log");
+    path.with_file_name(format!("{file_name}.{index}"))
+}
+
+fn prune_daily_archives(path: &Path, max_files: usize) -> io::Result<()> {
+    let Some(parent) = path.parent() else {
+        return Ok(());
+    };
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("oxidebbs-server");
+    let extension = path.extension().and_then(|value| value.to_str());
+    let mut archives = std::fs::read_dir(parent)?
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|entry| is_daily_archive(entry, stem, extension))
+        .collect::<Vec<_>>();
+    archives.sort();
+    let remove_count = archives.len().saturating_sub(max_files);
+    for archive in archives.into_iter().take(remove_count) {
+        std::fs::remove_file(archive)?;
+    }
+    Ok(())
+}
+
+fn is_daily_archive(path: &Path, stem: &str, extension: Option<&str>) -> bool {
+    let Some(file_name) = path.file_name().and_then(|value| value.to_str()) else {
+        return false;
+    };
+    let expected_prefix = format!("{stem}.");
+    if !file_name.starts_with(&expected_prefix) {
+        return false;
+    }
+    match extension {
+        Some(extension) => file_name.ends_with(&format!(".{extension}")),
+        None => true,
+    }
+}
+
+fn current_utc_date_string() -> String {
+    let days_since_epoch = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() / 86_400)
+        .unwrap_or(0) as i64;
+    let (year, month, day) = civil_from_days(days_since_epoch);
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
+fn civil_from_days(days_since_epoch: i64) -> (i32, u32, u32) {
+    let z = days_since_epoch + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let day_of_era = z - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_parameter = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_parameter + 2) / 5 + 1;
+    let month = month_parameter + if month_parameter < 10 { 3 } else { -9 };
+    let year = year + if month <= 2 { 1 } else { 0 };
+    (year as i32, month as u32, day as u32)
 }
 
 pub(crate) fn default_config_path() -> PathBuf {
@@ -728,5 +974,52 @@ name = "Test BBS"
 
         let level = effective_log_level(1, &command, &config).expect("effective level");
         assert_eq!(level, "debug");
+    }
+
+    #[test]
+    fn size_rotating_log_file_moves_archives() {
+        use tracing_subscriber::fmt::MakeWriter as _;
+
+        let mut dir = std::env::temp_dir();
+        dir.push(format!(
+            "oxidebbs-log-rotate-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time should be valid")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp log dir");
+        let path = dir.join("oxidebbs-server.log");
+        let log_file = RotatingLogFile::open(
+            path.clone(),
+            LogRotationPolicy {
+                strategy: LogRotationStrategy::Size,
+                max_size_bytes: 12,
+                max_files: 2,
+            },
+        )
+        .expect("open rotating log");
+
+        {
+            let mut writer = log_file.make_writer();
+            writer.write_all(b"first-line\n").expect("write first log");
+            writer
+                .write_all(b"second-line\n")
+                .expect("write second log");
+            writer.write_all(b"third-line\n").expect("write third log");
+            writer.flush().expect("flush log");
+        }
+
+        assert!(path.exists());
+        assert!(numbered_archive_path(&path, 1).exists());
+        assert!(numbered_archive_path(&path, 2).exists());
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn utc_day_conversion_matches_unix_epoch() {
+        assert_eq!(civil_from_days(0), (1970, 1, 1));
+        assert_eq!(civil_from_days(1), (1970, 1, 2));
     }
 }
