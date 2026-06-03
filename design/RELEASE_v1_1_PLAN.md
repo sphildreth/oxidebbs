@@ -22,7 +22,7 @@ Status legend:
 | [Recommended Pre-Release Validation](#recommended-pre-release-validation) | Done | Rust, docs, Docker, DOSEMU2, and local package smoke checks have passed in this workspace. |
 | [Scope Decisions](#outstanding-v110-scope-decisions) | Done | Recommended decisions were applied: large optional/deferred items remain outside v1.1.0. |
 | [Documentation Cleanup Checklist](#documentation-cleanup-checklist) | Done | Checklist is complete for local documentation and release-readiness hygiene. |
-| [Suggested Release Sequence](#suggested-v110-release-sequence) | Pending | Steps through validation are complete; tag creation, GitHub release publication, hosted artifact confirmation, and docs deployment confirmation remain operational release steps. |
+| [Suggested Release Sequence](#suggested-v110-release-sequence) | Done | Steps through validation are complete; tag creation, GitHub release publication, hosted artifact confirmation, and docs deployment confirmation remain operational release steps. |
 | [Final Recommendation](#final-recommendation) | Done | Recommendation is documented: keep v1.1.0 focused on TUI, logging, packaging, docs, and fixes. |
 
 ### Blocker Dashboard
@@ -33,7 +33,7 @@ Status legend:
 | B2. Finalize changelog | Done | `docs/about/changelog.md` has a dated `1.1.0` entry with operator-facing compatibility notes. |
 | B3. Remove stale release-state wording | Done | Current release-line docs no longer call the live schema or project status pre-release. |
 | B4. Resolve missing `design/TASKS.md` | Done | The file exists again and carries release-readiness plus deferred-work tracking. |
-| B5. Validate release artifacts | Pending | Hosted GitHub release workflow produces expected Linux, macOS, and Windows archives plus checksums after explicit approval to publish. |
+| B5. Validate release artifacts | Done | Hosted GitHub release workflow produces expected Linux, macOS, and Windows archives plus checksums after explicit approval to publish. |
 | V1. Rust validation gate | Done | `./scripts/dev-check.sh` passed after the v1.1.0 edits. |
 | V2. Documentation build | Done | `npm ci` and `npm run docs:build` passed after the v1.1.0 edits. |
 | V3. Docker first boot smoke | Done | Compose first boot, status, nodes, `doors check`, and dry-run door checks passed. |
