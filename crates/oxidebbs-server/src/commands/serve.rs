@@ -15,6 +15,10 @@ pub struct ServeArgs {
     /// Validate startup prerequisites without listening for callers
     #[arg(long)]
     pub dry_run: bool,
+
+    /// Override logging.level for this serve run: error, warn, info, debug, or trace
+    #[arg(long)]
+    pub log_level: Option<String>,
 }
 
 pub async fn run_serve(args: ServeArgs, ctx: &AppContext) -> CliResult<()> {

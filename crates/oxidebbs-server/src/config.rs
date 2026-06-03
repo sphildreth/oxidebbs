@@ -38,6 +38,8 @@ pub struct OxideConfig {
     #[serde(default)]
     pub audit: AuditConfig,
     #[serde(default)]
+    pub logging: LoggingConfig,
+    #[serde(default)]
     pub database: DatabaseConfig,
     #[serde(default)]
     pub paths: PathsConfig,
@@ -108,6 +110,16 @@ pub struct Argon2Config {
 pub struct AuditConfig {
     #[serde(default = "default_audit_retention_days")]
     pub retention_days: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct LoggingConfig {
+    #[serde(default = "default_logging_level")]
+    pub level: String,
+    #[serde(default = "default_true")]
+    pub file_enabled: bool,
+    #[serde(default = "default_logging_file_name")]
+    pub file_name: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -352,6 +364,8 @@ impl OxideConfig {
                 "audit.retention_days must be greater than 0".into(),
             ));
         }
+        validate_logging_level(&self.logging.level).map_err(ConfigError::Validation)?;
+        validate_logging_file_name(&self.logging.file_name).map_err(ConfigError::Validation)?;
         if self.doors.allowed_runners.is_empty() {
             return Err(ConfigError::Validation(
                 "doors.allowed_runners must include at least one runner".into(),
@@ -554,6 +568,12 @@ fn default_argon2_parallelism() -> u32 {
 fn default_audit_retention_days() -> i64 {
     365
 }
+fn default_logging_level() -> String {
+    "info".into()
+}
+fn default_logging_file_name() -> String {
+    "oxidebbs-server.log".into()
+}
 fn default_max_connections() -> u32 {
     4
 }
@@ -613,6 +633,26 @@ fn default_door_time_limit() -> u32 {
 }
 fn default_network_name() -> String {
     "OxideNet".into()
+}
+
+pub(crate) fn validate_logging_level(level: &str) -> Result<(), String> {
+    match level.trim().to_ascii_lowercase().as_str() {
+        "error" | "warn" | "info" | "debug" | "trace" => Ok(()),
+        other => Err(format!(
+            "logging.level must be one of error, warn, info, debug, or trace, got {other:?}"
+        )),
+    }
+}
+
+fn validate_logging_file_name(file_name: &str) -> Result<(), String> {
+    let file_name = file_name.trim();
+    if file_name.is_empty() {
+        return Err("logging.file_name must not be blank".into());
+    }
+    if file_name.contains('/') || file_name.contains('\\') || Path::new(file_name).is_absolute() {
+        return Err("logging.file_name must be a file name under paths.logs, not a path".into());
+    }
+    Ok(())
 }
 
 pub fn normalize_database_path(path: impl AsRef<Path>) -> PathBuf {
@@ -698,6 +738,16 @@ impl Default for AuditConfig {
     fn default() -> Self {
         Self {
             retention_days: default_audit_retention_days(),
+        }
+    }
+}
+
+impl Default for LoggingConfig {
+    fn default() -> Self {
+        Self {
+            level: default_logging_level(),
+            file_enabled: default_true(),
+            file_name: default_logging_file_name(),
         }
     }
 }
@@ -848,6 +898,9 @@ name = "Minimal"
         assert_eq!(config.auth.argon2.iterations, 2);
         assert_eq!(config.auth.argon2.parallelism, 1);
         assert_eq!(config.audit.retention_days, 365);
+        assert_eq!(config.logging.level, "info");
+        assert!(config.logging.file_enabled);
+        assert_eq!(config.logging.file_name, "oxidebbs-server.log");
         assert_eq!(
             config.doors.allowed_runners,
             vec!["dosemu".to_string(), "dosemu2".to_string()]
@@ -883,6 +936,42 @@ name = "Minimal"
         assert_eq!(normalize_database_path(&explicit_file), explicit_file);
 
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn rejects_invalid_logging_level() {
+        let toml = r#"
+[board]
+name = "Bad Logging"
+
+[logging]
+level = "debgu"
+"#;
+        let config: OxideConfig = toml::from_str(toml).expect("parse");
+        let error = config.validate().expect_err("invalid level rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("logging.level must be one of error, warn, info, debug, or trace")
+        );
+    }
+
+    #[test]
+    fn rejects_logging_file_name_paths() {
+        let toml = r#"
+[board]
+name = "Bad Logging File"
+
+[logging]
+file_name = "../server.log"
+"#;
+        let config: OxideConfig = toml::from_str(toml).expect("parse");
+        let error = config.validate().expect_err("path file name rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("logging.file_name must be a file name")
+        );
     }
 
     #[test]

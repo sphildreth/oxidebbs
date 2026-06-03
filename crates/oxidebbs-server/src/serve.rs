@@ -14,7 +14,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::oneshot;
 use tokio::time::{sleep, timeout};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use oxidebbs_core::auth::{NewUserInput, create_new_user};
 use oxidebbs_core::menu::{Menu, MenuAction};
@@ -218,6 +218,11 @@ where
                 };
 
                 if let Some(allocation) = runtime.try_allocate_node() {
+                    info!(
+                        node = %allocation.node_number,
+                        remote = %peer.address,
+                        "caller connection accepted"
+                    );
                     emit_audit_event_with_runtime(
                         db.as_ref(),
                         "node_assigned",
@@ -241,6 +246,7 @@ where
                         }
                     });
                 } else {
+                    warn!(remote = %peer.address, "caller rejected because no node is available");
                     tokio::spawn(async move {
                         if let Err(error) = reject_connection(stream).await {
                             warn!("failed to reject caller: {error}");
@@ -409,6 +415,12 @@ async fn handle_caller(
         peer.address.clone(),
         connected_at.clone(),
     );
+    debug!(
+        node = %node_number,
+        session_id = %session_id,
+        remote = %peer.address,
+        "caller session opened"
+    );
     let mut current_menu = Arc::clone(&login_menu);
 
     emit_audit_event_with_runtime(
@@ -505,10 +517,18 @@ async fn handle_caller(
                     None => continue,
                 };
                 drain_line_ending_after_menu_key(&mut transport, &mut input).await?;
+                debug!(
+                    node = %node_number,
+                    menu = %current_menu.id,
+                    key = %key,
+                    authenticated = in_main_menu,
+                    "caller selected menu key"
+                );
 
                 if !in_main_menu {
                     match current_menu.route(&key) {
                         Some(MenuAction::Login) => {
+                            debug!(node = %node_number, "caller selected login flow");
                             let mut auth_state = AuthFlowState {
                                 db: db.as_ref(),
                                 config: &config,
@@ -555,6 +575,7 @@ async fn handle_caller(
                             }
                         }
                         Some(MenuAction::NewUser) => {
+                            debug!(node = %node_number, "caller selected new-user flow");
                             let mut auth_state = AuthFlowState {
                                 db: db.as_ref(),
                                 config: &config,
@@ -601,11 +622,13 @@ async fn handle_caller(
                             }
                         }
                         Some(MenuAction::Logoff) => {
+                            debug!(node = %node_number, "caller selected login-menu logoff");
                             disconnect_reason = "caller_logoff".to_string();
                             send_text(&mut transport, "Goodbye.\r\n").await?;
                             break;
                         }
                         Some(MenuAction::Submenu { menu_id }) => {
+                            debug!(node = %node_number, submenu = %menu_id, "caller selected submenu");
                             if let Some(submenu) = resolve_submenu(&menus, &menu_id) {
                                 current_menu = Arc::clone(&submenu);
                                 send_menu_prompt(&mut transport, &current_menu).await?;
@@ -627,6 +650,7 @@ async fn handle_caller(
                 } else {
                     match current_menu.route(&key) {
                         Some(MenuAction::Doors) => {
+                            debug!(node = %node_number, "caller selected doors");
                             let mut door_state = DoorFlowState {
                                 db: db.as_ref(),
                                 config: config.as_ref(),
@@ -651,6 +675,7 @@ async fn handle_caller(
                             }
                         }
                         Some(MenuAction::Messages) => {
+                            debug!(node = %node_number, "caller selected messages");
                             runtime.mark_node_reading_messages(node_number_u16);
                             let mut message_state = MessageFlowState {
                                 db: db.as_ref(),
@@ -677,21 +702,25 @@ async fn handle_caller(
                             }
                         }
                         Some(MenuAction::NewUser) => {
+                            debug!(node = %node_number, "authenticated caller selected new-user action");
                             send_text(&mut transport, "Already signed in. Return to menu.\r\n")
                                 .await?;
                             send_menu_prompt(&mut transport, &current_menu).await?;
                         }
                         Some(MenuAction::Logoff) => {
+                            debug!(node = %node_number, "caller selected main-menu logoff");
                             disconnect_reason = "caller_logoff".to_string();
                             send_text(&mut transport, "Goodbye.\r\n").await?;
                             break;
                         }
                         Some(MenuAction::ShowScreen { screen }) => {
+                            debug!(node = %node_number, screen = %screen.asset, "caller selected show-screen action");
                             send_screen(&mut transport, &config, &screen.asset, &mut capabilities)
                                 .await?;
                             send_menu_prompt(&mut transport, &current_menu).await?;
                         }
                         Some(MenuAction::Submenu { menu_id }) => {
+                            debug!(node = %node_number, submenu = %menu_id, "caller selected submenu");
                             if let Some(submenu) = resolve_submenu(&menus, &menu_id) {
                                 current_menu = Arc::clone(&submenu);
                                 send_menu_prompt(&mut transport, &current_menu).await?;
@@ -705,12 +734,21 @@ async fn handle_caller(
                             }
                         }
                         Some(MenuAction::Login) => {
+                            debug!(node = %node_number, "authenticated caller selected login action");
                             send_text(&mut transport, "Already signed in. Return to menu.\r\n")
                                 .await?;
                             send_menu_prompt(&mut transport, &current_menu).await?;
                         }
-                        Some(MenuAction::Noop) => {}
+                        Some(MenuAction::Noop) => {
+                            debug!(node = %node_number, "caller selected noop action");
+                        }
                         None => {
+                            debug!(
+                                node = %node_number,
+                                menu = %current_menu.id,
+                                key = %key,
+                                "caller selected unknown menu key"
+                            );
                             send_text(&mut transport, "Unknown option.\r\n").await?;
                             send_menu_prompt(&mut transport, &current_menu).await?;
                         }
@@ -2782,6 +2820,13 @@ fn insert_required_startup_audit_event(
     node_number: Option<i64>,
     details: String,
 ) -> ServeResult<()> {
+    debug!(
+        event_type,
+        user_id = ?user_id,
+        node_number = ?node_number,
+        details = %details,
+        "required startup audit event"
+    );
     insert_audit_event(
         db.db(),
         &AuditEventRecord {
@@ -2809,6 +2854,13 @@ fn emit_audit_event_with_runtime(
     details: String,
     runtime: Option<&ServerRuntime>,
 ) {
+    debug!(
+        event_type,
+        user_id = ?user_id,
+        node_number = ?node_number,
+        details = %details,
+        "audit event"
+    );
     if let Err(error) = insert_audit_event(
         db.db(),
         &AuditEventRecord {

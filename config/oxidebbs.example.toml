@@ -24,6 +24,11 @@ parallelism = 1
 [audit]
 retention_days = 365
 
+[logging]
+level = "info"
+file_enabled = true
+file_name = "oxidebbs-server.log"
+
 [database]
 path = "./data/oxidebbs.ddb"
 

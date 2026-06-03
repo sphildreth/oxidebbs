@@ -18,7 +18,7 @@ Global options:
 - `--data <PATH>`
 - `--json`
 - `--no-color`
-- `-v, --verbose`
+- `-v, --verbose` (`debug`; repeat for `trace`)
 
 `--data` accepts either an explicit DecentDB file path or a directory path. When
 it points at a directory, OxideBBS uses `oxidebbs.ddb` inside that directory.
@@ -36,6 +36,51 @@ User security levels are documented in
 [User Security Levels](./security-levels.md), including the current defaults,
 message-area gates, and the distinction between numeric level `255` and the
 separate `is_sysop` flag.
+
+## Logging
+
+The configured logging policy is:
+
+```toml
+[logging]
+level = "info"
+file_enabled = true
+file_name = "oxidebbs-server.log"
+```
+
+Accepted levels are `error`, `warn`, `info`, `debug`, and `trace`.
+
+When file logging is enabled, logs are appended under `paths.logs`. With the
+default paths this is:
+
+```text
+logs/oxidebbs-server.log
+```
+
+`serve --log-level <level>` overrides `[logging].level` for that serve run:
+
+```bash
+cargo run -p oxidebbs-server -- --config config/oxidebbs.toml serve --log-level debug
+```
+
+The effective precedence is `serve --log-level`, then global `-v`, then
+`[logging].level`. One `-v` uses `debug`; two or more use `trace`.
+
+At `debug` and `trace`, server logs include caller connections, session opens,
+menu key selections, audit events, login outcomes, door activity, message
+activity, and disconnect reasons. DecentDB audit events remain the durable
+activity record; file logs are the operational troubleshooting stream.
+
+Read logs with:
+
+```bash
+cargo run -p oxidebbs-server -- --config config/oxidebbs.toml logs recent
+cargo run -p oxidebbs-server -- --config config/oxidebbs.toml logs tail --follow
+cargo run -p oxidebbs-server -- --config config/oxidebbs.toml logs search login_success
+```
+
+The log commands read regular files under `paths.logs`, including nested door
+runner logs under `logs/doors/`.
 
 ## Setup flow
 

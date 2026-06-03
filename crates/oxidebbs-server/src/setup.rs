@@ -186,6 +186,7 @@ struct GeneratedConfig {
     telnet: GeneratedTelnetConfig,
     auth: GeneratedAuthConfig,
     audit: GeneratedAuditConfig,
+    logging: GeneratedLoggingConfig,
     database: GeneratedDatabaseConfig,
     paths: GeneratedPathsConfig,
     nodes: GeneratedNodesConfig,
@@ -229,6 +230,13 @@ struct GeneratedArgon2Config {
 #[derive(Serialize)]
 struct GeneratedAuditConfig {
     retention_days: i64,
+}
+
+#[derive(Serialize)]
+struct GeneratedLoggingConfig {
+    level: String,
+    file_enabled: bool,
+    file_name: String,
 }
 
 #[derive(Serialize)]
@@ -465,6 +473,11 @@ pub fn build_setup_toml(answers: &SetupAnswers) -> io::Result<String> {
         },
         audit: GeneratedAuditConfig {
             retention_days: DEFAULT_AUDIT_RETENTION_DAYS,
+        },
+        logging: GeneratedLoggingConfig {
+            level: "info".to_string(),
+            file_enabled: true,
+            file_name: "oxidebbs-server.log".to_string(),
         },
         database: GeneratedDatabaseConfig {
             path: answers.database_path.to_string_lossy().into_owned(),

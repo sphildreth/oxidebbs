@@ -1,5 +1,7 @@
+use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use argon2::password_hash::{PasswordHash, PasswordHasher, SaltString};
 use argon2::{Algorithm, Argon2, Params, PasswordVerifier as Argon2PasswordVerifier, Version};
@@ -14,7 +16,7 @@ use oxidebbs_db::{
     find_user_by_alias_ci, find_user_by_id, insert_audit_event,
 };
 
-use crate::config::{DoorDefConfig, OxideConfig, normalize_database_path};
+use crate::config::{DoorDefConfig, OxideConfig, normalize_database_path, validate_logging_level};
 use crate::serve;
 
 use crate::commands::{
@@ -168,16 +170,21 @@ pub(crate) struct AppContext {
 
 pub async fn run() -> CliResult<()> {
     let cli = Cli::parse();
-    init_logging(cli.verbose);
 
     let config_path = cli.config.unwrap_or_else(default_config_path);
     let command = cli.command.unwrap_or(Command::Serve(ServeArgs::default()));
 
     match command {
-        Command::Setup(args) => return run_setup_command(args, cli.data, cli.json),
+        Command::Setup(args) => {
+            init_console_logging(cli.verbose)?;
+            return run_setup_command(args, cli.data, cli.json);
+        }
         Command::Config {
             command: ConfigCommand::Set { key, value },
-        } => return run_config_set(&config_path, &key, &value, cli.json),
+        } => {
+            init_console_logging(cli.verbose)?;
+            return run_config_set(&config_path, &key, &value, cli.json);
+        }
         _ => {}
     }
 
@@ -185,6 +192,8 @@ pub async fn run() -> CliResult<()> {
     if let Some(data_path) = cli.data {
         config.database.path = normalize_database_path(data_path);
     }
+    let log_level = effective_log_level(cli.verbose, &command, &config)?;
+    init_logging(&config, &log_level)?;
 
     let ctx = AppContext {
         config_path,
@@ -210,18 +219,115 @@ pub async fn run() -> CliResult<()> {
     }
 }
 
-pub(crate) fn init_logging(verbose: u8) {
-    let fallback = match verbose {
+fn verbose_log_level(verbose: u8) -> &'static str {
+    match verbose {
         0 => "info",
         1 => "debug",
         _ => "trace",
+    }
+}
+
+fn effective_log_level(verbose: u8, command: &Command, config: &OxideConfig) -> CliResult<String> {
+    let level = if let Command::Serve(args) = command
+        && let Some(log_level) = args.log_level.as_deref()
+    {
+        log_level
+    } else if verbose > 0 {
+        verbose_log_level(verbose)
+    } else {
+        &config.logging.level
     };
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(fallback)),
-        )
-        .init();
+    validate_logging_level(level).map_err(CliError::Message)?;
+    Ok(level.trim().to_ascii_lowercase())
+}
+
+fn init_console_logging(verbose: u8) -> CliResult<()> {
+    init_logging_with_file(verbose_log_level(verbose), None)
+}
+
+pub(crate) fn init_logging(config: &OxideConfig, level: &str) -> CliResult<()> {
+    let file = if config.logging.file_enabled {
+        std::fs::create_dir_all(&config.paths.logs)?;
+        let path = config.paths.logs.join(config.logging.file_name.trim());
+        let file = OpenOptions::new().create(true).append(true).open(path)?;
+        Some(file)
+    } else {
+        None
+    };
+    init_logging_with_file(level, file)
+}
+
+fn init_logging_with_file(level: &str, file: Option<File>) -> CliResult<()> {
+    use tracing_subscriber::prelude::*;
+
+    let env_filter = tracing_subscriber::EnvFilter::new(level);
+    let console_layer = tracing_subscriber::fmt::layer().with_writer(io::stderr);
+
+    match file {
+        Some(file) => {
+            let file_layer = tracing_subscriber::fmt::layer()
+                .with_ansi(false)
+                .with_writer(SharedLogFile::new(file));
+            tracing_subscriber::registry()
+                .with(env_filter)
+                .with(console_layer)
+                .with(file_layer)
+                .try_init()
+                .map_err(|error| {
+                    CliError::Message(format!("failed to initialize logging: {error}"))
+                })
+        }
+        None => tracing_subscriber::registry()
+            .with(env_filter)
+            .with(console_layer)
+            .try_init()
+            .map_err(|error| CliError::Message(format!("failed to initialize logging: {error}"))),
+    }
+}
+
+#[derive(Clone)]
+struct SharedLogFile {
+    file: Arc<Mutex<File>>,
+}
+
+impl SharedLogFile {
+    fn new(file: File) -> Self {
+        Self {
+            file: Arc::new(Mutex::new(file)),
+        }
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SharedLogFile {
+    type Writer = SharedLogFileWriter;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        SharedLogFileWriter {
+            file: Arc::clone(&self.file),
+        }
+    }
+}
+
+struct SharedLogFileWriter {
+    file: Arc<Mutex<File>>,
+}
+
+impl Write for SharedLogFileWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let mut file = self
+            .file
+            .lock()
+            .map_err(|_| io::Error::other("log file lock poisoned"))?;
+        file.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        let mut file = self
+            .file
+            .lock()
+            .map_err(|_| io::Error::other("log file lock poisoned"))?;
+        file.flush()
+    }
 }
 
 pub(crate) fn default_config_path() -> PathBuf {
@@ -584,5 +690,43 @@ mod tests {
                 "serve", "setup", "status", "sysop", "users",
             ]
         );
+    }
+
+    fn minimal_config() -> OxideConfig {
+        toml::from_str(
+            r#"
+[board]
+name = "Test BBS"
+"#,
+        )
+        .expect("parse minimal config")
+    }
+
+    #[test]
+    fn serve_log_level_overrides_global_verbose_and_config() {
+        let mut config = minimal_config();
+        config.logging.level = "info".to_string();
+        let command = Command::Serve(ServeArgs {
+            bind: None,
+            dry_run: false,
+            log_level: Some("warn".to_string()),
+        });
+
+        let level = effective_log_level(2, &command, &config).expect("effective level");
+        assert_eq!(level, "warn");
+    }
+
+    #[test]
+    fn global_verbose_overrides_config_when_serve_level_is_absent() {
+        let mut config = minimal_config();
+        config.logging.level = "info".to_string();
+        let command = Command::Serve(ServeArgs {
+            bind: None,
+            dry_run: false,
+            log_level: None,
+        });
+
+        let level = effective_log_level(1, &command, &config).expect("effective level");
+        assert_eq!(level, "debug");
     }
 }

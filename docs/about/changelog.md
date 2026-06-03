@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added a sysop-facing user security levels reference covering current defaults,
   enforced message-area gates, sysop promotion behavior, and currently reserved
   or unenforced security-level fields.
+- Added `[logging]` config with file logging to `paths.logs`, plus
+  `serve --log-level` and global `-v` overrides for sysop-controlled verbosity.
 
 ### Changed
 
@@ -53,6 +55,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Starter login ANSI screen assets no longer clear the screen after the terminal
   welcome asset is sent, so SyncTerm and other ANSI callers can see the welcome
   art and login menu together.
+- `logs recent`, `logs tail`, and `logs search` now read the server log and
+  nested door runner logs under `paths.logs`.
 - Stock telnet client CR-NUL line endings are now treated as line endings
   instead of leaking NUL bytes into aliases, passwords, or subsequent prompts.
 

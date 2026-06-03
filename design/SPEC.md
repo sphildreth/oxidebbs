@@ -387,6 +387,27 @@ The server exposes CLI-first local sysop command groups:
   export, and JSON import restore
 - `logs`, `audit`, and `config` for local troubleshooting
 
+### Logging
+
+The board config includes:
+
+```toml
+[logging]
+level = "info"
+file_enabled = true
+file_name = "oxidebbs-server.log"
+```
+
+Accepted levels are `error`, `warn`, `info`, `debug`, and `trace`. File logs are
+written under `paths.logs`. `serve --log-level <level>` overrides
+`[logging].level` for that serve run. The global `-v` override maps to `debug`,
+and repeated `-v` maps to `trace`.
+
+At `debug` and `trace`, logs should include connections, session opens, menu
+selections, audit events, login outcomes, door activity, message activity, and
+disconnect reasons. DecentDB audit events remain the durable activity record;
+file logs are the operational troubleshooting stream.
+
 All sysop control is local in v1. There is no remote admin API or remote
 interactive interface in this phase.
 
