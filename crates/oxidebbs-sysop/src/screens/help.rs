@@ -1,4 +1,6 @@
-use crate::input::UiEvent;
+use crossterm::event::KeyCode;
+
+use crate::input::{ScreenId, UiEvent};
 use crate::screens::common::UiAction;
 use crate::theme::Theme;
 use oxidebbs_db::OxideDb;
@@ -18,10 +20,15 @@ impl HelpScreen {
 impl HelpScreen {
     pub fn handle_event(
         &mut self,
-        _event: UiEvent,
+        event: UiEvent,
         _db: &Option<OxideDb>,
         _readonly: bool,
     ) -> UiAction {
+        if let UiEvent::Key(key) = event
+            && key.code == KeyCode::Esc
+        {
+            return UiAction::Navigate(ScreenId::Dashboard);
+        }
         UiAction::None
     }
 

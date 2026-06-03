@@ -519,7 +519,9 @@ oxidebbs-server sysop
 
 The `sysop` command launches the full local TUI by default. `--tui` is retained
 only as a compatibility flag, and `--readonly` starts the same TUI with
-destructive actions disabled.
+destructive actions disabled. The command attaches to an already-running
+`serve` control socket when available; otherwise it starts an embedded `serve`
+runtime for the lifetime of the TUI. `--connect-only` disables embedded startup.
 
 Recommended first screen:
 

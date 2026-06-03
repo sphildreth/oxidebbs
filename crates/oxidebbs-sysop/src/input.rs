@@ -67,25 +67,54 @@ impl ScreenId {
 }
 
 pub fn translate_key(key: KeyEvent) -> UiEvent {
-    match (key.modifiers, key.code) {
-        (_, KeyCode::F(1)) => UiEvent::Help,
-        (_, KeyCode::F(2)) => UiEvent::CommandPalette,
-        (_, KeyCode::F(3)) => UiEvent::Search,
-        (_, KeyCode::F(5)) => UiEvent::Refresh,
-        (_, KeyCode::Tab) => UiEvent::FocusNext,
-        (KeyModifiers::SHIFT, KeyCode::BackTab) => UiEvent::FocusPrev,
-        (_, KeyCode::BackTab) => UiEvent::FocusPrev,
-        (_, KeyCode::Enter) => UiEvent::Confirm,
-        (_, KeyCode::Esc) => UiEvent::Cancel,
-        (KeyModifiers::NONE, KeyCode::Char('q')) => UiEvent::Quit,
-        (KeyModifiers::NONE, KeyCode::Char('?')) => UiEvent::Help,
-        (KeyModifiers::NONE, KeyCode::Char('/')) => UiEvent::Search,
-        (KeyModifiers::CONTROL, KeyCode::Char('n')) => UiEvent::NavigateTo(ScreenId::Nodes),
-        (KeyModifiers::CONTROL, KeyCode::Char('u')) => UiEvent::NavigateTo(ScreenId::Users),
-        (KeyModifiers::CONTROL, KeyCode::Char('d')) => UiEvent::NavigateTo(ScreenId::Doors),
-        (KeyModifiers::CONTROL, KeyCode::Char('m')) => UiEvent::NavigateTo(ScreenId::Messages),
-        (KeyModifiers::CONTROL, KeyCode::Char('l')) => UiEvent::NavigateTo(ScreenId::Logs),
-        (KeyModifiers::CONTROL, KeyCode::Char('b')) => UiEvent::NavigateTo(ScreenId::Database),
+    let control = key.modifiers.contains(KeyModifiers::CONTROL);
+    match key.code {
+        KeyCode::F(1) => UiEvent::Help,
+        KeyCode::F(2) => UiEvent::CommandPalette,
+        KeyCode::F(3) => UiEvent::Search,
+        KeyCode::F(5) => UiEvent::Refresh,
+        KeyCode::Tab => UiEvent::FocusNext,
+        KeyCode::BackTab => UiEvent::FocusPrev,
+        KeyCode::Enter => UiEvent::Confirm,
+        KeyCode::Esc => UiEvent::Cancel,
+        KeyCode::Char('q') if key.modifiers == KeyModifiers::NONE => UiEvent::Quit,
+        KeyCode::Char('?') if key.modifiers == KeyModifiers::NONE => UiEvent::Help,
+        KeyCode::Char('/') if key.modifiers == KeyModifiers::NONE => UiEvent::Search,
+        KeyCode::Char('n' | 'N') if control => UiEvent::NavigateTo(ScreenId::Nodes),
+        KeyCode::Char('u' | 'U') if control => UiEvent::NavigateTo(ScreenId::Users),
+        KeyCode::Char('d' | 'D') if control => UiEvent::NavigateTo(ScreenId::Doors),
+        KeyCode::Char('m' | 'M') if control => UiEvent::NavigateTo(ScreenId::Messages),
+        KeyCode::Char('l' | 'L') if control => UiEvent::NavigateTo(ScreenId::Logs),
+        KeyCode::Char('b' | 'B') if control => UiEvent::NavigateTo(ScreenId::Database),
         _ => UiEvent::Key(key),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ScreenId, UiEvent, translate_key};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    #[test]
+    fn control_navigation_tolerates_shifted_control_letters() {
+        assert_eq!(
+            translate_key(KeyEvent::new(
+                KeyCode::Char('N'),
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT
+            )),
+            UiEvent::NavigateTo(ScreenId::Nodes)
+        );
+    }
+
+    #[test]
+    fn plain_enter_and_escape_translate_to_modal_semantics() {
+        assert_eq!(
+            translate_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+            UiEvent::Confirm
+        );
+        assert_eq!(
+            translate_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            UiEvent::Cancel
+        );
     }
 }

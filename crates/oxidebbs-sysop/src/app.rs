@@ -619,16 +619,34 @@ fn handle_ui_event(app: &mut App, event: UiEvent) {
         UiEvent::Refresh => {
             app.refresh_data();
         }
+        UiEvent::Confirm | UiEvent::Cancel | UiEvent::Search => {
+            let action = app.delegate_event(screen_event_for_semantic(event));
+            apply_ui_action(app, action);
+        }
         _ => {
             let action = app.delegate_event(event);
-            match action {
-                UiAction::None => {}
-                UiAction::Navigate(screen) => app.navigate_to(screen),
-                UiAction::OpenModal(modal) => app.modal = Some(modal),
-                UiAction::Refresh => app.refresh_data(),
-                UiAction::Quit => app.should_quit = true,
-            }
+            apply_ui_action(app, action);
         }
+    }
+}
+
+fn screen_event_for_semantic(event: UiEvent) -> UiEvent {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    match event {
+        UiEvent::Confirm => UiEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        UiEvent::Cancel => UiEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+        UiEvent::Search => UiEvent::Key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE)),
+        other => other,
+    }
+}
+
+fn apply_ui_action(app: &mut App, action: UiAction) {
+    match action {
+        UiAction::None => {}
+        UiAction::Navigate(screen) => app.navigate_to(screen),
+        UiAction::OpenModal(modal) => app.modal = Some(modal),
+        UiAction::Refresh => app.refresh_data(),
+        UiAction::Quit => app.should_quit = true,
     }
 }
 

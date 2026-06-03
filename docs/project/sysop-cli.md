@@ -45,18 +45,28 @@ Launch the local Ratatui sysop console with:
 cargo run -p oxidebbs-server -- --config config/oxidebbs.toml sysop
 ```
 
-`sysop` opens the full TUI by default. The legacy `--tui` flag is accepted for
-compatibility, and `--readonly` starts the console with destructive actions
-disabled:
+`sysop` opens the full TUI by default. It first tries to attach to the live
+control socket at `paths.runtime/oxidebbs-control.sock`. If no live socket is
+reachable, it starts an embedded `serve` runtime in the same process, waits for
+that runtime's control socket, and stops the embedded runtime when the TUI exits.
+
+The legacy `--tui` flag is accepted for compatibility, and `--readonly` starts
+the console with destructive actions disabled:
 
 ```bash
 cargo run -p oxidebbs-server -- --config config/oxidebbs.toml sysop --readonly
 ```
 
-The TUI uses the configured DecentDB path, `paths.logs`, `paths.screens`, and
-the live Unix control socket at `paths.runtime/oxidebbs-control.sock`. Live node
-actions such as disconnect, node message, broadcast, and reset-stale require the
-server process to be running and reachable through that socket.
+Use `--connect-only` when `sysop` should never start an embedded server:
+
+```bash
+cargo run -p oxidebbs-server -- --config config/oxidebbs.toml sysop --connect-only
+```
+
+The TUI uses the configured DecentDB path, `paths.logs`, `paths.screens`, and the
+Unix control socket. Live node actions such as disconnect, node message,
+broadcast, and reset-stale require either an existing `serve` process or the
+embedded runtime started by `sysop`.
 
 ## Logging
 

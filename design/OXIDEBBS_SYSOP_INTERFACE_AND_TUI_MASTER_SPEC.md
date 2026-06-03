@@ -515,7 +515,9 @@ oxidebbs-server sysop
 
 The current `oxidebbs-server` binary launches the full local TUI from `sysop`
 by default. `--tui` remains as a compatibility flag, and `--readonly` disables
-destructive TUI actions.
+destructive TUI actions. `sysop` attaches to an already-running `serve` control
+socket when available; otherwise it starts an embedded `serve` runtime for the
+lifetime of the TUI. `--connect-only` disables embedded startup.
 
 Recommended first screen:
 
@@ -722,6 +724,7 @@ Optional flags:
 ```bash
 oxidebbs-server --config config/oxidebbs.toml sysop
 oxidebbs-server sysop --readonly
+oxidebbs-server sysop --connect-only
 ```
 
 ### Implementation stack

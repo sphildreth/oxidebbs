@@ -68,6 +68,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Sysop TUI confirmations now execute their backing actions, use the live
   `oxidebbs-control.sock` path, and audit user, door, message, broadcast, and
   live-node write actions.
+- `oxidebbs-server sysop` now attaches to an existing live control socket when
+  available and otherwise starts an embedded `serve` runtime for the TUI session;
+  `--connect-only` preserves client-only behavior.
 
 ## [1.0.0] - 2026-06-02
 

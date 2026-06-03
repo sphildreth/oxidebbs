@@ -163,6 +163,9 @@ enum Command {
         /// Run the sysop TUI in read-only mode
         #[arg(long)]
         readonly: bool,
+        /// Do not start an embedded server if no live control socket is reachable
+        #[arg(long)]
+        connect_only: bool,
     },
 
     /// Manage users
@@ -224,7 +227,11 @@ pub async fn run() -> CliResult<()> {
         Command::Logs { command } => run_logs(command, &ctx),
         Command::Audit { command } => run_audit(command, &ctx),
         Command::Config { command } => run_config(command, &ctx),
-        Command::Sysop { readonly, .. } => run_sysop_tui(&ctx, readonly).await,
+        Command::Sysop {
+            readonly,
+            connect_only,
+            ..
+        } => run_sysop_tui(&ctx, readonly, connect_only).await,
         Command::Setup(_) => unreachable!("setup is handled before config load"),
     }
 }
@@ -1043,9 +1050,31 @@ name = "Test BBS"
         assert_eq!(cli.config, Some(config_path));
 
         match cli.command {
-            Some(Command::Sysop { tui, readonly }) => {
+            Some(Command::Sysop {
+                tui,
+                readonly,
+                connect_only,
+            }) => {
                 assert!(readonly);
                 assert!(!tui);
+                assert!(!connect_only);
+            }
+            _ => panic!("expected sysop command"),
+        }
+    }
+
+    #[test]
+    fn sysop_command_accepts_connect_only_mode() {
+        let cli = Cli::parse_from(["oxidebbs", "sysop", "--connect-only"]);
+
+        match cli.command {
+            Some(Command::Sysop {
+                connect_only,
+                readonly,
+                ..
+            }) => {
+                assert!(connect_only);
+                assert!(!readonly);
             }
             _ => panic!("expected sysop command"),
         }
