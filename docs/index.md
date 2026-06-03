@@ -15,7 +15,7 @@ hero:
 
 features:
   - title: Telnet-first
-    details: v1 targets classic telnet callers and keeps physical modem support as a future transport.
+    details: v1 targets classic telnet callers. Physical modem, serial, and file-transfer transports are scoped into v1.2.
   - title: ANSI/CP437-native
     details: Caller output stays byte-oriented, with 40-column and 80-column profiles as first-class layouts.
   - title: DecentDB-backed

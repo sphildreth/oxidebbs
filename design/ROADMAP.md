@@ -102,6 +102,10 @@
 
 ## Future
 
+The following items were previous future work that is now scoped into the
+active v1.2 deferred-scope release. See
+[`design/RELEASE_v1_2_PLAN.md`](./RELEASE_v1_2_PLAN.md) for the full phase map.
+
 - Physical serial/modem transport
 - BinkP polling for FTN/FidoNet mail exchange
 - Full FTN tosser/scanner

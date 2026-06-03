@@ -4,6 +4,36 @@ This file tracks active release work and near-term follow-up items. It is not a
 replacement for `design/ROADMAP.md`, `docs/about/changelog.md`, or ADRs; it is a
 short operational checklist for work that needs explicit closure.
 
+## v1.2.0 Release Work
+
+v1.2 is the deferred-scope release described in
+[`design/RELEASE_v1_2_PLAN.md`](./RELEASE_v1_2_PLAN.md) and
+[ADR 0018](./adr/0018-v1-2-completes-deferred-scope.md).
+All implementation agents must work from the release plan rather than
+re-opening scope decisions.
+
+| Phase | Title | Status |
+| --- | --- | --- |
+| P0 | Scope freeze and ADR baseline | Complete |
+| P1 | Release hygiene and stale-future sweep | Active |
+| P2 | Schema, config, and DbWriter foundation | Planned |
+| P3 | Caller authorization and flow polish | Planned |
+| P4 | Serial/modem transport and file transfers | Planned |
+| P5 | Door ecosystem expansion | Planned |
+| P6 | Database maintenance operations | Planned |
+| P7 | Sysop CLI completion | Planned |
+| P8 | Sysop TUI completion | Planned |
+| P9 | Shared network foundation | Planned |
+| P10 | Legacy FTN packet and message engine | Planned |
+| P11 | FTN toss, scan, and bundles | Planned |
+| P12 | FTN routing, nodelist, and AreaFix | Planned |
+| P13 | BinkP transport | Planned |
+| P14 | FTN operations, hardening, and docs | Planned |
+| P15 | OxideNet implementation | Planned |
+| P16 | Remote admin and status surface | Planned |
+| P17 | Repository and release automation | Planned |
+| P18 | Final integration and release readiness | Planned |
+
 ## v1.1.0 Release Readiness
 
 - [x] Bump all OxideBBS Rust workspace crate versions to `1.1.0`.
@@ -40,7 +70,11 @@ and release publication in the current conversation:
 
 ## Deferred From v1.1.0
 
-The following items remain intentionally deferred from `v1.1.0` according to the
+**Note:** v1.2 is now consuming these deferred items. Implementation agents
+should use [`design/RELEASE_v1_2_PLAN.md`](./RELEASE_v1_2_PLAN.md) for active
+scope decisions rather than re-scoping items from this historical list.
+
+The following items were intentionally deferred from `v1.1.0` according to the
 recommended decisions in `design/RELEASE_v1_1_PLAN.md`:
 
 - [ ] Menu-level `min_security_level` enforcement for caller menu routing.
@@ -64,14 +98,17 @@ recommended decisions in `design/RELEASE_v1_1_PLAN.md`:
 
 ## Future Backlog
 
-- [ ] Decide the next post-v1.1 milestone split between sysop polish, network
-  foundation, and caller-facing features.
-- [ ] Revisit whether audit retention purge should be a small `v1.1.x` patch or
-  part of the next minor release.
-- [ ] Revisit dedicated logoff screen rendering as a small caller-flow polish
-  item.
-- [ ] Keep release artifact workflow behavior documented as package formats and
-  supported targets evolve.
+These items were pre-v1.2 backlog notes. They have been absorbed into the v1.2
+plan above. Implementation agents should use `design/RELEASE_v1_2_PLAN.md`.
+
+- [x] Decide the next post-v1.1 milestone split between sysop polish, network
+  foundation, and caller-facing features. *(Resolved: v1.2 deferred-scope release.)*
+- [x] Revisit whether audit retention purge should be a small `v1.1.x` patch or
+  part of the next minor release. *(Resolved: v1.2, phase P6.)*
+- [x] Revisit dedicated logoff screen rendering as a small caller-flow polish
+  item. *(Resolved: v1.2, phase P3.)*
+- [x] Keep release artifact workflow behavior documented as package formats and
+  supported targets evolve. *(Resolved: v1.2, phase P17.)*
 
 ## Recently Completed
 

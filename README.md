@@ -285,8 +285,10 @@ update the relevant design docs and ADRs.
 - Remote caller UI is ANSI/CP437 byte-oriented, not Unicode-first.
 - Ratatui is used only for the local sysop console, not caller screens.
 - Physical modem/serial support, BinkP polling for FTN/FidoNet mail exchange,
-  full FTN/OxideNet runtime, and caller file-area transfer support are future
-  work.
+  full FTN/OxideNet runtime, caller file-area transfer support, and other
+  previously-deferred features are now scoped into the active v1.2 release.
+  See [`design/RELEASE_v1_2_PLAN.md`](design/RELEASE_v1_2_PLAN.md) for the
+  full deferred-scope roadmap.
 - Future caller file-transfer scope is ZMODEM as the primary protocol,
   XMODEM-CRC as the fallback protocol, and no YMODEM/XMODEM-1k support unless a
   later ADR changes scope.

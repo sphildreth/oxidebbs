@@ -142,7 +142,12 @@ possibly OxideNet.
 - Message stats
 - Config inspection
 
-## 6. v2 candidates
+## 6. v1.2 candidates (previously v2 candidates)
+
+The following items were previously listed as v2 or future scope. They are now
+scoped into the active v1.2 deferred-scope release per
+[`design/RELEASE_v1_2_PLAN.md`](./RELEASE_v1_2_PLAN.md) and
+[ADR 0018](./adr/0018-v1-2-completes-deferred-scope.md).
 
 - Physical modem/serial transport
 - BinkP polling for FTN/FidoNet mail exchange
