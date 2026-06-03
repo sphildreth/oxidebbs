@@ -1,5 +1,5 @@
 <p align="center">
-    <img src="graphics/logo.png" alt="OxideBBS logo" width="220" />
+    <img src="graphics/logo.png" alt="OxideBBS logo" width="440" />
 </p>
 
 <p align="center">
