@@ -53,10 +53,10 @@ recommended decisions in `design/RELEASE_v1_1_PLAN.md`:
 - [ ] Dedicated logoff screen rendering from `terminal.logoff_screen`.
 - [ ] DbWriter service for high-contention write scaling.
 - [ ] Physical serial/modem caller transport.
-- [ ] ZMODEM/XMODEM/YMODEM file transfers.
+- [ ] Caller file-area transfers: ZMODEM primary and XMODEM-CRC fallback.
 - [ ] Full FTN implementation, including packet parser/writer, tosser, scanner,
-  bundles, nodelist, duplicate detection, netmail routing, AreaFix, BinkP, and
-  operational CLI.
+  bundles, nodelist, duplicate detection, netmail routing, AreaFix, required
+  BinkP transport for FTN/FidoNet mail exchange, and operational CLI.
 - [ ] OxideNet implementation beyond the current foundation/design work.
 - [ ] Remote web admin or status dashboard with a full security model.
 - [ ] Native door API and remote door-provider integrations.

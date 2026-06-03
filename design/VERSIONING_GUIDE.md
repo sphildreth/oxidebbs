@@ -224,7 +224,7 @@ When publishing, use Git tags with a leading `v`:
 Release automation should convert those tags into package versions without the
 leading `v` only where a downstream package format requires it.
 
-GitHub release artifacts are built from the release tag by default and are named
-with the leading `v` tag plus the target triple, such as
-`oxidebbs-v1.0.0-x86_64-unknown-linux-gnu.tar.gz`. Each uploaded archive should
-include a matching `.sha256` checksum file.
+GitHub release artifacts are built from the release tag by default. The workflow
+builds with Rust target triples but names packages with friendlier platform
+suffixes, such as `oxidebbs-v1.2.0-linux-x86_64-gnu.tar.gz`. Each uploaded
+archive should include a matching `.sha256` checksum file.

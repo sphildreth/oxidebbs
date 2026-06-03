@@ -708,8 +708,8 @@ Decision for v1.1.0:
 
 Current behavior:
 
-- File transfer support is listed as future work if still desired.
-- No ZMODEM/XMODEM/YMODEM subsystem exists.
+- Caller file-transfer support is listed as future work.
+- No caller file-transfer subsystem exists.
 
 Decision for v1.1.0:
 

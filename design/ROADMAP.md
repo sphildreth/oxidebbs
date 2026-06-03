@@ -103,9 +103,9 @@
 ## Future
 
 - Physical serial/modem transport
-- BinkP polling
+- BinkP polling for FTN/FidoNet mail exchange
 - Full FTN tosser/scanner
 - OxideNet network support
-- File transfer support, if still desired
+- Caller file-area transfers: ZMODEM primary and XMODEM-CRC fallback
 - Dedicated logoff screen rendering
 - DbWriter service if write contention emerges

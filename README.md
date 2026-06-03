@@ -114,9 +114,9 @@ volumes, reset steps, door testing, and Windows/macOS notes.
 
 GitHub Releases publish `oxidebbs-server` packages and SHA-256 checksums for:
 
-- `oxidebbs-<tag>-x86_64-unknown-linux-gnu.tar.gz`
-- `oxidebbs-<tag>-x86_64-apple-darwin.tar.gz`
-- `oxidebbs-<tag>-x86_64-pc-windows-msvc.zip`
+- `oxidebbs-<tag>-linux-x86_64-gnu.tar.gz`
+- `oxidebbs-<tag>-macos-x86_64.tar.gz`
+- `oxidebbs-<tag>-windows-x86_64-msvc.zip`
 
 Each package includes the server binary, bundled assets, example configs, the
 Oxide-owned `oxide-check` test door fixture, license files, and security policy.
@@ -284,8 +284,12 @@ update the relevant design docs and ADRs.
 - DecentDB is the only system database.
 - Remote caller UI is ANSI/CP437 byte-oriented, not Unicode-first.
 - Ratatui is used only for the local sysop console, not caller screens.
-- Physical modem/serial support, BinkP polling, full FTN/OxideNet runtime, and
-  file transfer support are future work.
+- Physical modem/serial support, BinkP polling for FTN/FidoNet mail exchange,
+  full FTN/OxideNet runtime, and caller file-area transfer support are future
+  work.
+- Future caller file-transfer scope is ZMODEM as the primary protocol,
+  XMODEM-CRC as the fallback protocol, and no YMODEM/XMODEM-1k support unless a
+  later ADR changes scope.
 - Public telnet exposure is an operator decision. Telnet sends credentials and
   caller traffic in plaintext; the generated config binds to `127.0.0.1:2323`
   by default.

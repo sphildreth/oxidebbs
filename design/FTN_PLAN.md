@@ -1923,7 +1923,12 @@ Implement the BinkP protocol for TCP/IP-based network mail exchange. Create the 
 
 #### BinkP protocol implementation
 
-BinkP is a TCP/IP protocol for exchanging packet and bundle files. Legacy FTN uses it for `.pkt` and arcmail bundles; OxideNet may use the same transport for its internal packet files. The protocol uses a series of frames:
+BinkP is a TCP/IP protocol for exchanging packet and bundle files. Legacy FTN
+uses it for `.pkt` and arcmail bundles; OxideNet may use the same transport for
+its internal packet files. This is the FTN/FidoNet mail transport for v1.2.
+Caller file-area transfer protocols such as ZMODEM and XMODEM-CRC live in
+`oxidebbs-transfer` and are not used for BinkP polling. YMODEM is outside v1.2
+caller-transfer scope. The protocol uses a series of frames:
 
 | Frame | Description |
 |---|---|
@@ -2003,7 +2008,10 @@ struct PollResult {
 - M_PWD carries the session password. BinkP passwords are case-sensitive at the BinkP layer; legacy packet passwords remain case-insensitive where required by FTN packet convention.
 - M_FILE offers a file. The receiver acknowledges with M_GOT when the file has been received completely, or M_SKIP to refuse it.
 - M_EOB marks end-of-batch. A session completes after both sides have finished sending files and pending M_GOT/M_SKIP acknowledgements have been processed.
-- File transfer uses BinkP data frames. After M_FILE, subsequent data frames carry bytes for that file until the advertised size is reached; there is no separate end-of-file frame.
+- File transfer within BinkP uses BinkP data frames. After M_FILE, subsequent
+  data frames carry bytes for that file until the advertised size is reached;
+  there is no separate end-of-file frame. This is not XMODEM, YMODEM, ZMODEM,
+  ZedZap, Hydra, or any caller-facing transfer protocol.
 - M_GET supports resume from an offset. Basic v1 may reject resume with a clear error, but the frame parser must understand M_GET.
 - The client should support retry with exponential backoff on connection failure.
 - The client should log all poll activity to `ftn_poll_log`.
@@ -2359,3 +2367,8 @@ OxideBBS will implement the following FTN standards to enable participation in r
 | FSC-0115 INTL/FMPT/TOPT | Phase 2, 5, 8 | Netmail inter-zone routing |
 | Arcmail bundle format | Phase 6 | ZIP compression, day-of-week naming |
 | BinkP protocol | Phase 10 | TCP/IP mail exchange |
+
+
+## Reference
+
+Official FidoNet FTSC Documents: http://ftsc.org/docs/

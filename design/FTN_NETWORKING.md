@@ -51,7 +51,7 @@ Examples:
 
 ### Transport
 
-- BinkP polling
+- BinkP polling for FTN/FidoNet mail exchange
 - Archive bundling
 - Inbound/outbound queues
 

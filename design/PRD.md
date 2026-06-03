@@ -145,11 +145,11 @@ possibly OxideNet.
 ## 6. v2 candidates
 
 - Physical modem/serial transport
-- BinkP polling
+- BinkP polling for FTN/FidoNet mail exchange
 - FTN packet tosser/scanner
 - OxideNet network support
 - Web-based read-only status dashboard
-- ZMODEM/XMODEM/YMODEM file transfers, if still desired
+- Caller file-area transfers: ZMODEM primary and XMODEM-CRC fallback
 - Native door API for future Rust-native doors
 
 ## 7. Success criteria
