@@ -25,5 +25,5 @@ pub(crate) use nodes::{NodesCommand, run_nodes};
 pub(crate) use serve::{ServeArgs, run_serve};
 pub(crate) use setup::{SetupArgs, run_setup_command};
 pub(crate) use status::run_status;
-pub(crate) use sysop::{run_sysop_preview, run_sysop_tui};
+pub(crate) use sysop::run_sysop_tui;
 pub(crate) use users::{UsersCommand, run_users};

@@ -1,4 +1,5 @@
 use crate::SysopError;
+use crate::services::audit_service::AuditService;
 use oxidebbs_db::{
     Db, MessageAreaRecord, MessageRecord, find_message_area_by_key, find_message_by_id,
     list_message_areas, list_messages_in_area, update_message_visibility,
@@ -25,6 +26,13 @@ impl MessageAdminService {
 
     pub fn delete_message(db: &Db, message_id: &str) -> Result<(), SysopError> {
         update_message_visibility(db, message_id, "deleted")?;
+        AuditService::record(
+            db,
+            "message_deleted",
+            None,
+            None,
+            &format!("message_id={message_id}"),
+        )?;
         Ok(())
     }
 }

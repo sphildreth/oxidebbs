@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `serve --log-level` and global `-v` overrides for sysop-controlled verbosity.
 - Added configurable log file format and rotation, including newline-delimited
   JSON logs and daily or size-based archive retention.
+- Added the local Ratatui sysop TUI launched by `oxidebbs-server sysop`,
+  including dashboard, node, user, door, message, database, log, config, ANSI,
+  audit, command-palette, modal, and read-only views backed by the same sysop
+  service layer as the CLI.
 
 ### Changed
 
@@ -61,6 +65,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nested door runner logs under `paths.logs`.
 - Stock telnet client CR-NUL line endings are now treated as line endings
   instead of leaking NUL bytes into aliases, passwords, or subsequent prompts.
+- Sysop TUI confirmations now execute their backing actions, use the live
+  `oxidebbs-control.sock` path, and audit user, door, message, broadcast, and
+  live-node write actions.
 
 ## [1.0.0] - 2026-06-02
 

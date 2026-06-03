@@ -37,6 +37,27 @@ User security levels are documented in
 message-area gates, and the distinction between numeric level `255` and the
 separate `is_sysop` flag.
 
+## Local Sysop TUI
+
+Launch the local Ratatui sysop console with:
+
+```bash
+cargo run -p oxidebbs-server -- --config config/oxidebbs.toml sysop
+```
+
+`sysop` opens the full TUI by default. The legacy `--tui` flag is accepted for
+compatibility, and `--readonly` starts the console with destructive actions
+disabled:
+
+```bash
+cargo run -p oxidebbs-server -- --config config/oxidebbs.toml sysop --readonly
+```
+
+The TUI uses the configured DecentDB path, `paths.logs`, `paths.screens`, and
+the live Unix control socket at `paths.runtime/oxidebbs-control.sock`. Live node
+actions such as disconnect, node message, broadcast, and reset-stale require the
+server process to be running and reachable through that socket.
+
 ## Logging
 
 The configured logging policy is:

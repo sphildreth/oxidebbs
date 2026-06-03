@@ -2,10 +2,12 @@ use crossterm::event::KeyCode;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph, Row, Table, TableState};
 
+use crate::SysopError;
 use crate::input::{ScreenId, UiEvent};
 use crate::screens::common::UiAction;
 use crate::services::door_service::DoorAdminService;
 use crate::theme::Theme;
+use crate::widgets::modal::{ConfirmModal, FormField, FormModal, ModalKind};
 use oxidebbs_db::{DoorDefinitionRecord, DoorRunRecord, OxideDb};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,6 +26,16 @@ pub struct DoorsScreen {
     pub run_table_state: TableState,
     pub filter: String,
     pub detail_door: Option<String>,
+    pub pending_action: Option<DoorPendingAction>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DoorPendingAction {
+    SetEnabled {
+        door_id: String,
+        door_key: String,
+        enabled: bool,
+    },
 }
 
 impl DoorsScreen {
@@ -41,6 +53,7 @@ impl DoorsScreen {
             run_table_state,
             filter: String::new(),
             detail_door: None,
+            pending_action: None,
         }
     }
 
@@ -80,10 +93,10 @@ impl DoorsScreen {
         &mut self,
         event: UiEvent,
         _db: &Option<OxideDb>,
-        _readonly: bool,
+        readonly: bool,
     ) -> UiAction {
         match self.view {
-            DoorView::Detail => return self.handle_detail_event(event),
+            DoorView::Detail => return self.handle_detail_event(event, readonly),
             DoorView::RunHistory => return self.handle_run_event(event),
             DoorView::List => {}
         }
@@ -111,8 +124,39 @@ impl DoorsScreen {
                     self.view = DoorView::RunHistory;
                 }
                 KeyCode::Char('f') | KeyCode::Char('/') => {
-                    self.filter.clear();
-                    // In a real TUI this would open a filter modal; for now toggle filter reset
+                    return UiAction::OpenModal(ModalKind::Form(FormModal {
+                        title: "Filter Doors".to_string(),
+                        fields: vec![FormField {
+                            label: "Filter".to_string(),
+                            value: self.filter.clone(),
+                            is_password: false,
+                        }],
+                        active_field: 0,
+                    }));
+                }
+                KeyCode::Char('d') if !readonly => {
+                    if let Some(id) = self.selected_door_id()
+                        && let Some(door) = self.doors.iter().find(|door| door.id == id)
+                    {
+                        let enabled = !door.enabled;
+                        let (title, verb) = if enabled {
+                            ("Enable Door", "Enable")
+                        } else {
+                            ("Disable Door", "Disable")
+                        };
+                        self.pending_action = Some(DoorPendingAction::SetEnabled {
+                            door_id: door.id.clone(),
+                            door_key: door.key.clone(),
+                            enabled,
+                        });
+                        return UiAction::OpenModal(ModalKind::Confirm(ConfirmModal {
+                            title: title.to_string(),
+                            message: format!("{verb} door {}?", door.key),
+                            detail: Some(door.name.clone()),
+                            confirm_label: verb.to_string(),
+                            cancel_label: "Cancel".to_string(),
+                        }));
+                    }
                 }
                 KeyCode::Esc => {
                     return UiAction::Navigate(ScreenId::Dashboard);
@@ -143,11 +187,58 @@ impl DoorsScreen {
         UiAction::None
     }
 
-    fn handle_detail_event(&mut self, event: UiEvent) -> UiAction {
+    pub fn confirm_pending_action(&mut self, db: &Option<OxideDb>) -> Result<(), SysopError> {
+        let Some(action) = self.pending_action.take() else {
+            return Ok(());
+        };
+        let Some(db) = db else {
+            return Err(SysopError::Message(
+                "database is unavailable for door action".to_string(),
+            ));
+        };
+
+        match action {
+            DoorPendingAction::SetEnabled {
+                door_id,
+                door_key,
+                enabled,
+            } => DoorAdminService::set_enabled(db.db(), &door_id, &door_key, enabled),
+        }
+    }
+
+    pub fn cancel_pending_action(&mut self) {
+        self.pending_action = None;
+    }
+
+    fn handle_detail_event(&mut self, event: UiEvent, readonly: bool) -> UiAction {
         match event {
             UiEvent::Key(key) if key.code == KeyCode::Esc => {
                 self.view = DoorView::List;
                 self.detail_door = None;
+            }
+            UiEvent::Key(key) if key.code == KeyCode::Char('d') && !readonly => {
+                if let Some(ref id) = self.detail_door
+                    && let Some(door) = self.doors.iter().find(|door| &door.id == id)
+                {
+                    let enabled = !door.enabled;
+                    let (title, verb) = if enabled {
+                        ("Enable Door", "Enable")
+                    } else {
+                        ("Disable Door", "Disable")
+                    };
+                    self.pending_action = Some(DoorPendingAction::SetEnabled {
+                        door_id: door.id.clone(),
+                        door_key: door.key.clone(),
+                        enabled,
+                    });
+                    return UiAction::OpenModal(ModalKind::Confirm(ConfirmModal {
+                        title: title.to_string(),
+                        message: format!("{verb} door {}?", door.key),
+                        detail: Some(door.name.clone()),
+                        confirm_label: verb.to_string(),
+                        cancel_label: "Cancel".to_string(),
+                    }));
+                }
             }
             UiEvent::Cancel => {
                 self.view = DoorView::List;
@@ -279,7 +370,7 @@ impl DoorsScreen {
             &mut table_state,
         );
 
-        let hints = "↑↓ Move | Enter Detail | H History | F Filter | Esc Back";
+        let hints = "↑↓ Move | Enter Detail | H History | F Filter | D Enable/Disable | Esc Back";
         Paragraph::new(hints)
             .style(self.theme.muted_style())
             .block(Block::default().borders(Borders::ALL))

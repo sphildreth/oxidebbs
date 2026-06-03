@@ -18,40 +18,43 @@ impl<'a> NodeTableWidget<'a> {
         .style(self.theme.label_style())
         .height(1);
 
-        let rows: Vec<Row> = (1..=self.total_configured)
-            .map(|node_num| {
-                let node = self.nodes.iter().find(|n| n.node_number == node_num);
-                match node {
-                    Some(n) => {
-                        let code = NodeMapWidget::activity_code(&n.state);
-                        let alias = n.user_alias.as_deref().unwrap_or("-");
-                        let remote = n.remote_address.as_deref().unwrap_or("--");
-                        let connected = n.connected_at.as_deref().unwrap_or("--");
-                        let style = NodeMapWidget::activity_style(&n.state, self.theme);
-                        Row::new(vec![
-                            node_num.to_string(),
-                            alias.to_string(),
-                            code.to_string(),
-                            connected.to_string(),
-                            "--".to_string(),
-                            remote.to_string(),
-                            n.state.clone(),
-                        ])
-                        .style(style)
-                    }
-                    None => Row::new(vec![
-                        node_num.to_string(),
-                        "-".to_string(),
-                        "FREE".to_string(),
-                        "--".to_string(),
-                        "--".to_string(),
-                        "--".to_string(),
-                        "Available".to_string(),
+        let rows: Vec<Row> = if self.nodes.is_empty() {
+            vec![
+                Row::new(vec![
+                    "-".to_string(),
+                    "-".to_string(),
+                    "-".to_string(),
+                    "--".to_string(),
+                    "--".to_string(),
+                    "--".to_string(),
+                    "No nodes match".to_string(),
+                ])
+                .style(self.theme.muted_style()),
+            ]
+        } else {
+            self.nodes
+                .iter()
+                .map(|node| {
+                    let code = NodeMapWidget::activity_code(&node.state);
+                    let alias = node.user_alias.as_deref().unwrap_or("-");
+                    let remote = node.remote_address.as_deref().unwrap_or("--");
+                    let connected = node.connected_at.as_deref().unwrap_or("--");
+                    let style = NodeMapWidget::activity_style(&node.state, self.theme);
+                    Row::new(vec![
+                        node.node_number.to_string(),
+                        alias.to_string(),
+                        code.to_string(),
+                        connected.to_string(),
+                        node.heartbeat_age_seconds
+                            .map(|age| format!("{age}s"))
+                            .unwrap_or_else(|| "--".to_string()),
+                        remote.to_string(),
+                        node.state.clone(),
                     ])
-                    .style(self.theme.muted_style()),
-                }
-            })
-            .collect();
+                    .style(style)
+                })
+                .collect()
+        };
 
         let widths = [
             Constraint::Length(4),

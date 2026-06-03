@@ -514,10 +514,12 @@ The Ratatui console shipped in v1.1.
 Launch command:
 
 ```bash
-oxidebbs sysop --tui
+oxidebbs-server sysop
 ```
 
-Running `oxidebbs sysop` without `--tui` still shows the text-only sysop preview.
+The `sysop` command launches the full local TUI by default. `--tui` is retained
+only as a compatibility flag, and `--readonly` starts the same TUI with
+destructive actions disabled.
 
 Recommended first screen:
 

@@ -69,7 +69,6 @@ impl NodesScreen {
         }
     }
 
-    #[allow(dead_code)]
     fn filtered_nodes(&self) -> Vec<&NodeStatusSnapshot> {
         let mut nodes: Vec<&NodeStatusSnapshot> = self.nodes.iter().collect();
         match self.view {
@@ -80,7 +79,12 @@ impl NodesScreen {
                 nodes.retain(|n| n.state == "in_door");
             }
             NodeView::ProblemOnly => {
-                nodes.retain(|n| n.state == "stale" || n.state == "disconnecting");
+                nodes.retain(|n| {
+                    matches!(
+                        n.state.as_str(),
+                        "stale" | "disconnecting" | "failed" | "error"
+                    )
+                });
             }
             _ => {}
         }
@@ -96,7 +100,36 @@ impl NodesScreen {
                         .contains(&f)
             });
         }
+        match self.sort {
+            NodeSort::NodeNumber => nodes.sort_by_key(|n| n.node_number),
+            NodeSort::Activity => nodes.sort_by(|a, b| a.state.cmp(&b.state)),
+            NodeSort::User => nodes.sort_by(|a, b| {
+                a.user_alias
+                    .as_deref()
+                    .unwrap_or("")
+                    .cmp(b.user_alias.as_deref().unwrap_or(""))
+            }),
+            NodeSort::TimeOn => nodes.sort_by(|a, b| b.connected_at.cmp(&a.connected_at)),
+        }
         nodes
+    }
+
+    pub fn selected_node_number(&self) -> Option<u16> {
+        if let Some(node) = self.detail_node {
+            return Some(node);
+        }
+        if self.view == NodeView::Grid {
+            return Some(self.grid_selected);
+        }
+        let nodes = self.filtered_nodes();
+        self.table_state
+            .selected()
+            .and_then(|idx| nodes.get(idx))
+            .map(|node| node.node_number)
+    }
+
+    fn selected_table_max(&self) -> usize {
+        self.filtered_nodes().len().saturating_sub(1)
     }
 
     pub fn handle_event(
@@ -120,7 +153,7 @@ impl NodesScreen {
                 }
                 KeyCode::Down => {
                     let current = self.table_state.selected().unwrap_or(0);
-                    let max = self.total_configured.saturating_sub(1) as usize;
+                    let max = self.selected_table_max();
                     self.table_state.select(Some((current + 1).min(max)));
                 }
                 KeyCode::Left => {
@@ -134,8 +167,9 @@ impl NodesScreen {
                     }
                 }
                 KeyCode::Enter => {
-                    let idx = self.table_state.selected().unwrap_or(0) as u16 + 1;
-                    self.detail_node = Some(idx.min(self.total_configured));
+                    if let Some(node) = self.selected_node_number() {
+                        self.detail_node = Some(node);
+                    }
                 }
                 KeyCode::Char('v') => {
                     self.view = match self.view {
@@ -151,6 +185,14 @@ impl NodesScreen {
                 KeyCode::Char('a') => self.view = NodeView::ActiveOnly,
                 KeyCode::Char('p') => self.view = NodeView::ProblemOnly,
                 KeyCode::Char('d') => self.view = NodeView::DoorOnly,
+                KeyCode::Char('s') => {
+                    self.sort = match self.sort {
+                        NodeSort::NodeNumber => NodeSort::Activity,
+                        NodeSort::Activity => NodeSort::User,
+                        NodeSort::User => NodeSort::TimeOn,
+                        NodeSort::TimeOn => NodeSort::NodeNumber,
+                    };
+                }
                 KeyCode::Char('f') | KeyCode::Char('/') => {
                     return UiAction::OpenModal(ModalKind::Form(FormModal {
                         title: "Filter Nodes".to_string(),
@@ -163,23 +205,24 @@ impl NodesScreen {
                     }));
                 }
                 KeyCode::Char('m') if !readonly => {
-                    let node = self.table_state.selected().unwrap_or(0) as u16 + 1;
-                    return UiAction::OpenModal(ModalKind::Form(FormModal {
-                        title: "Send Message".to_string(),
-                        fields: vec![
-                            FormField {
-                                label: "Node".to_string(),
-                                value: node.to_string(),
-                                is_password: false,
-                            },
-                            FormField {
-                                label: "Message".to_string(),
-                                value: String::new(),
-                                is_password: false,
-                            },
-                        ],
-                        active_field: 1,
-                    }));
+                    if let Some(node) = self.selected_node_number() {
+                        return UiAction::OpenModal(ModalKind::Form(FormModal {
+                            title: "Send Message".to_string(),
+                            fields: vec![
+                                FormField {
+                                    label: "Node".to_string(),
+                                    value: node.to_string(),
+                                    is_password: false,
+                                },
+                                FormField {
+                                    label: "Message".to_string(),
+                                    value: String::new(),
+                                    is_password: false,
+                                },
+                            ],
+                            active_field: 1,
+                        }));
+                    }
                 }
                 KeyCode::Char('b') if !readonly => {
                     return UiAction::OpenModal(ModalKind::Form(FormModal {
@@ -193,14 +236,28 @@ impl NodesScreen {
                     }));
                 }
                 KeyCode::Char('k') if !readonly => {
-                    let node = self.table_state.selected().unwrap_or(0) as u16 + 1;
-                    return UiAction::OpenModal(ModalKind::Confirm(ConfirmModal {
-                        title: "Kill Door".to_string(),
-                        message: format!("Kill door on node {}?", node),
-                        detail: Some("This will terminate the running door process.".to_string()),
-                        confirm_label: "Kill".to_string(),
-                        cancel_label: "Cancel".to_string(),
-                    }));
+                    if let Some(node) = self.selected_node_number() {
+                        return UiAction::OpenModal(ModalKind::Confirm(ConfirmModal {
+                            title: "Kill Door".to_string(),
+                            message: format!("Kill door on node {}?", node),
+                            detail: Some(
+                                "This will terminate the running door process.".to_string(),
+                            ),
+                            confirm_label: "Kill".to_string(),
+                            cancel_label: "Cancel".to_string(),
+                        }));
+                    }
+                }
+                KeyCode::Char('D') if !readonly => {
+                    if let Some(node) = self.selected_node_number() {
+                        return UiAction::OpenModal(ModalKind::Confirm(ConfirmModal {
+                            title: "Disconnect Node".to_string(),
+                            message: format!("Disconnect node {}?", node),
+                            detail: Some("This will terminate the active session.".to_string()),
+                            confirm_label: "Disconnect".to_string(),
+                            cancel_label: "Cancel".to_string(),
+                        }));
+                    }
                 }
                 KeyCode::Char('r') if !readonly => {
                     return UiAction::Refresh;
@@ -214,14 +271,14 @@ impl NodesScreen {
                 }
                 KeyCode::PageDown => {
                     let current = self.table_state.selected().unwrap_or(0);
-                    let max = self.total_configured.saturating_sub(1) as usize;
+                    let max = self.selected_table_max();
                     self.table_state.select(Some((current + 5).min(max)));
                 }
                 KeyCode::Home => {
                     self.table_state.select(Some(0));
                 }
                 KeyCode::End => {
-                    let max = self.total_configured.saturating_sub(1) as usize;
+                    let max = self.selected_table_max();
                     self.table_state.select(Some(max));
                 }
                 _ => {}
@@ -324,21 +381,23 @@ impl NodesScreen {
                 .render(main_layout[1], frame.buffer_mut());
             }
             _ => {
+                let visible_nodes = self
+                    .filtered_nodes()
+                    .into_iter()
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let mut table_state = self.table_state;
                 NodeTableWidget {
-                    nodes: &self.nodes,
+                    nodes: &visible_nodes,
                     total_configured: self.total_configured,
                     theme: &self.theme,
                 }
-                .render(
-                    main_layout[1],
-                    frame.buffer_mut(),
-                    &mut TableState::default(),
-                );
+                .render(main_layout[1], frame.buffer_mut(), &mut table_state);
             }
         }
 
         // Footer hints
-        let hints = "↑↓ Move | Enter Detail | M Msg | D Disconnect | K Kill | B Broadcast | F Filter | Esc Back";
+        let hints = "↑↓ Move | Enter Detail | M Msg | Shift+D Disconnect | K Kill | B Broadcast | F Filter | S Sort | Esc Back";
         Paragraph::new(hints)
             .style(self.theme.muted_style())
             .block(Block::default().borders(Borders::ALL))
@@ -388,5 +447,109 @@ impl NodesScreen {
                     .title_style(self.theme.title_style()),
             )
             .render(area, frame.buffer_mut());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{NodeSort, NodeView, NodesScreen};
+    use crate::events::NodeStatusSnapshot;
+    use crate::theme::Theme;
+
+    fn node(node_number: u16, state: &str, alias: Option<&str>) -> NodeStatusSnapshot {
+        NodeStatusSnapshot {
+            node_number,
+            state: state.to_string(),
+            user_alias: alias.map(ToOwned::to_owned),
+            remote_address: None,
+            connected_at: Some(format!("2026-01-01T00:0{node_number}:00Z")),
+            last_heartbeat_at: None,
+            heartbeat_age_seconds: None,
+        }
+    }
+
+    fn screen_with_nodes(nodes: Vec<NodeStatusSnapshot>) -> NodesScreen {
+        let mut screen = NodesScreen::new(Theme::oxide_classic(), 8);
+        screen.nodes = nodes;
+        screen
+    }
+
+    fn filtered_numbers(screen: &NodesScreen) -> Vec<u16> {
+        screen
+            .filtered_nodes()
+            .into_iter()
+            .map(|node| node.node_number)
+            .collect()
+    }
+
+    #[test]
+    fn active_only_filter_excludes_available_and_offline_nodes() {
+        let mut screen = screen_with_nodes(vec![
+            node(1, "available", None),
+            node(2, "offline", None),
+            node(3, "main_menu", Some("alice")),
+        ]);
+
+        screen.view = NodeView::ActiveOnly;
+
+        assert_eq!(filtered_numbers(&screen), vec![3]);
+    }
+
+    #[test]
+    fn door_only_filter_keeps_nodes_running_doors() {
+        let mut screen = screen_with_nodes(vec![
+            node(1, "main_menu", Some("alice")),
+            node(2, "in_door", Some("bob")),
+            node(3, "in_door", Some("casey")),
+        ]);
+
+        screen.view = NodeView::DoorOnly;
+
+        assert_eq!(filtered_numbers(&screen), vec![2, 3]);
+    }
+
+    #[test]
+    fn problem_filter_includes_stale_disconnect_and_error_states() {
+        let mut screen = screen_with_nodes(vec![
+            node(1, "stale", Some("alice")),
+            node(2, "disconnecting", Some("bob")),
+            node(3, "error", Some("casey")),
+            node(4, "main_menu", Some("drew")),
+        ]);
+
+        screen.view = NodeView::ProblemOnly;
+
+        assert_eq!(filtered_numbers(&screen), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn search_filter_matches_alias_state_and_node_number() {
+        let mut screen = screen_with_nodes(vec![
+            node(1, "main_menu", Some("alice")),
+            node(2, "posting_message", Some("bob")),
+            node(8, "available", None),
+        ]);
+
+        screen.filter = "post".to_string();
+        assert_eq!(filtered_numbers(&screen), vec![2]);
+
+        screen.filter = "alice".to_string();
+        assert_eq!(filtered_numbers(&screen), vec![1]);
+
+        screen.filter = "8".to_string();
+        assert_eq!(filtered_numbers(&screen), vec![8]);
+    }
+
+    #[test]
+    fn selected_node_uses_filtered_sorted_rows() {
+        let mut screen = screen_with_nodes(vec![
+            node(1, "main_menu", Some("charlie")),
+            node(2, "main_menu", Some("alice")),
+            node(3, "main_menu", Some("bob")),
+        ]);
+        screen.sort = NodeSort::User;
+        screen.table_state.select(Some(1));
+
+        assert_eq!(screen.selected_node_number(), Some(3));
     }
 }

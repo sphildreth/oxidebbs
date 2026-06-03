@@ -24,7 +24,7 @@ crates/
   oxidebbs-telnet/   # telnet transport and negotiation
   oxidebbs-db/       # DecentDB repository layer, OxideDb, schema v4
   oxidebbs-door/     # door definitions, drop files, runners
-  oxidebbs-sysop/    # local sysop TUI (TARGET — currently minimal stub)
+  oxidebbs-sysop/    # local sysop TUI
 design/              # architecture docs, specs, ADRs
 config/              # oxidebbs.example.toml
 scripts/             # dev-check.sh
@@ -34,8 +34,8 @@ scripts/             # dev-check.sh
 
 **File:** `crates/oxidebbs-sysop/src/lib.rs` (279 lines)
 
-Currently contains:
-- `SysopError` enum (Database, DoorConfig variants)
+Contains the local Ratatui sysop TUI plus compatibility helpers:
+- `SysopError` enum
 - `AdminCommand` enum (ListUsers, ResetPassword, ListNodes, ShowRecentCalls, TestDoorConfig, PrototypeConsole)
 - `DoorConfigCheck` struct (definitions count, enabled count)
 - `SysopConsoleSnapshot` struct (board_name, active_nodes, recent_calls)
@@ -60,8 +60,8 @@ The CLI is **substantially implemented** with 14 command groups, full clap-based
 - `AppContext` struct: config_path, config, json
 - Helper functions: `open_database()`, `hash_password()`, `audit()`, `require_user()`, `generated_uuid()`, `current_timestamp()`, `print_json()`, `emit_ok()`
 
-**Key file:** `crates/oxidebbs-server/src/commands/sysop.rs` (20 lines)
-- `run_sysop_preview()` — currently renders a simple text snapshot to stdout
+**Key file:** `crates/oxidebbs-server/src/commands/sysop.rs`
+- `run_sysop_tui()` — launches the local Ratatui sysop console
 
 ### Control Socket
 
@@ -369,7 +369,7 @@ pub mod widgets;
 pub use app::run_tui;
 ```
 
-Keep existing types (`SysopError`, `AdminCommand`, etc.) for backward compatibility with the CLI's `run_sysop_preview()`.
+Keep existing types (`SysopError`, `AdminCommand`, etc.) for backward compatibility with earlier sysop crate APIs.
 
 #### `crates/oxidebbs-sysop/src/theme.rs` (create)
 
@@ -1944,7 +1944,7 @@ fn current_time_string() -> String {
 1. `cargo check --workspace --locked` passes.
 2. `cargo clippy --workspace --all-targets --locked -- -D warnings` passes.
 3. `cargo fmt --all --check` passes.
-4. The TUI launches with `oxidebbs-server sysop` (even if it shows stub content).
+4. The TUI launches with `oxidebbs-server sysop`.
 5. Navigation rail shows all 11 screens.
 6. Tab/Shift+Tab cycles through screens.
 7. Ctrl+N/U/D/M/L/B navigate to the correct screens.
@@ -2832,13 +2832,13 @@ Add all commands to the palette:
 
 ### Goal
 
-Wire up `oxidebbs-server sysop` to launch the full TUI instead of the text preview.
+Wire up `oxidebbs-server sysop` to launch the full TUI.
 
 ### Files to Modify
 
 #### `crates/oxidebbs-server/src/commands/sysop.rs` (modify)
 
-Replace `run_sysop_preview()` with full TUI launch:
+Use `run_sysop_tui()` for full TUI launch:
 
 ```rust
 use oxidebbs_sysop::app::{AppConfig, run_tui};
@@ -2858,7 +2858,7 @@ pub fn run_sysop_tui(ctx: &AppContext) -> CliResult<()> {
 
 #### `crates/oxidebbs-server/src/sysop_cli.rs` (modify)
 
-Update the `Command::Sysop` match arm to call `run_sysop_tui` instead of `run_sysop_preview`.
+Update the `Command::Sysop` match arm to call `run_sysop_tui`.
 
 Add `--readonly` flag to the `Sysop` command variant.
 
@@ -3084,15 +3084,15 @@ All four must pass before considering a phase complete.
 
 ### Checklist
 
-- [ ] Phase 1: Foundation — app shell, theme, navigation, keyboard handling
-- [ ] Phase 2: Dashboard and Nodes — live dashboard, node views, node actions
-- [ ] Phase 3: Users — user management screens
-- [ ] Phase 4: Doors — door management and troubleshooting
-- [ ] Phase 5: Messages — message area and message management
-- [ ] Phase 6: Database, Logs, Audit — DB health, logs, audit
-- [ ] Phase 7: Polish — ANSI, Config, Help, command palette completion
-- [ ] Phase 8: Integration — wire up `oxidebbs-server sysop`
-- [ ] All tests pass
+- [x] Phase 1: Foundation — app shell, theme, navigation, keyboard handling
+- [x] Phase 2: Dashboard and Nodes — live dashboard, node views, node actions
+- [x] Phase 3: Users — user management screens
+- [x] Phase 4: Doors — door management and troubleshooting
+- [x] Phase 5: Messages — message area and message management
+- [x] Phase 6: Database, Logs, Audit — DB health, logs, audit
+- [x] Phase 7: Polish — ANSI, Config, Help, command palette completion
+- [x] Phase 8: Integration — wire up `oxidebbs-server sysop`
+- [x] All tests pass locally
 - [ ] CI gate passes
 - [ ] Manual testing complete
 

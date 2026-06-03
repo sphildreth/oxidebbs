@@ -510,8 +510,12 @@ The Ratatui console shipped in v1.1.
 Launch command:
 
 ```bash
-oxidebbs sysop --tui
+oxidebbs-server sysop
 ```
+
+The current `oxidebbs-server` binary launches the full local TUI from `sysop`
+by default. `--tui` remains as a compatibility flag, and `--readonly` disables
+destructive TUI actions.
 
 Recommended first screen:
 
@@ -710,16 +714,14 @@ For the initial TUI:
 ### Recommended command
 
 ```bash
-oxidebbs sysop
+oxidebbs-server sysop
 ```
 
 Optional flags:
 
 ```bash
-oxidebbs sysop --config config/oxidebbs.toml
-oxidebbs sysop --connect /run/oxidebbs/admin.sock
-oxidebbs sysop --theme oxide-classic
-oxidebbs sysop --readonly
+oxidebbs-server --config config/oxidebbs.toml sysop
+oxidebbs-server sysop --readonly
 ```
 
 ### Implementation stack
@@ -2188,7 +2190,7 @@ Do not put DecentDB queries directly in widgets.
 The TUI should support read-only mode:
 
 ```bash
-oxidebbs sysop --readonly
+oxidebbs-server sysop --readonly
 ```
 
 In read-only mode:
@@ -2196,8 +2198,6 @@ In read-only mode:
 - Hide or disable destructive actions.
 - Allow dashboards, logs, audit, status, details.
 - Prevent changes.
-
-_Note: `--readonly` is planned but not yet implemented._
 
 #### Accessibility and terminal requirements
 

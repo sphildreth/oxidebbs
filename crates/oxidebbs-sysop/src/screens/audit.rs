@@ -6,6 +6,7 @@ use crate::input::{ScreenId, UiEvent};
 use crate::screens::common::UiAction;
 use crate::services::audit_service::AuditService;
 use crate::theme::Theme;
+use crate::widgets::modal::{FormField, FormModal, ModalKind};
 use oxidebbs_db::OxideDb;
 
 pub struct AuditScreen {
@@ -54,6 +55,17 @@ impl AuditScreen {
                 }
                 KeyCode::Esc => {
                     return UiAction::Navigate(ScreenId::Dashboard);
+                }
+                KeyCode::Char('f') | KeyCode::Char('/') => {
+                    return UiAction::OpenModal(ModalKind::Form(FormModal {
+                        title: "Filter Audit User".to_string(),
+                        fields: vec![FormField {
+                            label: "User".to_string(),
+                            value: self.filter_user.clone().unwrap_or_default(),
+                            is_password: false,
+                        }],
+                        active_field: 0,
+                    }));
                 }
                 KeyCode::PageUp => {
                     let current = self.table_state.selected().unwrap_or(0);
@@ -160,7 +172,7 @@ impl AuditScreen {
             &mut table_state,
         );
 
-        let hints = "↑↓ Move | Esc Back";
+        let hints = "↑↓ Move | F Filter User | Esc Back";
         Paragraph::new(hints)
             .style(self.theme.muted_style())
             .block(Block::default().borders(Borders::ALL))

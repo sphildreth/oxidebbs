@@ -12,6 +12,7 @@ use ratatui::widgets::ListState;
 
 use oxidebbs_db::OxideDb;
 
+use crate::SysopError;
 use crate::command_palette::{CommandPalette, PaletteAction, PaletteCommand};
 use crate::events::{AppEvent, EventHandler};
 use crate::input::{ScreenId, UiEvent, translate_key};
@@ -30,7 +31,7 @@ use crate::screens::users::UsersScreen;
 use crate::services::node_service::NodeAdminService;
 use crate::theme::Theme;
 use crate::widgets::header::HeaderWidget;
-use crate::widgets::modal::{ModalKind, render_modal};
+use crate::widgets::modal::{ErrorModal, ModalKind, render_modal};
 use crate::widgets::nav_rail::NavRail;
 use crate::widgets::status_bar::StatusBar;
 
@@ -39,6 +40,8 @@ pub struct AppConfig {
     pub readonly: bool,
     pub tick_rate: Duration,
     pub db_path: Option<PathBuf>,
+    pub logs_path: Option<PathBuf>,
+    pub screens_path: Option<PathBuf>,
     pub control_socket_path: Option<PathBuf>,
     pub node_count: u16,
     pub board_name: String,
@@ -51,6 +54,8 @@ impl Default for AppConfig {
             readonly: false,
             tick_rate: Duration::from_millis(250),
             db_path: None,
+            logs_path: None,
+            screens_path: None,
             control_socket_path: None,
             node_count: 8,
             board_name: "OxideBBS".to_string(),
@@ -97,6 +102,16 @@ impl App {
         let commands = Self::build_palette_commands(config.readonly);
         let node_count = config.node_count;
         let board_name = config.board_name.clone();
+        let config_path = config.config_path.clone();
+        let db_path = config.db_path.clone();
+        let logs_path = config
+            .logs_path
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("logs"));
+        let screens_path = config
+            .screens_path
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("assets/screens"));
 
         let node_service = NodeAdminService::new(config.control_socket_path.clone());
 
@@ -122,10 +137,10 @@ impl App {
             users_screen: UsersScreen::new(theme.clone()),
             messages_screen: MessagesScreen::new(theme.clone()),
             doors_screen: DoorsScreen::new(theme.clone()),
-            ansi_screen: AnsiScreen::new(theme.clone()),
-            config_screen: ConfigScreen::new(theme.clone()),
-            database_screen: DatabaseScreen::new(theme.clone()),
-            logs_screen: LogsScreen::new(theme.clone()),
+            ansi_screen: AnsiScreen::new(theme.clone(), screens_path),
+            config_screen: ConfigScreen::new(theme.clone(), config_path),
+            database_screen: DatabaseScreen::new(theme.clone(), db_path),
+            logs_screen: LogsScreen::new(theme.clone(), logs_path),
             audit_screen: AuditScreen::new(theme.clone()),
             help_screen: HelpScreen::new(theme.clone()),
         }
@@ -245,6 +260,9 @@ impl App {
     }
 
     fn refresh_data(&mut self) {
+        self.config_screen.refresh();
+        self.ansi_screen.refresh();
+        self.logs_screen.refresh();
         if let Some(ref db) = self.db {
             self.dashboard.refresh(db.db(), &self.node_service);
             self.nodes_screen.refresh(db.db(), &self.node_service);
@@ -462,86 +480,23 @@ fn handle_ui_event(app: &mut App, event: UiEvent) {
     if app.modal.is_some() {
         match event {
             UiEvent::Cancel => {
+                app.users_screen.cancel_pending_action();
+                app.doors_screen.cancel_pending_action();
                 app.modal = None;
             }
             UiEvent::Confirm => {
-                if let Some(ModalKind::Form(ref m)) = app.modal.take() {
-                    if m.title == "Send Message" {
-                        if let Some(node_field) = m.fields.first()
-                            && let Some(msg_field) = m.fields.get(1)
-                            && let Ok(node_num) = node_field.value.parse::<u16>()
-                        {
-                            let _ = app.node_service.send_message(node_num, &msg_field.value);
-                        }
-                    } else if m.title == "Broadcast Message" {
-                        if let Some(msg_field) = m.fields.first() {
-                            let _ = app.node_service.broadcast(&msg_field.value);
-                        }
-                    } else if m.title == "Filter Nodes"
-                        && let Some(field) = m.fields.first()
-                    {
-                        app.nodes_screen.filter = field.value.clone();
-                    } else if m.title == "Filter Users"
-                        && let Some(field) = m.fields.first()
-                    {
-                        app.users_screen.filter = field.value.clone();
-                    } else if m.title == "Reset Password" {
-                        if let Some(user_field) = m.fields.first()
-                            && let Some(pw_field) = m.fields.get(1)
-                        {
-                            let alias = user_field.value.clone();
-                            let password = pw_field.value.clone();
-                            if let Some(db) = &app.db
-                                && let Ok(Some(user)) =
-                                    crate::services::user_service::UserAdminService::find_by_alias(
-                                        db.db(),
-                                        &alias,
-                                    )
-                            {
-                                let _ =
-                                    crate::services::user_service::UserAdminService::reset_password(
-                                        db.db(),
-                                        &user.id,
-                                        &password,
-                                    );
-                            }
-                        }
-                    } else if m.title == "Set Security Level"
-                        && let Some(user_field) = m.fields.first()
-                        && let Some(level_field) = m.fields.get(1)
-                        && let Ok(level) = level_field.value.parse::<i64>()
-                    {
-                        let alias = user_field.value.clone();
-                        if let Some(db) = &app.db
-                            && let Ok(Some(user)) =
-                                crate::services::user_service::UserAdminService::find_by_alias(
-                                    db.db(),
-                                    &alias,
-                                )
-                        {
-                            let _ =
-                                crate::services::user_service::UserAdminService::set_security_level(
-                                    db.db(),
-                                    &user.id,
-                                    level,
-                                );
-                        }
+                if let Some(modal) = app.modal.take() {
+                    match modal {
+                        ModalKind::Form(form) => handle_form_submit(app, form),
+                        ModalKind::Confirm(confirm) => handle_confirm_submit(app, &confirm.title),
+                        ModalKind::Error(_) | ModalKind::Info(_) => {}
                     }
-                } else if let Some(ModalKind::Confirm(ref m)) = app.modal.take()
-                    && m.title == "Delete Message"
-                    && let Some(db) = &app.db
-                    && let Some(msg_id) = app.messages_screen.selected_message_id()
-                {
-                    let _ = crate::services::message_service::MessageAdminService::delete_message(
-                        db.db(),
-                        &msg_id,
-                    );
                 }
             }
             UiEvent::Key(key) => {
                 use crossterm::event::KeyCode;
-                if let Some(ModalKind::Form(ref mut m)) = app.modal {
-                    match key.code {
+                match app.modal {
+                    Some(ModalKind::Form(ref mut m)) => match key.code {
                         KeyCode::Up => {
                             if m.active_field > 0 {
                                 m.active_field -= 1;
@@ -563,7 +518,21 @@ fn handle_ui_event(app: &mut App, event: UiEvent) {
                             }
                         }
                         _ => {}
-                    }
+                    },
+                    Some(ModalKind::Confirm(_)) => match key.code {
+                        KeyCode::Char('y') | KeyCode::Char('Y') => {
+                            if let Some(ModalKind::Confirm(confirm)) = app.modal.take() {
+                                handle_confirm_submit(app, &confirm.title);
+                            }
+                        }
+                        KeyCode::Char('n') | KeyCode::Char('N') => {
+                            app.users_screen.cancel_pending_action();
+                            app.doors_screen.cancel_pending_action();
+                            app.modal = None;
+                        }
+                        _ => {}
+                    },
+                    Some(ModalKind::Error(_)) | Some(ModalKind::Info(_)) | None => {}
                 }
             }
             _ => {}
@@ -584,7 +553,21 @@ fn handle_ui_event(app: &mut App, event: UiEvent) {
                         PaletteAction::Navigate(screen) => app.navigate_to(screen),
                         PaletteAction::RunCommand(ref id) => {
                             if id == "nodes.reset_stale" {
-                                let _ = app.node_service.reset_stale();
+                                match app.node_service.reset_stale() {
+                                    Ok(()) => {
+                                        if let Some(db) = &app.db {
+                                            let _ = crate::services::audit_service::AuditService::record(
+                                                db.db(),
+                                                "nodes_reset_stale",
+                                                None,
+                                                None,
+                                                "reset stale nodes from sysop TUI",
+                                            );
+                                        }
+                                        app.refresh_data();
+                                    }
+                                    Err(error) => set_error(app, "Reset Stale Nodes", error),
+                                }
                             }
                         }
                     }
@@ -647,6 +630,208 @@ fn handle_ui_event(app: &mut App, event: UiEvent) {
             }
         }
     }
+}
+
+fn handle_form_submit(app: &mut App, form: crate::widgets::modal::FormModal) {
+    match form.title.as_str() {
+        "Send Message" => {
+            if let Some(node_field) = form.fields.first()
+                && let Some(msg_field) = form.fields.get(1)
+            {
+                match node_field.value.parse::<u16>() {
+                    Ok(node_num) => match app.node_service.send_message(node_num, &msg_field.value)
+                    {
+                        Ok(()) => {
+                            if let Some(db) = &app.db {
+                                let _ = crate::services::audit_service::AuditService::record(
+                                    db.db(),
+                                    "node_message_sent",
+                                    None,
+                                    Some(i64::from(node_num)),
+                                    &format!("message_length={}", msg_field.value.len()),
+                                );
+                            }
+                        }
+                        Err(error) => set_error(app, "Send Message", error),
+                    },
+                    Err(error) => set_error_message(
+                        app,
+                        "Send Message",
+                        &format!("invalid node number: {error}"),
+                    ),
+                }
+            }
+        }
+        "Broadcast Message" => {
+            if let Some(msg_field) = form.fields.first() {
+                match app.node_service.broadcast(&msg_field.value) {
+                    Ok(()) => {
+                        if let Some(db) = &app.db {
+                            let _ = crate::services::audit_service::AuditService::record(
+                                db.db(),
+                                "broadcast_sent",
+                                None,
+                                None,
+                                &format!("message_length={}", msg_field.value.len()),
+                            );
+                        }
+                    }
+                    Err(error) => set_error(app, "Broadcast Message", error),
+                }
+            }
+        }
+        "Filter Nodes" => {
+            if let Some(field) = form.fields.first() {
+                app.nodes_screen.filter = field.value.clone();
+            }
+        }
+        "Filter Users" => {
+            if let Some(field) = form.fields.first() {
+                app.users_screen.filter = field.value.clone();
+            }
+        }
+        "Filter Doors" => {
+            if let Some(field) = form.fields.first() {
+                app.doors_screen.filter = field.value.clone();
+            }
+        }
+        "Filter Audit User" => {
+            if let Some(field) = form.fields.first() {
+                let value = field.value.trim();
+                app.audit_screen.filter_user = (!value.is_empty()).then(|| value.to_string());
+            }
+        }
+        "Reset Password" => {
+            if let Some(user_field) = form.fields.first()
+                && let Some(pw_field) = form.fields.get(1)
+                && let Some(db) = &app.db
+            {
+                match crate::services::user_service::UserAdminService::find_by_alias(
+                    db.db(),
+                    &user_field.value,
+                ) {
+                    Ok(Some(user)) => {
+                        match crate::services::user_service::UserAdminService::reset_password(
+                            db.db(),
+                            &user.id,
+                            &pw_field.value,
+                        ) {
+                            Ok(()) => app.refresh_data(),
+                            Err(error) => set_error(app, "Reset Password", error),
+                        }
+                    }
+                    Ok(None) => set_error_message(app, "Reset Password", "user was not found"),
+                    Err(error) => set_error(app, "Reset Password", error),
+                }
+            }
+        }
+        "Set Security Level" => {
+            if let Some(user_field) = form.fields.first()
+                && let Some(level_field) = form.fields.get(1)
+                && let Some(db) = &app.db
+            {
+                match level_field.value.parse::<i64>() {
+                    Ok(level) => {
+                        match crate::services::user_service::UserAdminService::find_by_alias(
+                            db.db(),
+                            &user_field.value,
+                        ) {
+                            Ok(Some(user)) => {
+                                match crate::services::user_service::UserAdminService::set_security_level(
+                                    db.db(),
+                                    &user.id,
+                                    level,
+                                ) {
+                                    Ok(()) => app.refresh_data(),
+                                    Err(error) => set_error(app, "Set Security Level", error),
+                                }
+                            }
+                            Ok(None) => {
+                                set_error_message(app, "Set Security Level", "user was not found");
+                            }
+                            Err(error) => set_error(app, "Set Security Level", error),
+                        }
+                    }
+                    Err(error) => set_error_message(
+                        app,
+                        "Set Security Level",
+                        &format!("invalid security level: {error}"),
+                    ),
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn handle_confirm_submit(app: &mut App, title: &str) {
+    match title {
+        "Delete Message" => {
+            if let Some(db) = &app.db
+                && let Some(msg_id) = app.messages_screen.selected_message_id()
+            {
+                match crate::services::message_service::MessageAdminService::delete_message(
+                    db.db(),
+                    &msg_id,
+                ) {
+                    Ok(()) => app.refresh_data(),
+                    Err(error) => set_error(app, "Delete Message", error),
+                }
+            }
+        }
+        "Disconnect Node" | "Kill Door" => {
+            if let Some(node) = app.nodes_screen.selected_node_number() {
+                let reason = if title == "Kill Door" {
+                    "sysop_kill_door"
+                } else {
+                    "sysop_disconnect"
+                };
+                match app.node_service.disconnect_node(node, reason) {
+                    Ok(()) => {
+                        if let Some(db) = &app.db {
+                            let _ = crate::services::audit_service::AuditService::record(
+                                db.db(),
+                                if title == "Kill Door" {
+                                    "node_door_killed"
+                                } else {
+                                    "node_disconnected"
+                                },
+                                None,
+                                Some(i64::from(node)),
+                                reason,
+                            );
+                        }
+                        app.refresh_data();
+                    }
+                    Err(error) => set_error(app, title, error),
+                }
+            }
+        }
+        "Enable User" | "Disable User" | "Grant Sysop" | "Revoke Sysop" => {
+            match app.users_screen.confirm_pending_action(&app.db) {
+                Ok(()) => app.refresh_data(),
+                Err(error) => set_error(app, title, error),
+            }
+        }
+        "Enable Door" | "Disable Door" => match app.doors_screen.confirm_pending_action(&app.db) {
+            Ok(()) => app.refresh_data(),
+            Err(error) => set_error(app, title, error),
+        },
+        _ => {}
+    }
+}
+
+fn set_error(app: &mut App, title: &str, error: SysopError) {
+    set_error_message(app, title, &error.to_string());
+}
+
+fn set_error_message(app: &mut App, title: &str, message: &str) {
+    app.modal = Some(ModalKind::Error(ErrorModal {
+        title: title.to_string(),
+        message: message.to_string(),
+        detail: None,
+        suggestion: None,
+    }));
 }
 
 fn format_duration(seconds: u64) -> String {

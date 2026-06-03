@@ -27,7 +27,7 @@ use crate::commands::{
     AnsiCommand, AuditCommand, ConfigCommand, DbCommand, DoorsCommand, LogsCommand,
     MessagesCommand, NodesCommand, ServeArgs, SetupArgs, UsersCommand, run_ansi, run_audit,
     run_check, run_config, run_config_set, run_db, run_doors, run_logs, run_messages, run_nodes,
-    run_serve, run_setup_command, run_status, run_sysop_preview, run_users,
+    run_serve, run_setup_command, run_status, run_sysop_tui, run_users,
 };
 
 pub(crate) type CliResult<T> = Result<T, CliError>;
@@ -156,11 +156,13 @@ enum Command {
     /// Show board status
     Status,
 
-    /// Render a local sysop console preview
+    /// Launch the interactive sysop TUI
     Sysop {
-        /// Launch the interactive sysop TUI
         #[arg(long)]
         tui: bool,
+        /// Run the sysop TUI in read-only mode
+        #[arg(long)]
+        readonly: bool,
     },
 
     /// Manage users
@@ -222,13 +224,7 @@ pub async fn run() -> CliResult<()> {
         Command::Logs { command } => run_logs(command, &ctx),
         Command::Audit { command } => run_audit(command, &ctx),
         Command::Config { command } => run_config(command, &ctx),
-        Command::Sysop { tui } => {
-            if tui {
-                crate::commands::run_sysop_tui(&ctx).await
-            } else {
-                run_sysop_preview(&ctx)
-            }
-        }
+        Command::Sysop { readonly, .. } => run_sysop_tui(&ctx, readonly).await,
         Command::Setup(_) => unreachable!("setup is handled before config load"),
     }
 }
@@ -1031,5 +1027,27 @@ name = "Test BBS"
     fn utc_day_conversion_matches_unix_epoch() {
         assert_eq!(civil_from_days(0), (1970, 1, 1));
         assert_eq!(civil_from_days(1), (1970, 1, 2));
+    }
+
+    #[test]
+    fn sysop_command_respects_readonly_flag_and_custom_config() {
+        let config_path = PathBuf::from("config/custom.toml");
+        let cli = Cli::parse_from([
+            "oxidebbs",
+            "--config",
+            config_path.to_str().expect("config path not utf-8"),
+            "sysop",
+            "--readonly",
+        ]);
+
+        assert_eq!(cli.config, Some(config_path));
+
+        match cli.command {
+            Some(Command::Sysop { tui, readonly }) => {
+                assert!(readonly);
+                assert!(!tui);
+            }
+            _ => panic!("expected sysop command"),
+        }
     }
 }

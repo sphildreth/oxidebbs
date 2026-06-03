@@ -12,25 +12,23 @@ pub struct LogsScreen {
     pub theme: Theme,
     pub entries: Vec<crate::services::log_service::LogEntry>,
     pub table_state: TableState,
-    pub log_path: Option<PathBuf>,
+    pub log_path: PathBuf,
 }
 
 impl LogsScreen {
-    pub fn new(theme: Theme) -> Self {
+    pub fn new(theme: Theme, log_path: PathBuf) -> Self {
         let mut table_state = TableState::default();
         table_state.select(Some(0));
         Self {
             theme,
             entries: Vec::new(),
             table_state,
-            log_path: None,
+            log_path,
         }
     }
 
     pub fn refresh(&mut self) {
-        if let Some(ref path) = self.log_path
-            && let Ok(entries) = LogService::tail(path, 200)
-        {
+        if let Ok(entries) = LogService::tail(&self.log_path, 200) {
             self.entries = entries;
         }
     }
@@ -83,10 +81,7 @@ impl LogsScreen {
         let toolbar_text = format!(
             "Log Entries: {} | Path: {}",
             self.entries.len(),
-            self.log_path
-                .as_ref()
-                .and_then(|p| p.to_str())
-                .unwrap_or("none")
+            self.log_path.display(),
         );
         let toolbar = Paragraph::new(toolbar_text).style(self.theme.label_style());
 

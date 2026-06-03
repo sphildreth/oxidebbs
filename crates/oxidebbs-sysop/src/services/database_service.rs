@@ -35,7 +35,23 @@ impl DatabaseAdminService {
     }
 
     pub fn count_audit_events(db: &Db) -> Result<i64, SysopError> {
-        let result = db.execute("SELECT COUNT(*) FROM audit_events")?;
+        Self::count_table(db, "audit_events")
+    }
+
+    pub fn count_sessions(db: &Db) -> Result<i64, SysopError> {
+        Self::count_table(db, "sessions")
+    }
+
+    pub fn count_doors(db: &Db) -> Result<i64, SysopError> {
+        Self::count_table(db, "doors")
+    }
+
+    pub fn count_door_runs(db: &Db) -> Result<i64, SysopError> {
+        Self::count_table(db, "door_runs")
+    }
+
+    fn count_table(db: &Db, table: &str) -> Result<i64, SysopError> {
+        let result = db.execute(&format!("SELECT COUNT(*) FROM {table}"))?;
         Ok(result
             .rows()
             .first()

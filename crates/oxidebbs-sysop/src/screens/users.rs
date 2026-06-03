@@ -2,6 +2,7 @@ use crossterm::event::KeyCode;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph, Row, Table, TableState};
 
+use crate::SysopError;
 use crate::input::{ScreenId, UiEvent};
 use crate::screens::common::UiAction;
 use crate::services::user_service::UserAdminService;
@@ -207,15 +208,20 @@ impl UsersScreen {
                         } else {
                             "active"
                         };
+                        let (title, verb) = if new_status == "disabled" {
+                            ("Disable User", "Disable")
+                        } else {
+                            ("Enable User", "Enable")
+                        };
                         self.pending_action = Some(UserPendingAction::ToggleStatus {
                             user_id: id,
                             new_status: new_status.to_string(),
                         });
                         return UiAction::OpenModal(ModalKind::Confirm(ConfirmModal {
-                            title: format!("{} User", capitalize(new_status)),
-                            message: format!("{} user {}?", capitalize(new_status), user.alias),
+                            title: title.to_string(),
+                            message: format!("{verb} user {}?", user.alias),
                             detail: None,
-                            confirm_label: capitalize(new_status),
+                            confirm_label: verb.to_string(),
                             cancel_label: "Cancel".to_string(),
                         }));
                     }
@@ -273,6 +279,33 @@ impl UsersScreen {
             _ => {}
         }
         UiAction::None
+    }
+
+    pub fn confirm_pending_action(&mut self, db: &Option<OxideDb>) -> Result<(), SysopError> {
+        let Some(action) = self.pending_action.take() else {
+            return Ok(());
+        };
+        let Some(db) = db else {
+            return Err(SysopError::Message(
+                "database is unavailable for user action".to_string(),
+            ));
+        };
+
+        match action {
+            UserPendingAction::ToggleStatus {
+                user_id,
+                new_status,
+            } => UserAdminService::set_status(db.db(), &user_id, &new_status),
+            UserPendingAction::ToggleSysop { user_id, new_sysop } => {
+                UserAdminService::set_sysop(db.db(), &user_id, new_sysop)
+            }
+            UserPendingAction::ResetPassword { .. }
+            | UserPendingAction::SetSecurityLevel { .. } => Ok(()),
+        }
+    }
+
+    pub fn cancel_pending_action(&mut self) {
+        self.pending_action = None;
     }
 
     fn handle_detail_event(
@@ -490,13 +523,5 @@ impl UsersScreen {
                     .title_style(self.theme.title_style()),
             )
             .render(area, frame.buffer_mut());
-    }
-}
-
-fn capitalize(s: &str) -> String {
-    let mut c = s.chars();
-    match c.next() {
-        None => String::new(),
-        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
     }
 }
