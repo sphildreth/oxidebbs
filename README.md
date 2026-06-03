@@ -31,12 +31,6 @@ deployment, and a GitHub-native release workflow.
 
 > **Built for sysops. Driven by code.**
 
-## Project Status
-
-OxideBBS has shipped its initial `v1.0.0` release. The `main` branch now tracks
-vnext work for `v1.1.0`; follow the [changelog](docs/about/changelog.md) for
-release notes and current development scope.
-
 The canonical repository is:
 
 ```text
@@ -118,10 +112,11 @@ GitHub Releases publish `oxidebbs-server` packages and SHA-256 checksums for:
 - `oxidebbs-<tag>-x86_64-apple-darwin.tar.gz`
 - `oxidebbs-<tag>-x86_64-pc-windows-msvc.zip`
 
-Each package includes the server binary plus bundled assets, example configs,
-license files, and security policy. Docker remains the simplest deployment path
-for Windows and macOS sysops who want DOS door support because live door
-execution targets a Linux runtime with DOSEMU2.
+Each package includes the server binary, bundled assets, example configs, the
+Oxide-owned `oxide-check` test door fixture, license files, and security policy.
+Docker remains the simplest deployment path for Windows and macOS sysops who
+want DOS door support because live door execution targets a Linux runtime with
+DOSEMU2.
 
 ## Build From Source
 

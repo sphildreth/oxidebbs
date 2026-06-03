@@ -6,8 +6,8 @@ string store.
 
 Current schema version: `4`
 
-Schema version `4` is still pre-alpha. The initializer now upgrades supported
-compatible pre-alpha databases and keeps development upgrades safe:
+Schema version `4` is the current v1 release-line schema. The initializer now upgrades
+supported older development schemas and keeps development upgrades safe:
 
 - schema `2 -> 3` is migratable. The migration adds `message_areas.enabled` with
   default `TRUE`, preserves message rows and reply links, then updates

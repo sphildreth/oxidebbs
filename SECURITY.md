@@ -4,9 +4,13 @@
 
 OxideBBS follows Semantic Versioning.
 
-- `v1.0.x` receives security fixes for the current released line.
-- The `main` branch tracks vnext work for `v1.1.0`; security reports against
-  unreleased changes are accepted and handled before release when applicable.
+| Version | Supported |
+| --- | --- |
+| `v1.1.x` | Yes |
+| `v1.0.x` | Critical fixes at maintainer discretion |
+
+Security reports against unreleased changes on `main` are accepted and handled
+before the next release when applicable.
 
 ## Reporting
 

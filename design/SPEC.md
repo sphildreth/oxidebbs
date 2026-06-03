@@ -165,7 +165,7 @@ enforced with DecentDB foreign keys instead of application-only conventions.
 Bounded numeric and label fields should have `CHECK` constraints.
 
 The database records an OxideBBS schema marker in `system_config`. Fresh
-databases are initialized at the current schema, compatible older pre-alpha
+databases are initialized at the current schema, and compatible older development
 schemas are migrated sequentially before runtime use, and missing, malformed, or
 newer markers are refused with clear operator-facing errors.
 

@@ -131,10 +131,10 @@ cargo run -p oxidebbs-server -- --config config/oxidebbs.toml nodes list
 cargo run -p oxidebbs-server -- --config config/oxidebbs.toml db stats
 ```
 
-The setup command may include a sample door definition, but it does not install
-or bundle any DOS game door binaries. The example definition currently points to
-the bundled Oxide-owned test door (`oxide-check` → `OXIDECHK.EXE`) and is intended
-for launch-path validation.
+The setup command may include a sample door definition and installs the bundled
+Oxide-owned test fixture under `./doors/oxide-door-check/dist`. The example
+definition points to that fixture (`oxide-check` -> `OXIDECHK.EXE`) and is
+intended for launch-path validation.
 
 To avoid third-party licensing issues, OxideBBS ships no abandonware/shareware
 DOOR packages and does not bundle third-party doors.

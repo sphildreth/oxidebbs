@@ -5,7 +5,7 @@ All notable changes to OxideBBS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.1.0] [Unreleased]
+## [1.1.0] - 2026-06-03
 
 ### Added
 
@@ -40,6 +40,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the login screen.
 - Removed command lists from starter welcome assets; command prompts now live on
   the active login and main menu screens only.
+- Updated starter welcome art to show the `v1.1` release line instead of the
+  original development-era version label.
 - Updated GitHub workflow action versions for checkout and Node setup to current
   Node 24-backed majors.
 
@@ -92,6 +94,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `oxidebbs-server sysop` now attaches to an existing live control socket when
   available and otherwise starts an embedded `serve` runtime for the TUI session;
   `--connect-only` preserves client-only behavior.
+- Generated configs and release archives now place the bundled `oxide-check`
+  door fixture under `./doors/oxide-door-check/dist`, and setup installs that
+  fixture when it includes the example door definition. This keeps the example
+  door inside `paths.doors` so `doors check oxide-check` satisfies the door
+  containment policy.
+- `setup --no-sample-ansi` no longer creates empty starter asset directories.
+
+### Compatibility Notes
+
+- The OxideBBS Rust workspace crate versions are aligned at `1.1.0`.
+- No DecentDB schema version bump is required for this release; schema `4`
+  remains the current v1 release-line schema.
+- Existing `v1.0.0` board configs remain valid. The `v1.1.0` example config
+  includes `[logging]` and `[sysop]` settings used by file logging, rotation,
+  and the local sysop TUI.
+- The local sysop TUI may start an embedded `serve` runtime when no live control
+  socket is reachable. Use `sysop --connect-only` when the TUI must attach only
+  to an already-running server.
+- Directory-valued `database.path` values now resolve to `oxidebbs.ddb` inside
+  the directory instead of attempting to open the directory path itself.
+- Startup now fails before listening when required database reads or startup
+  audit writes fail, making database problems visible before callers connect.
+- Release archives are produced by the GitHub release workflow and should be
+  accompanied by SHA-256 checksum files. Archives include both the runnable
+  `doors/oxide-door-check` fixture and the source fixture under `tools/doors`.
 
 ## [1.0.0] - 2026-06-02
 

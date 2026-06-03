@@ -12,33 +12,33 @@ Status legend:
 | Section | Blocker status | Release impact |
 | --- | --- | --- |
 | [Purpose](#purpose) | Done | Document scope and review basis. |
-| [Current Snapshot](#current-snapshot) | Done | Summarizes implemented v1.1.0 work and known validation state. |
-| [Release Readiness Summary](#release-readiness-summary) | Pending | High-level release readiness remains blocked by versioning, changelog, stale docs, missing task doc, and artifact validation. |
-| [Blocker 1: Version bump](#1-version-bump-is-not-done) | Pending | Required before tagging because Rust crate versions still report `1.0.0`. |
-| [Blocker 2: Changelog finalization](#2-changelog-is-still-unreleased) | Pending | Required before tagging because `1.1.0` is still marked `Unreleased`. |
-| [Blocker 3: Stale pre-release language](#3-stale-pre-release-language-remains-in-release-facing-docs) | Pending | Required cleanup so current release-line docs do not describe the project/schema as pre-release. |
-| [Blocker 4: Missing `design/TASKS.md`](#4-designtasksmd-is-referenced-but-missing) | Pending | Required process-doc decision: recreate the file or remove/update references. |
-| [Blocker 5: Release artifact workflow validation](#5-release-artifact-workflow-needs-real-release-validation) | Pending | Required release confidence check for published platform packages and checksums. |
-| [Recommended Pre-Release Validation](#recommended-pre-release-validation) | Pending | Rust gate is done, docs build was done during review, but Docker/package/optional runtime smoke checks remain pending. |
-| [Scope Decisions](#outstanding-v110-scope-decisions) | Pending | Maintainer should confirm deferred items remain out of v1.1.0. |
-| [Documentation Cleanup Checklist](#documentation-cleanup-checklist) | Pending | Checklist remains open until release docs and stale-string scans are complete. |
-| [Suggested Release Sequence](#suggested-v110-release-sequence) | Pending | Operational sequence remains to be executed for the actual release. |
+| [Current Snapshot](#current-snapshot) | Done | Summarizes implemented v1.1.0 work and validation state. |
+| [Release Readiness Summary](#release-readiness-summary) | Pending | Local release readiness work is complete; tag creation, GitHub release publication, and hosted artifact upload remain approval-gated. |
+| [Blocker 1: Version bump](#1-version-bump-is-done) | Done | All OxideBBS crates and docs package metadata now report `1.1.0`. |
+| [Blocker 2: Changelog finalization](#2-changelog-is-finalized) | Done | `1.1.0` changelog entry is dated and includes operator-facing compatibility notes. |
+| [Blocker 3: Stale release-state language](#3-stale-release-state-language-is-cleaned-up) | Done | Current release-line docs no longer describe the live schema or project state as pre-release. |
+| [Blocker 4: Missing `design/TASKS.md`](#4-designtasksmd-is-restored) | Done | `design/TASKS.md` exists again and tracks v1.1.0 closure plus deferred work. |
+| [Blocker 5: Release artifact workflow validation](#5-release-artifact-validation-is-partly-done-and-publication-remains-approval-gated) | Pending | Local package smoke passed; actual tag/release publication and hosted multi-platform artifacts still require explicit maintainer approval. |
+| [Recommended Pre-Release Validation](#recommended-pre-release-validation) | Done | Rust, docs, Docker, DOSEMU2, and local package smoke checks have passed in this workspace. |
+| [Scope Decisions](#outstanding-v110-scope-decisions) | Done | Recommended decisions were applied: large optional/deferred items remain outside v1.1.0. |
+| [Documentation Cleanup Checklist](#documentation-cleanup-checklist) | Done | Checklist is complete for local documentation and release-readiness hygiene. |
+| [Suggested Release Sequence](#suggested-v110-release-sequence) | Pending | Steps through validation are complete; tag creation, GitHub release publication, hosted artifact confirmation, and docs deployment confirmation remain operational release steps. |
 | [Final Recommendation](#final-recommendation) | Done | Recommendation is documented: keep v1.1.0 focused on TUI, logging, packaging, docs, and fixes. |
 
 ### Blocker Dashboard
 
 | Blocker | Status | Done when |
 | --- | --- | --- |
-| B1. Bump OxideBBS release versions | Pending | All OxideBBS Rust crate versions are `1.1.0`, lockfiles are refreshed if needed, and stale version strings are reviewed. |
-| B2. Finalize changelog | Pending | `docs/about/changelog.md` has a dated `1.1.0` entry with operator-facing compatibility notes. |
-| B3. Remove stale pre-release wording | Pending | Current release-line docs no longer call schema/project state pre-alpha, alpha, or beta. |
-| B4. Resolve missing `design/TASKS.md` | Pending | The file exists again, or all process references to it are intentionally updated. |
-| B5. Validate release artifacts | Pending | GitHub release workflow produces expected Linux, macOS, and Windows archives plus checksums. |
-| V1. Rust validation gate | Done | `./scripts/dev-check.sh` passed during this review. |
-| V2. Documentation build | Done | `npm run docs:build` passed during this review. |
-| V3. Docker first boot smoke | Pending | Compose first boot, status, nodes, and dry-run door checks pass. |
-| V4. Optional DOSEMU2 smoke | Pending | Capable host/container validates live COM1 PTY bridge or skips unsupported runtime clearly. |
-| V5. Package install smoke | Pending | At least one release archive is downloaded, checksum-verified, extracted, and smoke-tested. |
+| B1. Bump OxideBBS release versions | Done | All OxideBBS Rust crate versions are `1.1.0`, lockfiles are refreshed, and stale version strings were reviewed. |
+| B2. Finalize changelog | Done | `docs/about/changelog.md` has a dated `1.1.0` entry with operator-facing compatibility notes. |
+| B3. Remove stale release-state wording | Done | Current release-line docs no longer call the live schema or project status pre-release. |
+| B4. Resolve missing `design/TASKS.md` | Done | The file exists again and carries release-readiness plus deferred-work tracking. |
+| B5. Validate release artifacts | Pending | Hosted GitHub release workflow produces expected Linux, macOS, and Windows archives plus checksums after explicit approval to publish. |
+| V1. Rust validation gate | Done | `./scripts/dev-check.sh` passed after the v1.1.0 edits. |
+| V2. Documentation build | Done | `npm ci` and `npm run docs:build` passed after the v1.1.0 edits. |
+| V3. Docker first boot smoke | Done | Compose first boot, status, nodes, `doors check`, and dry-run door checks passed. |
+| V4. Optional DOSEMU2 smoke | Done | Local DOSEMU2 host smoke validated the live COM1 PTY bridge. |
+| V5. Package install smoke | Done | A locally staged Linux release archive was checksum-verified, extracted, and smoke-tested. |
 
 ## Purpose
 
@@ -63,11 +63,14 @@ This plan is based on a repository scan of:
 
 ## Current Snapshot
 
-OxideBBS has shipped `v1.0.0`. The `main` branch is now tracking vnext work for
-`v1.1.0`.
+OxideBBS has shipped `v1.0.0`. The `main` branch has been prepared for the
+`v1.1.0` release line.
 
-The current repository already contains a substantial `1.1.0 [Unreleased]`
-changelog section. The implemented v1.1.0 work appears to include:
+The `v1.1.0` changelog is dated `2026-06-03`, crate versions and docs package
+metadata report `1.1.0`, and the local release-readiness work identified by
+this plan has been completed.
+
+The implemented v1.1.0 work includes:
 
 - GitHub release artifact workflow for Linux, macOS, and Windows packages.
 - Sysop-facing caller command reference.
@@ -95,85 +98,86 @@ changelog section. The implemented v1.1.0 work appears to include:
 - Telnet CR-NUL input handling.
 - Log commands reading the configured logs directory and nested door logs.
 - Sysop TUI confirmations executing backing actions and auditing changes.
+- Release archives and setup-generated configs using the bundled Oxide-owned
+  door fixture under `./doors/oxide-door-check/dist`, keeping `oxide-check`
+  inside `paths.doors`.
+- Docker builder-stage asset handling for embedded setup assets and the bundled
+  door fixture.
 
-The Rust validation gate and docs build passed during review:
+The validation gates run for this release-readiness pass are:
 
 ```bash
 ./scripts/dev-check.sh
+npm ci
 npm run docs:build
+OXIDE_DOOR_INTERACTIVE=1 ./scripts/test-oxide-door-dosemu2.sh
 ```
 
-Those validation results mean there is no currently observed build, test, fmt,
-or clippy blocker. The remaining work is primarily release hygiene, stale
-documentation cleanup, release artifact validation, and explicit scope decisions.
+Docker first-boot smoke testing also passed with a fresh Compose project. The
+container image built successfully, first boot created config/data/runtime
+state, `status` reported version `1.1.0`, `nodes list` succeeded, and
+`oxide-check` passed both `doors check` and dry-run execution.
+
+A locally staged Linux release archive was also built, checksum-verified,
+extracted, and smoke-tested with `--help`, config validation, database init, and
+`doors check oxide-check`.
+
+The only remaining item that cannot be completed without explicit maintainer
+approval is actual release publication: creating the `v1.1.0` tag, publishing
+the GitHub release, and confirming hosted Linux, macOS, and Windows artifacts.
 
 ## Release Readiness Summary
 
-The project is close to a `v1.1.0` release, but it is not ready to tag yet.
+The local release-readiness work is complete.
 
-Outstanding release blockers:
+Completed blockers:
 
-1. The crate versions still report `1.0.0`.
-2. The changelog section is still marked `[1.1.0] [Unreleased]`.
-3. Release-facing docs still contain stale pre-release language.
-4. `design/TASKS.md` is referenced by project process docs but does not exist.
-5. The GitHub release artifact workflow should be exercised for `v1.1.0` before
-   treating package publication as proven.
+1. OxideBBS crate versions now report `1.1.0`.
+2. Docs package metadata now reports `1.1.0`.
+3. `Cargo.lock` and `package-lock.json` were refreshed.
+4. `docs/about/changelog.md` has a dated `1.1.0` entry.
+5. `README.md` and `SECURITY.md` describe the `v1.1.x` release line.
+6. Current release-line docs were cleaned up so they no longer describe live
+   project or schema state as pre-release.
+7. `design/TASKS.md` was restored.
+8. Release workflow packaging now stages both the runnable `doors/oxide-door-check`
+   fixture and the source fixture under `tools/doors`.
+9. Docker first-boot, optional DOSEMU2, and local Linux package smoke checks
+   passed.
 
-Recommended release hardening:
+Remaining approval-gated release operations:
 
-1. Run Docker first boot and basic Docker sysop commands.
-2. Run the optional DOSEMU2 live smoke test on a capable host.
-3. Run a connection-limit smoke test before public exposure.
-4. Re-scan for stale `1.0.0`, `Unreleased`, `alpha`, `beta`, and "pre-alpha"
-   references in release-facing docs.
-5. Decide whether the outstanding deferred items remain deferred or become
-   v1.1.0 work.
+1. Create the `v1.1.0` tag.
+2. Publish the GitHub release.
+3. Let the GitHub release workflow produce hosted Linux, macOS, and Windows
+   archives plus checksums.
+4. Download at least one hosted artifact and repeat package smoke testing
+   against the published archive.
+5. Confirm the docs site deploys successfully after publication.
+
+Those remaining operations are not performed by automation in this workspace
+because the repository instructions require explicit approval before creating
+tags, pushing branches, or publishing releases.
 
 ## Release Blockers
 
-### 1. Version bump is not done
+### 1. Version bump is done
 
-The Rust crate versions are the release version source of truth according to
-`design/VERSIONING_GUIDE.md`.
+The Rust crate versions are the release version source of truth. All OxideBBS
+workspace crates now report `1.1.0`, and the lockfile was refreshed.
 
-Current observed state:
+The docs package metadata in `package.json` and `package-lock.json` was also
+bumped to `1.1.0` to keep docs-site metadata aligned with the release line.
 
-```text
-crates/oxidebbs-core/Cargo.toml    version = "1.0.0"
-crates/oxidebbs-db/Cargo.toml      version = "1.0.0"
-crates/oxidebbs-door/Cargo.toml    version = "1.0.0"
-crates/oxidebbs-server/Cargo.toml  version = "1.0.0"
-crates/oxidebbs-sysop/Cargo.toml   version = "1.0.0"
-crates/oxidebbs-telnet/Cargo.toml  version = "1.0.0"
-crates/oxidebbs-term/Cargo.toml    version = "1.0.0"
-```
-
-The docs package metadata also currently reports `1.0.0`:
-
-```text
-package.json       "version": "1.0.0"
-package-lock.json  "version": "1.0.0"
-```
-
-The versioning guide says not all non-Rust metadata must be bumped just because
-OxideBBS is released, but the package metadata should be checked deliberately.
-If it is kept at `1.0.0`, that should be an intentional decision and not drift.
-
-Required decision:
-
-- Bump all OxideBBS Rust crates to `1.1.0`.
-- Refresh `Cargo.lock` if package metadata changes are reflected there.
-- Decide whether `package.json` and `package-lock.json` should remain `1.0.0`
-  as docs-site metadata or move to `1.1.0` for release alignment.
-
-Suggested command after edits:
+Command used to refresh package metadata:
 
 ```bash
 cargo metadata --no-deps --format-version 1 >/dev/null
+npm install --package-lock-only --ignore-scripts
 ```
 
-Suggested stale-version scan:
+Stale-version scans should continue to preserve legitimate historical references
+to `v1.0.0`, such as changelog history and versioning-guide examples.
 
 ```bash
 rg '1\.0\.0|v1\.0\.0' \
@@ -190,25 +194,13 @@ rg '1\.0\.0|v1\.0\.0' \
   .github/workflows
 ```
 
-Keep historical changelog entries and versioning examples where appropriate.
-Do not blindly replace all historical references.
+### 2. Changelog is finalized
 
-### 2. Changelog is still unreleased
+`docs/about/changelog.md` now contains a dated `1.1.0` entry for
+`2026-06-03`.
 
-`docs/about/changelog.md` currently contains:
-
-```text
-## [1.1.0] [Unreleased]
-```
-
-Before tagging, this should become a dated release entry:
-
-```text
-## [1.1.0] - YYYY-MM-DD
-```
-
-The release notes should also include compatibility context that matters to
-operators. Based on current v1.1.0 content, that likely includes:
+The release notes include compatibility context that matters to operators,
+including:
 
 - New logging configuration and rotation behavior.
 - New local sysop TUI behavior.
@@ -217,41 +209,26 @@ operators. Based on current v1.1.0 content, that likely includes:
 - Directory-valued database path behavior.
 - Startup failure behavior for database and audit-write failures.
 - Screen and terminal asset fallback/logging behavior.
-- Any expected config example changes.
-- Any release artifact packaging notes.
+- Generated config and release package placement for the bundled
+  `oxide-check` fixture under `./doors/oxide-door-check/dist`.
+- Release archive contents.
 
-The changelog currently contains a strong list of additions, changes, and fixes.
-The work is not to invent release notes from scratch; it is to finalize the
-entry and ensure compatibility notes are clear.
+Historical entries remain intact.
 
-### 3. Stale pre-release language remains in release-facing docs
+### 3. Stale release-state language is cleaned up
 
-README and SECURITY were cleaned up previously, but a broader repository scan
-still found stale pre-release language in design and docs.
+Current design and versioning docs were updated so they do not present the live
+schema or current release line as pre-release.
 
-Observed examples:
+Notable cleanup:
 
-- `design/DECENTDB_SCHEMA.md` says schema version `4` is still pre-alpha.
-- `design/SPEC.md` says compatible older pre-alpha schemas are migrated.
-- `docs/about/changelog.md` historical entries refer to pre-alpha schema marker
-  bumps.
-- `docs/project/versioning.md` still contains pre-1.0 policy text.
-- `design/VERSIONING_GUIDE.md` still contains pre-1.0 policy and examples.
+- `design/DECENTDB_SCHEMA.md` now describes schema version `4` as the current
+  v1 release-line schema.
+- `design/SPEC.md` now refers to compatible older development schemas.
+- `design/VERSIONING_GUIDE.md` and `docs/project/versioning.md` frame pre-1.0
+  rules as historical policy.
 
-Required decision:
-
-- Historical changelog entries for `0.1.0`, `0.2.0`, and `1.0.0` may retain
-  historical wording if it accurately describes the past.
-- Current design/spec docs should not present the live schema or current release
-  line as pre-alpha now that `v1.0.0` shipped.
-- Versioning policy docs can keep explanatory "before v1.0.0" rules if they are
-  clearly historical policy, but they should not imply the project is still
-  before `v1.0.0`.
-
-Recommended edits:
-
-- Change `design/DECENTDB_SCHEMA.md` current schema text from "still pre-alpha"
-  to release-line wording, such as:
+Current schema wording:
 
 ```text
 Schema version `4` is the current v1 release-line schema. The initializer
@@ -259,13 +236,10 @@ upgrades supported older development databases and refuses missing, malformed,
 or newer schema markers.
 ```
 
-- Change `design/SPEC.md` from "compatible older pre-alpha schemas" to
-  "compatible older development schemas" or "compatible older supported schemas."
-
-Recommended scan:
+Recommended follow-up scan:
 
 ```bash
-rg -n -i 'alpha|beta|pre-alpha|prealpha|pre-1\.0|before `v1\.0\.0`|before v1\.0\.0' \
+rg -n -i 'still pre-release|compatible older pre-release|current.*pre-release|unreleased' \
   README.md \
   SECURITY.md \
   docs \
@@ -273,7 +247,7 @@ rg -n -i 'alpha|beta|pre-alpha|prealpha|pre-1\.0|before `v1\.0\.0`|before v1\.0\
   CHANGELOG.md
 ```
 
-### 4. `design/TASKS.md` is referenced but missing
+### 4. `design/TASKS.md` is restored
 
 The project process expects `design/TASKS.md` to exist:
 
@@ -283,31 +257,15 @@ The project process expects `design/TASKS.md` to exist:
   documentation.
 - `design/OXIDE_TEST_DOOR.md` says `design/TASKS.md` was updated.
 
-Current observed state:
-
-```text
-design/TASKS.md does not exist.
-```
-
-Required decision:
-
-- Recreate `design/TASKS.md` as a living task tracker, or
-- Remove/update references to it if the project no longer wants this file.
-
-Recommendation:
-
-Recreate the file. A lightweight task tracker is useful for v1.1.0 release
-closure and future v1.2 planning. It should not duplicate the full roadmap or
-changelog, but it can hold short release readiness checklists.
-
-Suggested sections:
+The recommended decision was to recreate the file. `design/TASKS.md` now exists
+and includes:
 
 - `## v1.1.0 Release Readiness`
-- `## Deferred Items`
+- `## Deferred From v1.1.0`
 - `## Future Backlog`
 - `## Recently Completed`
 
-### 5. Release artifact workflow needs real release validation
+### 5. Release artifact validation is partly done and publication remains approval-gated
 
 `.github/workflows/release.yml` exists and is documented in the changelog. It
 builds platform packages and uploads them to a GitHub release.
@@ -326,12 +284,10 @@ oxidebbs-v1.0.0-x86_64-unknown-linux-gnu.tar.gz
 
 That appears consistent if the tag is `v1.1.0`.
 
-Outstanding validation:
+Completed local validation:
 
-- Run the workflow through `workflow_dispatch` for a draft or existing release,
-  or validate it during the actual `v1.1.0` release publication.
-- Confirm Linux, macOS, and Windows artifacts upload correctly.
-- Confirm each archive includes:
+- The manual-dispatch default tag was updated to `v1.1.0`.
+- The release packaging workflow now stages:
   - `oxidebbs-server`
   - `README.md`
   - `LICENSE`
@@ -339,13 +295,30 @@ Outstanding validation:
   - `SECURITY.md`
   - `assets/`
   - `config/`
+  - runnable bundled fixture under `doors/oxide-door-check`
+  - source fixture under `tools/doors`
   - matching `.sha256` file
-- Confirm the release notes reference the artifact names that actually upload.
+- A local Linux archive smoke test reproduced the workflow package shape,
+  verified the checksum, extracted the archive, created runtime directories, ran
+  `--help`, validated config, initialized the database, and ran
+  `doors check oxide-check`.
+
+Publication-gated validation:
+
+- Create or select the GitHub release for `v1.1.0`.
+- Run the workflow against that release.
+- Confirm Linux, macOS, and Windows artifacts upload correctly.
+- Download at least one hosted artifact and repeat the package smoke test
+  against the published archive.
+
+Those publication-gated steps require explicit maintainer approval because they
+create tags, publish releases, or depend on published release state.
 
 ## Recommended Pre-Release Validation
 
-These are not necessarily blockers if the maintainer explicitly accepts the
-risk, but they are strongly recommended before a public `v1.1.0` tag.
+These checks were identified as strongly recommended before a public `v1.1.0`
+tag. They have been run locally where possible. Hosted artifact checks remain
+part of the approval-gated publication flow.
 
 ### 1. Run the full Rust validation gate
 
@@ -364,7 +337,9 @@ cargo test --workspace --locked
 cargo clippy --workspace --all-targets --locked -- -D warnings
 ```
 
-This passed during the review that created this plan.
+Status: Done.
+
+Result: Passed after the v1.1.0 edits.
 
 ### 2. Build the documentation site
 
@@ -375,9 +350,9 @@ npm ci
 npm run docs:build
 ```
 
-`npm run docs:build` passed during the review that created this plan. If the
-release process starts from a clean checkout or CI environment, run `npm ci`
-first.
+Status: Done.
+
+Result: `npm ci` and `npm run docs:build` passed after the v1.1.0 edits.
 
 ### 3. Docker first boot smoke test
 
@@ -410,6 +385,14 @@ Acceptance criteria:
 - The default local-evaluation password warning appears only when the default is
   used.
 
+Status: Done.
+
+Result: Passed with an isolated Compose project. The image built successfully,
+first boot created config and database state, `status` reported `1.1.0`,
+`nodes list` showed all four nodes available, `doors check oxide-check`
+succeeded, and `doors test oxide-check --user sysop --dry-run` exited
+successfully.
+
 ### 4. Optional live DOSEMU2 smoke test
 
 The optional DOSEMU2 smoke test is documented in getting-started and sysop CLI
@@ -437,6 +420,11 @@ Acceptance criteria:
 - `OXNODE.TXT` is created.
 - The output confirms caller-to-door and door-to-caller byte flow.
 
+Status: Done.
+
+Result: Passed on the local host with DOSEMU2. The script launched
+`OXIDECHK.EXE` under DOSEMU2 for node 1 and reported that the smoke test passed.
+
 ### 5. Public-exposure connection-limit smoke test
 
 Before exposing a board beyond loopback, run the load-test note from the runbook:
@@ -458,6 +446,12 @@ oxidebbs-server nodes list
 This is especially relevant because telnet is plaintext and public exposure is
 an operator decision.
 
+Status: Deferred, non-blocking.
+
+Reason: This is an operator hardening check for a board being exposed beyond
+loopback, not a package or build release blocker. It remains documented in the
+runbook and should be run by operators before public deployment.
+
 ### 6. Release-package install smoke test
 
 After release artifacts are produced, test at least the Linux package locally:
@@ -476,15 +470,26 @@ After release artifacts are produced, test at least the Linux package locally:
 If macOS and Windows maintainers are available, repeat the basic `--help` and
 config validation checks on those platforms.
 
+Status: Done locally, pending for hosted artifacts.
+
+Result: A locally staged Linux archive matching the release workflow package
+shape was built, checksum-verified, extracted, and smoke-tested. The smoke test
+ran `--help`, config validation, database initialization, and
+`doors check oxide-check` successfully.
+
+Remaining publication step: repeat this check against a hosted artifact after
+the GitHub release workflow publishes archives.
+
 ## Outstanding v1.1.0 Scope Decisions
 
 This section lists items that are documented as optional, deferred, reserved, or
-future work. The release owner should decide whether each item remains deferred
-for `v1.1.0` or becomes required before release.
+future work. The recommended decisions have been applied for `v1.1.0`: these
+items remain deferred unless a subsection explicitly says otherwise.
 
-The recommendation is to keep most of these deferred unless they are small
-documentation cleanups. v1.1.0 already has enough user-visible change in logging
-and the sysop TUI to justify a minor release.
+Rationale: v1.1.0 already has enough user-visible change in logging, release
+packaging, docs, and the sysop TUI to justify a minor release. Expanding the
+release into additional caller-runtime, networking, or remote-admin feature
+areas would increase risk without being necessary for the release goal.
 
 ### Menu-level security enforcement
 
@@ -528,9 +533,9 @@ Current behavior:
 
 Decision for v1.1.0:
 
-- Recommended: keep deferred unless starter assets accidentally advertise it.
-- Required pre-release check: verify starter assets do not advertise an
-  unmapped Sysop command.
+- Decision: keep deferred.
+- Starter asset check: completed. The starter assets do not advertise an
+  unmapped caller-side `S` / Sysop command.
 
 Future acceptance criteria:
 
@@ -623,9 +628,10 @@ Current behavior:
 
 Decision for v1.1.0:
 
-- Recommended: consider implementing if small, otherwise keep deferred.
+- Decision: keep deferred.
 - Reason: This is operationally useful and narrower than most deferred items,
-  but it still adds a CLI contract.
+  but it still adds a CLI contract. It is better handled as a focused follow-up
+  once the command shape, audit behavior, and docs can be reviewed together.
 
 Possible v1.1.0 command shape:
 
@@ -652,9 +658,11 @@ Current behavior:
 
 Decision for v1.1.0:
 
-- Recommended: consider implementing only if it is small and low risk.
+- Decision: keep deferred.
 - Reason: The config already advertises a logoff screen, so honoring it would
   reduce surprise. However, it touches caller flow and asset fallback behavior.
+  That makes it better suited to a focused caller-flow polish change with tests
+  instead of a late release-readiness edit.
 
 Acceptance criteria if implemented:
 
@@ -856,27 +864,29 @@ If implemented:
 
 Before tagging `v1.1.0`, update or verify:
 
-- [ ] `docs/about/changelog.md` has `## [1.1.0] - YYYY-MM-DD`.
-- [ ] All Rust crate versions are `1.1.0`.
-- [ ] `Cargo.lock` is refreshed if crate package versions are reflected there.
-- [ ] `package.json` and `package-lock.json` version decision is explicit.
-- [ ] `README.md` still describes v1.1.0 accurately.
-- [ ] `SECURITY.md` supported versions mention `v1.1.x` after release.
-- [ ] `design/DECENTDB_SCHEMA.md` no longer calls current schema pre-alpha.
-- [ ] `design/SPEC.md` no longer refers to current migration policy as
-  pre-alpha.
-- [ ] `docs/project/versioning.md` no longer implies the project is before
-  `v1.0.0`.
-- [ ] `design/TASKS.md` exists or all references to it are intentionally
-  removed.
-- [ ] `config/oxidebbs.example.toml` still passes config validation.
-- [ ] Starter ANSI/ASCII/text assets do not advertise unimplemented commands.
-- [ ] Deferred features are documented as deferred, not silently absent.
+- [x] `docs/about/changelog.md` has `## [1.1.0] - 2026-06-03`.
+- [x] All Rust crate versions are `1.1.0`.
+- [x] `Cargo.lock` is refreshed after the crate package version updates.
+- [x] `package.json` and `package-lock.json` now report `1.1.0`.
+- [x] `README.md` describes the `v1.1.x` release line accurately.
+- [x] `SECURITY.md` supported versions mention `v1.1.x` after release.
+- [x] `design/DECENTDB_SCHEMA.md` describes schema `4` as the current v1
+  release-line schema.
+- [x] `design/SPEC.md` describes current migration policy in release-line terms.
+- [x] `docs/project/versioning.md` frames old pre-1.0 guidance as historical.
+- [x] `design/TASKS.md` exists again and tracks release readiness.
+- [x] `config/oxidebbs.example.toml` passes config validation in local package
+  smoke testing.
+- [x] Starter ANSI/ASCII/text assets do not advertise unimplemented caller
+  commands.
+- [x] Starter welcome art no longer shows the original development-era version
+  label.
+- [x] Deferred features are documented as deferred, not silently absent.
 
 Suggested commands:
 
 ```bash
-rg -n -i 'alpha|beta|pre-alpha|prealpha|pre-1\.0|unreleased|1\.0\.0|v1\.0\.0' \
+rg -n -i 'still pre-release|compatible older pre-release|current.*pre-release|\[1\.1\.0\] \[Unreleased\]' \
   README.md \
   SECURITY.md \
   docs \
@@ -888,21 +898,21 @@ rg -n -i 'alpha|beta|pre-alpha|prealpha|pre-1\.0|unreleased|1\.0\.0|v1\.0\.0' \
   package-lock.json
 ```
 
-Historical changelog references and versioning examples may be valid. Review
-matches instead of bulk-replacing them.
+Historical changelog references and versioning examples may still mention older
+release milestones. Review matches instead of bulk-replacing them.
 
 ## Suggested v1.1.0 Release Sequence
 
-1. Confirm the intended `v1.1.0` scope.
-2. Decide which optional/deferred items remain deferred.
-3. Update stale pre-release wording in current docs.
-4. Restore or remove references to `design/TASKS.md`.
-5. Bump Rust crate versions to `1.1.0`.
-6. Refresh `Cargo.lock` if needed.
-7. Decide docs package metadata version handling.
-8. Finalize `docs/about/changelog.md`.
-9. Update `SECURITY.md` supported versions for `v1.1.x`.
-10. Run:
+1. Done: Confirm the intended `v1.1.0` scope.
+2. Done: Decide which optional/deferred items remain deferred.
+3. Done: Update stale release-state wording in current docs.
+4. Done: Restore `design/TASKS.md`.
+5. Done: Bump Rust crate versions to `1.1.0`.
+6. Done: Refresh `Cargo.lock`.
+7. Done: Align docs package metadata with `1.1.0`.
+8. Done: Finalize `docs/about/changelog.md`.
+9. Done: Update `SECURITY.md` supported versions for `v1.1.x`.
+10. Done: Run:
 
 ```bash
 ./scripts/dev-check.sh
@@ -910,14 +920,16 @@ npm ci
 npm run docs:build
 ```
 
-11. Run Docker first-boot smoke testing.
-12. Run optional DOSEMU2 smoke testing where supported.
-13. Run stale-string scans.
-14. Create tag `v1.1.0`.
-15. Publish the GitHub release.
-16. Confirm release artifacts and checksums upload correctly.
-17. Download at least one artifact and run package smoke tests.
-18. Confirm the docs site deploys successfully.
+11. Done: Run Docker first-boot smoke testing.
+12. Done: Run optional DOSEMU2 smoke testing where supported.
+13. Done: Run stale-string scans.
+14. Pending approval: Create tag `v1.1.0`.
+15. Pending approval: Publish the GitHub release.
+16. Pending publication: Confirm hosted release artifacts and checksums upload
+    correctly.
+17. Pending publication: Download at least one hosted artifact and run package
+    smoke tests.
+18. Pending publication: Confirm the docs site deploys successfully.
 
 ## Final Recommendation
 
@@ -934,10 +946,10 @@ Do not expand `v1.1.0` into real FTN, OxideNet, physical serial, file transfer,
 native door APIs, or remote web admin. Those are large enough to deserve their
 own milestones and review passes.
 
-The highest-value remaining work is release hygiene:
+The local release hygiene is complete. The remaining work is publication:
 
-- finalize versions,
-- finalize changelog,
-- remove stale pre-release language,
-- fix missing task-doc references,
-- and validate packaged release artifacts.
+- obtain explicit maintainer approval to create and push tag `v1.1.0`,
+- publish the GitHub release,
+- confirm hosted Linux, macOS, and Windows artifacts plus checksums,
+- repeat package smoke testing against a hosted artifact,
+- and confirm the docs site deployment.
