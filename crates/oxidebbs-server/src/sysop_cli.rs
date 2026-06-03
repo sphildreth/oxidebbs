@@ -157,7 +157,11 @@ enum Command {
     Status,
 
     /// Render a local sysop console preview
-    Sysop,
+    Sysop {
+        /// Launch the interactive sysop TUI
+        #[arg(long)]
+        tui: bool,
+    },
 
     /// Manage users
     Users {
@@ -218,7 +222,13 @@ pub async fn run() -> CliResult<()> {
         Command::Logs { command } => run_logs(command, &ctx),
         Command::Audit { command } => run_audit(command, &ctx),
         Command::Config { command } => run_config(command, &ctx),
-        Command::Sysop => run_sysop_preview(&ctx),
+        Command::Sysop { tui } => {
+            if tui {
+                crate::commands::run_sysop_tui(&ctx).await
+            } else {
+                run_sysop_preview(&ctx)
+            }
+        }
         Command::Setup(_) => unreachable!("setup is handled before config load"),
     }
 }

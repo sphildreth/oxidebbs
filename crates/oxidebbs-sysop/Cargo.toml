@@ -6,7 +6,17 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+oxidebbs-core = { path = "../oxidebbs-core" }
 oxidebbs-db = { path = "../oxidebbs-db" }
 oxidebbs-door = { path = "../oxidebbs-door" }
-ratatui = { version = "0.30.0", default-features = false }
+oxidebbs-term = { path = "../oxidebbs-term" }
+ratatui = { version = "0.30.0", default-features = false, features = ["crossterm"] }
+crossterm.workspace = true
+tokio = { version = "1", features = ["full"] }
 thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+fuzzy-matcher.workspace = true
+argon2.workspace = true
+rand_core.workspace = true
