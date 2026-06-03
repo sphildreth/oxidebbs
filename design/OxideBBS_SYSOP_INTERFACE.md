@@ -4,9 +4,7 @@
 
 The sysop interface is the local administrative surface for running, inspecting, and maintaining an OxideBBS instance.
 
-For v1, the sysop interface should be **CLI-first**.
-
-A local Ratatui-based TUI is desirable, but it should come after the core server, telnet sessions, users, local messages, DecentDB persistence, and basic door launching are stable.
+For v1, the sysop interface was **CLI-first**. A local Ratatui-based TUI shipped in **v1.1** once the core server, telnet sessions, users, local messages, DecentDB persistence, and basic door launching were stable.
 
 ## Design goals
 
