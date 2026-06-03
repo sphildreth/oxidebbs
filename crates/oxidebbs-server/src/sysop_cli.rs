@@ -6,7 +6,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use argon2::password_hash::{PasswordHash, PasswordHasher, SaltString};
 use argon2::{Algorithm, Argon2, Params, PasswordVerifier as Argon2PasswordVerifier, Version};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use rand_core::OsRng;
 use serde_json::{Value as JsonValue, json};
 use thiserror::Error;
@@ -166,6 +166,9 @@ enum Command {
         /// Do not start an embedded server if no live control socket is reachable
         #[arg(long)]
         connect_only: bool,
+        /// Theme name to apply to the TUI (default: oxide-classic)
+        #[arg(long)]
+        theme: Option<SysopTheme>,
     },
 
     /// Manage users
@@ -206,7 +209,7 @@ pub async fn run() -> CliResult<()> {
         config.database.path = normalize_database_path(data_path);
     }
     let log_level = effective_log_level(cli.verbose, &command, &config)?;
-    init_logging(&config, &log_level)?;
+    init_logging(&config, &log_level, command_uses_console_logging(&command))?;
 
     let ctx = AppContext {
         config_path,
@@ -230,9 +233,53 @@ pub async fn run() -> CliResult<()> {
         Command::Sysop {
             readonly,
             connect_only,
+            theme,
             ..
-        } => run_sysop_tui(&ctx, readonly, connect_only).await,
+        } => {
+            run_sysop_tui(
+                &ctx,
+                readonly,
+                connect_only,
+                theme
+                    .as_ref()
+                    .map(SysopTheme::as_ref)
+                    .unwrap_or_else(|| SysopTheme::OxideClassic.as_ref()),
+            )
+            .await
+        }
         Command::Setup(_) => unreachable!("setup is handled before config load"),
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, ValueEnum)]
+enum SysopTheme {
+    #[value(name = "oxide-classic")]
+    OxideClassic,
+    #[value(name = "wildcat")]
+    Wildcat,
+    #[value(name = "telegard")]
+    Telegard,
+    #[value(name = "vbbs")]
+    Vbbs,
+    #[value(name = "mystic")]
+    Mystic,
+    #[value(name = "midnight")]
+    Midnight,
+    #[value(name = "high-contrast")]
+    HighContrast,
+}
+
+impl SysopTheme {
+    fn as_ref(&self) -> &'static str {
+        match self {
+            Self::OxideClassic => "oxide-classic",
+            Self::Wildcat => "wildcat",
+            Self::Telegard => "telegard",
+            Self::Vbbs => "vbbs",
+            Self::Mystic => "mystic",
+            Self::Midnight => "midnight",
+            Self::HighContrast => "high-contrast",
+        }
     }
 }
 
@@ -258,11 +305,19 @@ fn effective_log_level(verbose: u8, command: &Command, config: &OxideConfig) -> 
     Ok(level.trim().to_ascii_lowercase())
 }
 
-fn init_console_logging(verbose: u8) -> CliResult<()> {
-    init_logging_with_file(verbose_log_level(verbose), None, "text")
+fn command_uses_console_logging(command: &Command) -> bool {
+    !matches!(command, Command::Sysop { .. })
 }
 
-pub(crate) fn init_logging(config: &OxideConfig, level: &str) -> CliResult<()> {
+fn init_console_logging(verbose: u8) -> CliResult<()> {
+    init_logging_with_file(verbose_log_level(verbose), None, "text", true)
+}
+
+pub(crate) fn init_logging(
+    config: &OxideConfig,
+    level: &str,
+    console_enabled: bool,
+) -> CliResult<()> {
     validate_logging_format(&config.logging.format).map_err(CliError::Message)?;
     let file = if config.logging.file_enabled {
         std::fs::create_dir_all(&config.paths.logs)?;
@@ -274,18 +329,20 @@ pub(crate) fn init_logging(config: &OxideConfig, level: &str) -> CliResult<()> {
     } else {
         None
     };
-    init_logging_with_file(level, file, &config.logging.format)
+    init_logging_with_file(level, file, &config.logging.format, console_enabled)
 }
 
 fn init_logging_with_file(
     level: &str,
     file: Option<RotatingLogFile>,
     file_format: &str,
+    console_enabled: bool,
 ) -> CliResult<()> {
     use tracing_subscriber::prelude::*;
 
     let env_filter = tracing_subscriber::EnvFilter::new(level);
-    let console_layer = tracing_subscriber::fmt::layer().with_writer(io::stderr);
+    let console_layer =
+        console_enabled.then(|| tracing_subscriber::fmt::layer().with_writer(io::stderr));
     let file_format = file_format.trim().to_ascii_lowercase();
 
     match file {
@@ -990,6 +1047,24 @@ name = "Test BBS"
     }
 
     #[test]
+    fn sysop_command_disables_console_logging_for_tui() {
+        let sysop = Command::Sysop {
+            tui: false,
+            readonly: false,
+            connect_only: false,
+            theme: None,
+        };
+        let serve = Command::Serve(ServeArgs {
+            bind: None,
+            dry_run: false,
+            log_level: None,
+        });
+
+        assert!(!command_uses_console_logging(&sysop));
+        assert!(command_uses_console_logging(&serve));
+    }
+
+    #[test]
     fn size_rotating_log_file_moves_archives() {
         use tracing_subscriber::fmt::MakeWriter as _;
 
@@ -1054,10 +1129,13 @@ name = "Test BBS"
                 tui,
                 readonly,
                 connect_only,
+                theme,
+                ..
             }) => {
                 assert!(readonly);
                 assert!(!tui);
                 assert!(!connect_only);
+                assert_eq!(theme, None);
             }
             _ => panic!("expected sysop command"),
         }
@@ -1071,12 +1149,50 @@ name = "Test BBS"
             Some(Command::Sysop {
                 connect_only,
                 readonly,
+                theme,
                 ..
             }) => {
                 assert!(connect_only);
                 assert!(!readonly);
+                assert_eq!(theme, None);
             }
             _ => panic!("expected sysop command"),
         }
+    }
+
+    #[test]
+    fn sysop_command_accepts_theme_flag() {
+        let cli = Cli::parse_from(["oxidebbs", "sysop", "--theme", "midnight"]);
+
+        match cli.command {
+            Some(Command::Sysop {
+                theme: Some(theme), ..
+            }) => {
+                assert_eq!(theme, SysopTheme::Midnight);
+            }
+            _ => panic!("expected sysop command"),
+        }
+    }
+
+    #[test]
+    fn sysop_command_rejects_invalid_theme() {
+        let error = match Cli::try_parse_from(["oxidebbs", "sysop", "--theme", "no-such-theme"]) {
+            Ok(_) => panic!("expected parse to fail"),
+            Err(error) => error,
+        };
+        let message = error.to_string();
+        assert!(message.contains("high-contrast"));
+        assert!(message.contains("wildcat"));
+        assert!(message.contains("telegard"));
+    }
+
+    #[test]
+    fn sysop_theme_values_match_sysop_theme_registry() {
+        let cli_values = SysopTheme::value_variants()
+            .iter()
+            .map(SysopTheme::as_ref)
+            .collect::<Vec<_>>();
+
+        assert_eq!(cli_values, oxidebbs_sysop::theme::Theme::available_names());
     }
 }

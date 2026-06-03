@@ -522,6 +522,8 @@ only as a compatibility flag, and `--readonly` starts the same TUI with
 destructive actions disabled. The command attaches to an already-running
 `serve` control socket when available; otherwise it starts an embedded `serve`
 runtime for the lifetime of the TUI. `--connect-only` disables embedded startup.
+`--theme <name>` selects one of `oxide-classic`, `wildcat`, `telegard`, `vbbs`,
+`mystic`, `midnight`, or `high-contrast`.
 
 Recommended first screen:
 

@@ -26,6 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   including dashboard, node, user, door, message, database, log, config, ANSI,
   audit, command-palette, modal, and read-only views backed by the same sysop
   service layer as the CLI.
+- Added selectable sysop TUI themes via `sysop --theme`, including
+  `oxide-classic`, `wildcat`, `telegard`, `vbbs`, `mystic`, `midnight`, and
+  `high-contrast`, with sysop-facing theme documentation and visual examples.
 
 ### Changed
 
@@ -39,6 +42,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Sysop TUI mode now suppresses process console logging while Ratatui owns the
+  terminal, preventing embedded `serve` logs from overwriting the interface.
+- The sysop TUI control client now uses the server's newline-delimited JSON
+  control protocol for socket probes and node actions, avoiding repeated
+  `Broken pipe` control warnings from partial availability checks.
 - Directory-valued DecentDB paths now resolve to the default `oxidebbs.ddb`
   file inside that directory, so `database.path = "/path/to/data/"` opens
   `/path/to/data/oxidebbs.ddb` instead of trying to open the directory itself.

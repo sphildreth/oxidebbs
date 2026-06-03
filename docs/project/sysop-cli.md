@@ -63,10 +63,33 @@ Use `--connect-only` when `sysop` should never start an embedded server:
 cargo run -p oxidebbs-server -- --config config/oxidebbs.toml sysop --connect-only
 ```
 
+Select a TUI color theme with `--theme`:
+
+```bash
+cargo run -p oxidebbs-server -- --config config/oxidebbs.toml sysop --theme telegard
+```
+
+Available themes:
+
+- `oxide-classic`
+- `wildcat`
+- `telegard`
+- `vbbs`
+- `mystic`
+- `midnight`
+- `high-contrast`
+
+See [Sysop TUI Themes](./sysop-tui-themes.md) for theme descriptions, command
+examples, and palette swatches.
+
 The TUI uses the configured DecentDB path, `paths.logs`, `paths.screens`, and the
 Unix control socket. Live node actions such as disconnect, node message,
 broadcast, and reset-stale require either an existing `serve` process or the
 embedded runtime started by `sysop`.
+
+While the TUI is active, OxideBBS keeps console logging off for that process so
+server log lines do not overwrite the terminal UI. Runtime logs still go to the
+configured file under `paths.logs` when `[logging].file_enabled` is true.
 
 ## Logging
 

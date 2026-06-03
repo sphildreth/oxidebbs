@@ -44,6 +44,7 @@ pub struct AppConfig {
     pub screens_path: Option<PathBuf>,
     pub control_socket_path: Option<PathBuf>,
     pub node_count: u16,
+    pub theme_name: String,
     pub board_name: String,
 }
 
@@ -58,6 +59,7 @@ impl Default for AppConfig {
             screens_path: None,
             control_socket_path: None,
             node_count: 8,
+            theme_name: "oxide-classic".to_string(),
             board_name: "OxideBBS".to_string(),
         }
     }
@@ -95,7 +97,7 @@ pub struct App {
 
 impl App {
     pub fn new(config: AppConfig) -> Self {
-        let theme = Theme::oxide_classic();
+        let theme = Theme::from_name(&config.theme_name).unwrap_or_else(Theme::oxide_classic);
         let mut nav_state = ListState::default();
         nav_state.select(Some(0));
 

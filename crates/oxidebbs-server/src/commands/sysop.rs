@@ -11,7 +11,12 @@ use tokio::time::sleep;
 const EMBEDDED_SERVE_STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
 const CONTROL_SOCKET_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
-pub async fn run_sysop_tui(ctx: &AppContext, readonly: bool, connect_only: bool) -> CliResult<()> {
+pub async fn run_sysop_tui(
+    ctx: &AppContext,
+    readonly: bool,
+    connect_only: bool,
+    theme_name: &str,
+) -> CliResult<()> {
     let socket_path = ctx.config.paths.runtime.join(CONTROL_SOCKET_NAME);
     let config = AppConfig {
         config_path: ctx.config_path.clone(),
@@ -22,6 +27,7 @@ pub async fn run_sysop_tui(ctx: &AppContext, readonly: bool, connect_only: bool)
         screens_path: Some(ctx.config.paths.screens.clone()),
         control_socket_path: Some(socket_path.clone()),
         node_count: ctx.config.nodes.count,
+        theme_name: theme_name.to_string(),
         board_name: ctx.config.board.name.clone(),
     };
 

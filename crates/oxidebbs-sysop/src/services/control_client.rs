@@ -1,4 +1,5 @@
-use std::io::{BufRead, Read, Write};
+use std::io::{BufRead, Write};
+use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -8,7 +9,6 @@ use serde::{Deserialize, Serialize};
 use crate::SysopError;
 
 pub const CONTROL_SOCKET_NAME: &str = "oxidebbs-control.sock";
-const CONTROL_CONNECT_TIMEOUT: Duration = Duration::from_millis(250);
 const SOCKET_READ_TIMEOUT: Duration = Duration::from_secs(2);
 const SOCKET_WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_REQUEST_BYTES: usize = 64 * 1024;
@@ -83,42 +83,31 @@ pub fn send_control_request(
         .set_write_timeout(Some(SOCKET_WRITE_TIMEOUT))
         .map_err(|e| SysopError::Control(format!("set timeout: {e}")))?;
 
-    let request_json =
-        serde_json::to_vec(request).map_err(|e| SysopError::Control(format!("serialize: {e}")))?;
-    if request_json.len() > MAX_REQUEST_BYTES {
+    let request_line = serde_json::to_string(request)
+        .map_err(|e| SysopError::Control(format!("serialize: {e}")))?
+        + "\n";
+    if request_line.len() > MAX_REQUEST_BYTES {
         return Err(SysopError::Control("request too large".into()));
     }
-
-    let header = format!("{}\n", request_json.len());
     stream
-        .write_all(header.as_bytes())
-        .map_err(|e| SysopError::Control(format!("write header: {e}")))?;
+        .write_all(request_line.as_bytes())
+        .map_err(|e| SysopError::Control(format!("write request: {e}")))?;
     stream
-        .write_all(&request_json)
-        .map_err(|e| SysopError::Control(format!("write body: {e}")))?;
+        .shutdown(Shutdown::Write)
+        .map_err(|e| SysopError::Control(format!("finish request: {e}")))?;
 
     let mut reader = std::io::BufReader::new(&stream);
-    let mut header_line = String::new();
+    let mut response_line = String::new();
     let bytes_read = reader
-        .read_line(&mut header_line)
-        .map_err(|e| SysopError::Control(format!("read header: {e}")))?;
+        .read_line(&mut response_line)
+        .map_err(|e| SysopError::Control(format!("read response: {e}")))?;
     if bytes_read == 0 {
         return Err(SysopError::Control("empty response".into()));
     }
-    let response_len: usize = header_line
-        .trim()
-        .parse()
-        .map_err(|e| SysopError::Control(format!("invalid response length: {e}")))?;
-    if response_len > MAX_REQUEST_BYTES {
+    if bytes_read > MAX_REQUEST_BYTES {
         return Err(SysopError::Control("response too large".into()));
     }
-
-    let mut response_json = vec![0u8; response_len];
-    reader
-        .read_exact(&mut response_json)
-        .map_err(|e| SysopError::Control(format!("read body: {e}")))?;
-
-    let response: ControlResponse = serde_json::from_slice(&response_json)
+    let response: ControlResponse = serde_json::from_str(response_line.trim_end())
         .map_err(|e| SysopError::Control(format!("deserialize: {e}")))?;
 
     Ok(response)
@@ -128,13 +117,64 @@ pub fn is_socket_available(socket_path: &Path) -> bool {
     if !socket_path.exists() {
         return false;
     }
-    match UnixStream::connect(socket_path) {
-        Ok(mut stream) => {
-            let _ = stream.set_write_timeout(Some(CONTROL_CONNECT_TIMEOUT));
-            let ping = serde_json::to_vec(&ControlRequest::Status).unwrap_or_default();
-            let header = format!("{}\n", ping.len());
-            stream.write_all(header.as_bytes()).is_ok() && stream.write_all(&ping).is_ok()
+    matches!(
+        send_control_request(socket_path, &ControlRequest::Status),
+        Ok(ControlResponse::Status { ok: true, .. })
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::io::{BufRead, Write};
+    use std::os::unix::net::UnixListener;
+    use std::thread;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn send_control_request_uses_json_line_protocol() {
+        let dir = std::env::temp_dir().join(format!(
+            "oxidebbs-control-client-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time should be valid")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).expect("create temp dir");
+        let socket_path = dir.join(CONTROL_SOCKET_NAME);
+        let listener = UnixListener::bind(&socket_path).expect("bind test socket");
+
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept control client");
+            let mut request_line = String::new();
+            {
+                let mut reader = std::io::BufReader::new(&stream);
+                reader
+                    .read_line(&mut request_line)
+                    .expect("read request line");
+            }
+            assert_eq!(request_line, "{\"type\":\"status\"}\n");
+            stream
+                .write_all(
+                    br#"{"type":"status","ok":true,"status":{"board_name":"Test BBS","uptime_seconds":3,"node_count":2,"active_nodes":1,"audit_write_failures":0}}"#,
+                )
+                .expect("write response");
+            stream.write_all(b"\n").expect("write response newline");
+        });
+
+        let response = send_control_request(&socket_path, &ControlRequest::Status)
+            .expect("control request should succeed");
+        match response {
+            ControlResponse::Status { ok: true, status } => {
+                assert_eq!(status.board_name, "Test BBS");
+                assert_eq!(status.node_count, 2);
+                assert_eq!(status.active_nodes, 1);
+            }
+            other => panic!("unexpected response: {other:?}"),
         }
-        Err(_) => false,
+
+        server.join().expect("server thread should finish");
+        let _ = fs::remove_dir_all(dir);
     }
 }

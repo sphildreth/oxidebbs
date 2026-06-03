@@ -725,6 +725,7 @@ Optional flags:
 oxidebbs-server --config config/oxidebbs.toml sysop
 oxidebbs-server sysop --readonly
 oxidebbs-server sysop --connect-only
+oxidebbs-server sysop --theme oxide-classic
 ```
 
 ### Implementation stack
@@ -1226,6 +1227,22 @@ Visual inspiration:
 - Gray and off-white for neutral text
 - Box drawing with selective heavy borders
 - Minimal blinking; use sparingly and only for urgent alerts
+
+The implemented TUI theme registry includes these selectable presets:
+
+- `oxide-classic`: charcoal, oxide orange, green success, amber warnings.
+- `wildcat`: black/gray shell with bright cyan accents.
+- `telegard`: dark blue sysop-console palette with blue highlights.
+- `vbbs`: dark green/teal console palette.
+- `mystic`: dark violet/purple console palette.
+- `midnight`: black and charcoal palette with muted gray accents.
+- `high-contrast`: black, white, yellow, green, and red accessibility palette.
+
+Select a preset with:
+
+```bash
+oxidebbs-server sysop --theme telegard
+```
 
 Suggested semantic colors:
 

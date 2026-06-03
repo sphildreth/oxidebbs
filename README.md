@@ -162,6 +162,11 @@ cargo run -p oxidebbs-server -- ansi list
 cargo run -p oxidebbs-server -- db doctor
 ```
 
+Launch the local sysop TUI with `cargo run -p oxidebbs-server -- sysop`. The TUI
+supports selectable themes such as `oxide-classic`, `wildcat`, `telegard`,
+`vbbs`, `mystic`, `midnight`, and `high-contrast`; see
+`docs/project/sysop-tui-themes.md` for examples and palette swatches.
+
 ## Documentation site
 
 The documentation site is built with VitePress from `docs/` and deployed to
