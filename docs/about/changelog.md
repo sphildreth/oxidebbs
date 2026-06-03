@@ -47,6 +47,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The sysop TUI control client now uses the server's newline-delimited JSON
   control protocol for socket probes and node actions, avoiding repeated
   `Broken pipe` control warnings from partial availability checks.
+- The sysop TUI command palette now renders a visible overlay and F2 toggles it
+  closed, fixing the apparent freeze after opening Help with F1 and then
+  pressing F2.
+- Sysop TUI F3 now opens filter/search controls on searchable screens and shows
+  an explicit notice on screens without filtering; F5 now refreshes data with
+  visible status-bar feedback.
 - Directory-valued DecentDB paths now resolve to the default `oxidebbs.ddb`
   file inside that directory, so `database.path = "/path/to/data/"` opens
   `/path/to/data/oxidebbs.ddb` instead of trying to open the directory itself.

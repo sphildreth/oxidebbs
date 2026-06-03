@@ -8,7 +8,7 @@ use crossterm::{
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::prelude::*;
-use ratatui::widgets::ListState;
+use ratatui::widgets::{Block, Borders, Clear, ListState, Paragraph, Wrap};
 
 use oxidebbs_db::OxideDb;
 
@@ -31,7 +31,9 @@ use crate::screens::users::UsersScreen;
 use crate::services::node_service::NodeAdminService;
 use crate::theme::Theme;
 use crate::widgets::header::HeaderWidget;
-use crate::widgets::modal::{ErrorModal, ModalKind, render_modal};
+use crate::widgets::modal::{
+    ErrorModal, FormField, FormModal, InfoModal, ModalKind, centered_rect, render_modal,
+};
 use crate::widgets::nav_rail::NavRail;
 use crate::widgets::status_bar::StatusBar;
 
@@ -93,6 +95,7 @@ pub struct App {
     pub logs_screen: LogsScreen,
     pub audit_screen: AuditScreen,
     pub help_screen: HelpScreen,
+    pub status_message: Option<String>,
 }
 
 impl App {
@@ -145,6 +148,7 @@ impl App {
             logs_screen: LogsScreen::new(theme.clone(), logs_path),
             audit_screen: AuditScreen::new(theme.clone()),
             help_screen: HelpScreen::new(theme.clone()),
+            status_message: None,
         }
     }
 
@@ -285,6 +289,10 @@ impl App {
                 self.user_count = count as usize;
             }
         }
+    }
+
+    fn set_status(&mut self, message: impl Into<String>) {
+        self.status_message = Some(message.into());
     }
 
     fn delegate_event(&mut self, event: UiEvent) -> UiAction {
@@ -467,6 +475,7 @@ fn render_app(app: &mut App, frame: &mut Frame) {
                 ("Esc", "Back"),
                 ("Q", "Quit"),
             ],
+            message: app.status_message.as_deref(),
             theme: &app.theme,
         },
         main_layout[2],
@@ -475,6 +484,90 @@ fn render_app(app: &mut App, frame: &mut Frame) {
     if let Some(modal) = &app.modal {
         render_modal(modal, frame, &app.theme);
     }
+
+    if app.command_palette.visible {
+        render_command_palette(app, frame);
+    }
+}
+
+fn render_command_palette(app: &mut App, frame: &mut Frame) {
+    let area = centered_rect(64, 58, frame.area());
+    frame.render_widget(Clear, area);
+
+    let max_commands = usize::from(area.height.saturating_sub(6).max(1));
+    let selected = app
+        .command_palette
+        .selected
+        .min(app.command_palette.filtered.len().saturating_sub(1));
+    let start = selected.saturating_sub(max_commands.saturating_sub(1));
+    let end = (start + max_commands).min(app.command_palette.filtered.len());
+    let query = if app.command_palette.query.is_empty() {
+        "<type to filter>".to_string()
+    } else {
+        app.command_palette.query.clone()
+    };
+
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled("Search: ", app.theme.label_style()),
+            Span::styled(query, app.theme.normal_style()),
+        ]),
+        Line::from(""),
+    ];
+
+    if app.command_palette.filtered.is_empty() {
+        lines.push(Line::from(vec![Span::styled(
+            "No matching commands",
+            app.theme.muted_style(),
+        )]));
+    } else {
+        for (visible_row, command_index) in
+            app.command_palette.filtered[start..end].iter().enumerate()
+        {
+            let row = start + visible_row;
+            let command = &app.command_palette.commands[*command_index];
+            let marker = if row == selected { "> " } else { "  " };
+            let shortcut = command
+                .shortcut
+                .as_ref()
+                .map(|value| format!(" [{}]", value))
+                .unwrap_or_default();
+            let style = if row == selected {
+                app.theme.selected_style()
+            } else if command.is_destructive {
+                app.theme.warning_style()
+            } else {
+                app.theme.normal_style()
+            };
+            lines.push(Line::from(vec![
+                Span::styled(marker, style),
+                Span::styled(command.label.as_str(), style),
+                Span::styled(shortcut, app.theme.muted_style()),
+            ]));
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(command.description.as_str(), app.theme.muted_style()),
+            ]));
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("Enter", app.theme.label_style()),
+        Span::styled(" run  ", app.theme.muted_style()),
+        Span::styled("Esc/F2", app.theme.label_style()),
+        Span::styled(" close", app.theme.muted_style()),
+    ]));
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(app.theme.block_style(true))
+        .title(" Command Palette ")
+        .title_style(app.theme.title_style());
+    frame.render_widget(
+        Paragraph::new(lines).block(block).wrap(Wrap { trim: true }),
+        area,
+    );
 }
 
 fn handle_ui_event(app: &mut App, event: UiEvent) {
@@ -545,8 +638,18 @@ fn handle_ui_event(app: &mut App, event: UiEvent) {
     // Handle command palette
     if app.command_palette.visible {
         match event {
+            UiEvent::CommandPalette => {
+                app.command_palette.close();
+            }
             UiEvent::Cancel => {
                 app.command_palette.close();
+            }
+            UiEvent::Quit => {
+                app.command_palette.close();
+            }
+            UiEvent::Help => {
+                app.command_palette.close();
+                app.navigate_to(ScreenId::Help);
             }
             UiEvent::Confirm => {
                 if let Some(cmd) = app.command_palette.selected_command().cloned() {
@@ -608,6 +711,7 @@ fn handle_ui_event(app: &mut App, event: UiEvent) {
         }
         UiEvent::CommandPalette => {
             app.command_palette.open();
+            app.set_status("Command palette opened");
         }
         UiEvent::FocusNext => {
             app.nav_next();
@@ -620,8 +724,18 @@ fn handle_ui_event(app: &mut App, event: UiEvent) {
         }
         UiEvent::Refresh => {
             app.refresh_data();
+            app.set_status("Refreshed");
         }
-        UiEvent::Confirm | UiEvent::Cancel | UiEvent::Search => {
+        UiEvent::Search => {
+            if !open_search_for_current_screen(app) {
+                set_info_message(
+                    app,
+                    "Search",
+                    "Search/filter is available on Nodes, Users, Doors, and Audit.",
+                );
+            }
+        }
+        UiEvent::Confirm | UiEvent::Cancel => {
             let action = app.delegate_event(screen_event_for_semantic(event));
             apply_ui_action(app, action);
         }
@@ -647,8 +761,61 @@ fn apply_ui_action(app: &mut App, action: UiAction) {
         UiAction::None => {}
         UiAction::Navigate(screen) => app.navigate_to(screen),
         UiAction::OpenModal(modal) => app.modal = Some(modal),
-        UiAction::Refresh => app.refresh_data(),
+        UiAction::Refresh => {
+            app.refresh_data();
+            app.set_status("Refreshed");
+        }
         UiAction::Quit => app.should_quit = true,
+    }
+}
+
+fn open_search_for_current_screen(app: &mut App) -> bool {
+    let modal = match app.current_screen {
+        ScreenId::Nodes => Some(ModalKind::Form(FormModal {
+            title: "Filter Nodes".to_string(),
+            fields: vec![FormField {
+                label: "Filter".to_string(),
+                value: app.nodes_screen.filter.clone(),
+                is_password: false,
+            }],
+            active_field: 0,
+        })),
+        ScreenId::Users => Some(ModalKind::Form(FormModal {
+            title: "Filter Users".to_string(),
+            fields: vec![FormField {
+                label: "Filter".to_string(),
+                value: app.users_screen.filter.clone(),
+                is_password: false,
+            }],
+            active_field: 0,
+        })),
+        ScreenId::Doors => Some(ModalKind::Form(FormModal {
+            title: "Filter Doors".to_string(),
+            fields: vec![FormField {
+                label: "Filter".to_string(),
+                value: app.doors_screen.filter.clone(),
+                is_password: false,
+            }],
+            active_field: 0,
+        })),
+        ScreenId::Audit => Some(ModalKind::Form(FormModal {
+            title: "Filter Audit User".to_string(),
+            fields: vec![FormField {
+                label: "User ID".to_string(),
+                value: app.audit_screen.filter_user.clone().unwrap_or_default(),
+                is_password: false,
+            }],
+            active_field: 0,
+        })),
+        _ => None,
+    };
+
+    if let Some(modal) = modal {
+        app.modal = Some(modal);
+        app.set_status("Search/filter opened");
+        true
+    } else {
+        false
     }
 }
 
@@ -854,6 +1021,13 @@ fn set_error_message(app: &mut App, title: &str, message: &str) {
     }));
 }
 
+fn set_info_message(app: &mut App, title: &str, message: &str) {
+    app.modal = Some(ModalKind::Info(InfoModal {
+        title: title.to_string(),
+        message: message.to_string(),
+    }));
+}
+
 fn format_duration(seconds: u64) -> String {
     let hours = seconds / 3600;
     let minutes = (seconds % 3600) / 60;
@@ -871,4 +1045,101 @@ fn current_time_string() -> String {
     let minutes = (secs % 3600) / 60;
     let s = secs % 60;
     format!("{:02}:{:02}:{:02}", hours, minutes, s)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::{Terminal, backend::TestBackend};
+
+    fn rendered_text(terminal: &Terminal<TestBackend>, width: u16, height: u16) -> String {
+        let buffer = terminal.backend().buffer();
+        let mut output = String::new();
+        for row in 0..height {
+            for column in 0..width {
+                output.push_str(buffer[(column, row)].symbol());
+            }
+            if row + 1 < height {
+                output.push('\n');
+            }
+        }
+        output
+    }
+
+    #[test]
+    fn f1_then_f2_renders_visible_command_palette() {
+        let mut app = App::new(AppConfig::default());
+        handle_ui_event(&mut app, UiEvent::Help);
+        assert_eq!(app.current_screen, ScreenId::Help);
+
+        handle_ui_event(&mut app, UiEvent::CommandPalette);
+        assert!(app.command_palette.visible);
+
+        let width = 100;
+        let height = 30;
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+        terminal
+            .draw(|frame| render_app(&mut app, frame))
+            .expect("render app");
+
+        let rendered = rendered_text(&terminal, width, height);
+        assert!(rendered.contains("Command Palette"));
+        assert!(rendered.contains("Search:"));
+        assert!(rendered.contains("Go to Dashboard"));
+
+        handle_ui_event(&mut app, UiEvent::CommandPalette);
+        assert!(!app.command_palette.visible);
+    }
+
+    #[test]
+    fn f3_opens_filter_modal_on_searchable_screen() {
+        let mut app = App::new(AppConfig::default());
+        handle_ui_event(&mut app, UiEvent::NavigateTo(ScreenId::Nodes));
+
+        handle_ui_event(&mut app, UiEvent::Search);
+
+        match app.modal {
+            Some(ModalKind::Form(ref modal)) => {
+                assert_eq!(modal.title, "Filter Nodes");
+            }
+            _ => panic!("expected nodes filter modal"),
+        }
+        assert_eq!(app.status_message.as_deref(), Some("Search/filter opened"));
+    }
+
+    #[test]
+    fn f3_reports_unavailable_search_on_help_screen() {
+        let mut app = App::new(AppConfig::default());
+        handle_ui_event(&mut app, UiEvent::Help);
+
+        handle_ui_event(&mut app, UiEvent::Search);
+
+        match app.modal {
+            Some(ModalKind::Info(ref modal)) => {
+                assert_eq!(modal.title, "Search");
+                assert!(modal.message.contains("Nodes, Users, Doors, and Audit"));
+            }
+            _ => panic!("expected search information modal"),
+        }
+    }
+
+    #[test]
+    fn f5_refreshes_and_renders_status_message() {
+        let mut app = App::new(AppConfig::default());
+
+        handle_ui_event(&mut app, UiEvent::Refresh);
+
+        assert_eq!(app.status_message.as_deref(), Some("Refreshed"));
+
+        let width = 100;
+        let height = 30;
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+        terminal
+            .draw(|frame| render_app(&mut app, frame))
+            .expect("render app");
+
+        let rendered = rendered_text(&terminal, width, height);
+        assert!(rendered.contains("F5 Refresh"));
+        assert!(rendered.contains("Refreshed"));
+    }
 }
