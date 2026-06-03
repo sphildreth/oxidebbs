@@ -1,16 +1,22 @@
-use std::io::{BufRead, Write};
-use std::net::Shutdown;
-use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+#[cfg(unix)]
+use std::{
+    io::{BufRead, Write},
+    net::Shutdown,
+    os::unix::net::UnixStream,
+    time::Duration,
+};
 
 use serde::{Deserialize, Serialize};
 
 use crate::SysopError;
 
 pub const CONTROL_SOCKET_NAME: &str = "oxidebbs-control.sock";
+#[cfg(unix)]
 const SOCKET_READ_TIMEOUT: Duration = Duration::from_secs(2);
+#[cfg(unix)]
 const SOCKET_WRITE_TIMEOUT: Duration = Duration::from_secs(2);
+#[cfg(unix)]
 const MAX_REQUEST_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -70,6 +76,7 @@ pub fn control_socket_path(runtime_dir: &Path) -> PathBuf {
     runtime_dir.join(CONTROL_SOCKET_NAME)
 }
 
+#[cfg(unix)]
 pub fn send_control_request(
     socket_path: &Path,
     request: &ControlRequest,
@@ -113,6 +120,17 @@ pub fn send_control_request(
     Ok(response)
 }
 
+#[cfg(not(unix))]
+pub fn send_control_request(
+    _socket_path: &Path,
+    _request: &ControlRequest,
+) -> Result<ControlResponse, SysopError> {
+    Err(SysopError::Control(
+        "live control sockets are only supported on Unix platforms".to_string(),
+    ))
+}
+
+#[cfg(unix)]
 pub fn is_socket_available(socket_path: &Path) -> bool {
     if !socket_path.exists() {
         return false;
@@ -123,7 +141,12 @@ pub fn is_socket_available(socket_path: &Path) -> bool {
     )
 }
 
-#[cfg(test)]
+#[cfg(not(unix))]
+pub fn is_socket_available(_socket_path: &Path) -> bool {
+    false
+}
+
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::fs;
