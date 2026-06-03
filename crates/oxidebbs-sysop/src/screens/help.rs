@@ -42,13 +42,14 @@ impl HelpScreen {
             Tab     - Next panel\n\
             Enter   - Open/Confirm\n\
             Esc     - Cancel/Back\n\
-            Q       - Quit\n\n\
+            Q       - Quit/Shutdown\n\n\
             Ctrl+N  - Nodes\n\
             Ctrl+U  - Users\n\
             Ctrl+D  - Doors\n\
             Ctrl+M  - Messages\n\
             Ctrl+L  - Logs\n\
-            Ctrl+B  - Database\n",
+            Ctrl+B  - Database\n\
+            Ctrl+O  - Doctor\n",
         )
         .style(self.theme.normal_style())
         .render(area, frame.buffer_mut());

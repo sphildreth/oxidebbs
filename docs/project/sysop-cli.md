@@ -57,6 +57,25 @@ the console with destructive actions disabled:
 cargo run -p oxidebbs-server -- --config config/oxidebbs.toml sysop --readonly
 ```
 
+By default, pressing `Q` in the TUI opens a confirmation dialog before quitting.
+This helps prevent accidentally stopping the embedded `serve` runtime that
+`sysop` may have started. The behavior is controlled by:
+
+```toml
+[sysop]
+confirm_quit = true
+```
+
+To skip the routine confirmation for one launch when no callers are online, use:
+
+```bash
+cargo run -p oxidebbs-server -- --config config/oxidebbs.toml sysop --no-confirm-quit
+```
+
+If any nodes are active, the TUI always shows a stronger confirmation dialog
+with `Nodes are active. Continue to shutdown?` before it exits, even when
+`sysop.confirm_quit = false` or `--no-confirm-quit` is set.
+
 Use `--connect-only` when `sysop` should never start an embedded server:
 
 ```bash
@@ -90,6 +109,36 @@ embedded runtime started by `sysop`.
 While the TUI is active, OxideBBS keeps console logging off for that process so
 server log lines do not overwrite the terminal UI. Runtime logs still go to the
 configured file under `paths.logs` when `[logging].file_enabled` is true.
+
+### Doctor Screen
+
+The sysop TUI includes a `Doctor` menu item for verbose local health checks.
+Open it from the left navigation rail, the command palette (`F2`, then
+`Go to Doctor`), or the `Ctrl+O` shortcut.
+
+Doctor runs automatically when the screen opens. Press `R` or `F5` to rerun the
+checks, and use `Up`/`Down` or `PageUp`/`PageDown` to scroll the report. The
+summary shows total checks, passed checks, warnings, failures, the run timestamp,
+and the database path.
+
+Each check is rendered as `[PASS]`, `[WARN]`, or `[FAIL]` with a detailed result.
+Warnings and failures include a `Fix:` line with the next sysop action to take.
+The current TUI doctor checks:
+
+- configured database path, database file presence, parent directory, and
+  directory write permissions
+- open DecentDB connection and current schema version
+- required table readability and row counts for users, auth attempts, audit
+  events, message areas, messages, sessions, doors, and door runs
+- user repository readability, sysop-account presence, aliases, and security
+  levels
+- message-area availability, message visibility values, and loaded message
+  references
+- active and recent sessions, node-number validity, configured node range, and
+  duplicate active node assignments
+- door definitions, enabled doors, required door fields, door time-limit policy,
+  sampled unfinished door runs, and sampled door-run references
+- recent audit events and auth-attempt lockout state
 
 ## Logging
 

@@ -29,6 +29,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added selectable sysop TUI themes via `sysop --theme`, including
   `oxide-classic`, `wildcat`, `telegard`, `vbbs`, `mystic`, `midnight`, and
   `high-contrast`, with sysop-facing theme documentation and visual examples.
+- Added a sysop TUI `Doctor` screen with verbose pass/warn/fail checks for the
+  database path, schema, required tables, users, messages, sessions, doors,
+  audit events, auth-attempt state, and per-finding remediation text.
 
 ### Changed
 
@@ -53,6 +56,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Sysop TUI F3 now opens filter/search controls on searchable screens and shows
   an explicit notice on screens without filtering; F5 now refreshes data with
   visible status-bar feedback.
+- Sysop TUI `Q` now opens a quit confirmation dialog by default, supports
+  `[sysop].confirm_quit = false` and `sysop --no-confirm-quit` for no-caller
+  sessions, and always warns with `Nodes are active. Continue to shutdown?`
+  when active nodes are present.
 - Directory-valued DecentDB paths now resolve to the default `oxidebbs.ddb`
   file inside that directory, so `database.path = "/path/to/data/"` opens
   `/path/to/data/oxidebbs.ddb` instead of trying to open the directory itself.

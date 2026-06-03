@@ -165,7 +165,12 @@ cargo run -p oxidebbs-server -- db doctor
 Launch the local sysop TUI with `cargo run -p oxidebbs-server -- sysop`. The TUI
 supports selectable themes such as `oxide-classic`, `wildcat`, `telegard`,
 `vbbs`, `mystic`, `midnight`, and `high-contrast`; see
-`docs/project/sysop-tui-themes.md` for examples and palette swatches.
+`docs/project/sysop-tui-themes.md` for examples and palette swatches. The TUI
+also includes a `Doctor` menu item for verbose pass/warn/fail checks of the
+database path, schema, required tables, users, message areas, sessions, doors,
+audit events, and auth-attempt state. Pressing `Q` prompts for confirmation by
+default via `[sysop].confirm_quit`, and active nodes always trigger a shutdown
+confirmation warning.
 
 ## Documentation site
 

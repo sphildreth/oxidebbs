@@ -14,6 +14,7 @@ const CONTROL_SOCKET_POLL_INTERVAL: Duration = Duration::from_millis(50);
 pub async fn run_sysop_tui(
     ctx: &AppContext,
     readonly: bool,
+    confirm_quit: bool,
     connect_only: bool,
     theme_name: &str,
 ) -> CliResult<()> {
@@ -21,6 +22,7 @@ pub async fn run_sysop_tui(
     let config = AppConfig {
         config_path: ctx.config_path.clone(),
         readonly,
+        confirm_quit,
         tick_rate: std::time::Duration::from_millis(250),
         db_path: Some(ctx.config.database.path.clone()),
         logs_path: Some(ctx.config.paths.logs.clone()),

@@ -48,6 +48,9 @@ logs = "./logs"
 [nodes]
 count = 4
 
+[sysop]
+confirm_quit = true
+
 [terminal]
 default_encoding = "cp437"
 clear_screen_on_connect = true

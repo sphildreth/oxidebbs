@@ -4,6 +4,7 @@ pub mod common;
 pub mod config;
 pub mod dashboard;
 pub mod database;
+pub mod doctor;
 pub mod doors;
 pub mod help;
 pub mod logs;

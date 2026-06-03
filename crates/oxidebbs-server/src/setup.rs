@@ -190,6 +190,7 @@ struct GeneratedConfig {
     database: GeneratedDatabaseConfig,
     paths: GeneratedPathsConfig,
     nodes: GeneratedNodesConfig,
+    sysop: GeneratedSysopConfig,
     terminal: GeneratedTerminalConfig,
     flow: GeneratedFlowConfig,
     screens: BTreeMap<String, GeneratedScreenConfig>,
@@ -265,6 +266,11 @@ struct GeneratedPathsConfig {
 #[derive(Serialize)]
 struct GeneratedNodesConfig {
     count: u16,
+}
+
+#[derive(Serialize)]
+struct GeneratedSysopConfig {
+    confirm_quit: bool,
 }
 
 #[derive(Serialize)]
@@ -507,6 +513,7 @@ pub fn build_setup_toml(answers: &SetupAnswers) -> io::Result<String> {
         nodes: GeneratedNodesConfig {
             count: answers.node_count,
         },
+        sysop: GeneratedSysopConfig { confirm_quit: true },
         terminal: GeneratedTerminalConfig {
             default_encoding: "cp437".to_string(),
             clear_screen_on_connect: true,
@@ -762,6 +769,7 @@ mod tests {
         assert_eq!(parsed.auth.argon2.iterations, 2);
         assert_eq!(parsed.auth.argon2.parallelism, 1);
         assert_eq!(parsed.audit.retention_days, 365);
+        assert!(parsed.sysop.confirm_quit);
         assert!(parsed.doors.enabled);
         assert_eq!(parsed.doors.definitions.len(), 1);
         assert_eq!(parsed.doors.definitions[0].key, "oxide-check");

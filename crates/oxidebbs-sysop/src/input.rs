@@ -27,6 +27,7 @@ pub enum ScreenId {
     Ansi,
     Config,
     Database,
+    Doctor,
     Logs,
     Audit,
     Help,
@@ -43,6 +44,7 @@ impl ScreenId {
             Self::Ansi => "ANSI",
             Self::Config => "Config",
             Self::Database => "Database",
+            Self::Doctor => "Doctor",
             Self::Logs => "Logs",
             Self::Audit => "Audit",
             Self::Help => "Help",
@@ -59,6 +61,7 @@ impl ScreenId {
             Self::Ansi,
             Self::Config,
             Self::Database,
+            Self::Doctor,
             Self::Logs,
             Self::Audit,
             Self::Help,
@@ -86,6 +89,7 @@ pub fn translate_key(key: KeyEvent) -> UiEvent {
         KeyCode::Char('m' | 'M') if control => UiEvent::NavigateTo(ScreenId::Messages),
         KeyCode::Char('l' | 'L') if control => UiEvent::NavigateTo(ScreenId::Logs),
         KeyCode::Char('b' | 'B') if control => UiEvent::NavigateTo(ScreenId::Database),
+        KeyCode::Char('o' | 'O') if control => UiEvent::NavigateTo(ScreenId::Doctor),
         _ => UiEvent::Key(key),
     }
 }
@@ -103,6 +107,13 @@ mod tests {
                 KeyModifiers::CONTROL | KeyModifiers::SHIFT
             )),
             UiEvent::NavigateTo(ScreenId::Nodes)
+        );
+        assert_eq!(
+            translate_key(KeyEvent::new(
+                KeyCode::Char('O'),
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT
+            )),
+            UiEvent::NavigateTo(ScreenId::Doctor)
         );
     }
 

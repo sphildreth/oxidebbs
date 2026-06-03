@@ -46,6 +46,8 @@ pub struct OxideConfig {
     #[serde(default)]
     pub nodes: NodesConfig,
     #[serde(default)]
+    pub sysop: SysopConfig,
+    #[serde(default)]
     pub terminal: TerminalConfig,
     #[serde(default)]
     pub flow: FlowConfig,
@@ -160,6 +162,12 @@ pub struct PathsConfig {
 pub struct NodesConfig {
     #[serde(default = "default_node_count")]
     pub count: u16,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SysopConfig {
+    #[serde(default = "default_true")]
+    pub confirm_quit: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -849,6 +857,14 @@ impl Default for NodesConfig {
     }
 }
 
+impl Default for SysopConfig {
+    fn default() -> Self {
+        Self {
+            confirm_quit: default_true(),
+        }
+    }
+}
+
 impl Default for TerminalConfig {
     fn default() -> Self {
         Self {
@@ -921,8 +937,22 @@ count = 2
         assert_eq!(config.telnet.bind, "127.0.0.1:9999");
         assert_eq!(config.telnet.max_connections, 2);
         assert_eq!(config.nodes.count, 2);
+        assert!(config.sysop.confirm_quit);
         assert_eq!(config.paths.ansi, PathBuf::from("./assets/ansi"));
         assert_eq!(config.paths.screens, PathBuf::from("./assets/screens"));
+    }
+
+    #[test]
+    fn parses_sysop_tui_quit_confirmation_setting() {
+        let toml = r#"
+[board]
+name = "Test"
+
+[sysop]
+confirm_quit = false
+"#;
+        let config: OxideConfig = toml::from_str(toml).expect("parse");
+        assert!(!config.sysop.confirm_quit);
     }
 
     #[test]
@@ -967,6 +997,7 @@ name = "Minimal"
         assert_eq!(config.auth.argon2.iterations, 2);
         assert_eq!(config.auth.argon2.parallelism, 1);
         assert_eq!(config.audit.retention_days, 365);
+        assert!(config.sysop.confirm_quit);
         assert_eq!(config.logging.level, "info");
         assert!(config.logging.file_enabled);
         assert_eq!(config.logging.file_name, "oxidebbs-server.log");

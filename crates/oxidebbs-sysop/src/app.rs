@@ -22,6 +22,7 @@ use crate::screens::common::UiAction;
 use crate::screens::config::ConfigScreen;
 use crate::screens::dashboard::DashboardScreen;
 use crate::screens::database::DatabaseScreen;
+use crate::screens::doctor::DoctorScreen;
 use crate::screens::doors::DoorsScreen;
 use crate::screens::help::HelpScreen;
 use crate::screens::logs::LogsScreen;
@@ -32,7 +33,8 @@ use crate::services::node_service::NodeAdminService;
 use crate::theme::Theme;
 use crate::widgets::header::HeaderWidget;
 use crate::widgets::modal::{
-    ErrorModal, FormField, FormModal, InfoModal, ModalKind, centered_rect, render_modal,
+    ConfirmModal, ErrorModal, FormField, FormModal, InfoModal, ModalKind, centered_rect,
+    render_modal,
 };
 use crate::widgets::nav_rail::NavRail;
 use crate::widgets::status_bar::StatusBar;
@@ -40,6 +42,7 @@ use crate::widgets::status_bar::StatusBar;
 pub struct AppConfig {
     pub config_path: PathBuf,
     pub readonly: bool,
+    pub confirm_quit: bool,
     pub tick_rate: Duration,
     pub db_path: Option<PathBuf>,
     pub logs_path: Option<PathBuf>,
@@ -55,6 +58,7 @@ impl Default for AppConfig {
         Self {
             config_path: PathBuf::from("config/oxidebbs.toml"),
             readonly: false,
+            confirm_quit: true,
             tick_rate: Duration::from_millis(250),
             db_path: None,
             logs_path: None,
@@ -92,6 +96,7 @@ pub struct App {
     pub ansi_screen: AnsiScreen,
     pub config_screen: ConfigScreen,
     pub database_screen: DatabaseScreen,
+    pub doctor_screen: DoctorScreen,
     pub logs_screen: LogsScreen,
     pub audit_screen: AuditScreen,
     pub help_screen: HelpScreen,
@@ -145,6 +150,7 @@ impl App {
             ansi_screen: AnsiScreen::new(theme.clone(), screens_path),
             config_screen: ConfigScreen::new(theme.clone(), config_path),
             database_screen: DatabaseScreen::new(theme.clone(), db_path),
+            doctor_screen: DoctorScreen::new(theme.clone()),
             logs_screen: LogsScreen::new(theme.clone(), logs_path),
             audit_screen: AuditScreen::new(theme.clone()),
             help_screen: HelpScreen::new(theme.clone()),
@@ -211,6 +217,14 @@ impl App {
                 action: PaletteAction::Navigate(ScreenId::Database),
             },
             PaletteCommand {
+                id: "nav.doctor".into(),
+                label: "Go to Doctor".into(),
+                description: "Run verbose sysop health checks".into(),
+                shortcut: Some("Ctrl+O".into()),
+                is_destructive: false,
+                action: PaletteAction::Navigate(ScreenId::Doctor),
+            },
+            PaletteCommand {
                 id: "nav.audit".into(),
                 label: "Go to Audit".into(),
                 description: "View audit events".into(),
@@ -247,22 +261,23 @@ impl App {
             .position(|s| *s == screen)
             .unwrap_or(0);
         self.nav_state.select(Some(idx));
+        if screen == ScreenId::Doctor {
+            self.run_doctor();
+        }
     }
 
     pub fn nav_next(&mut self) {
         let screens = ScreenId::all();
         let current = self.nav_state.selected().unwrap_or(0);
         let next = (current + 1).min(screens.len() - 1);
-        self.nav_state.select(Some(next));
-        self.current_screen = screens[next];
+        self.navigate_to(screens[next]);
     }
 
     pub fn nav_prev(&mut self) {
         let screens = ScreenId::all();
         let current = self.nav_state.selected().unwrap_or(0);
         let prev = current.saturating_sub(1);
-        self.nav_state.select(Some(prev));
-        self.current_screen = screens[prev];
+        self.navigate_to(screens[prev]);
     }
 
     fn refresh_data(&mut self) {
@@ -295,6 +310,27 @@ impl App {
         self.status_message = Some(message.into());
     }
 
+    fn resolved_db_path(&self) -> PathBuf {
+        self.config
+            .db_path
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("data/oxidebbs.ddb"))
+    }
+
+    fn run_doctor(&mut self) {
+        let db_path = self.resolved_db_path();
+        self.doctor_screen
+            .refresh(self.db.as_ref(), Some(db_path.as_path()), self.node_count);
+        if let Some(report) = &self.doctor_screen.report {
+            self.set_status(format!(
+                "Doctor complete: {} passed, {} warnings, {} failed",
+                report.passed_count(),
+                report.warning_count(),
+                report.failed_count()
+            ));
+        }
+    }
+
     fn delegate_event(&mut self, event: UiEvent) -> UiAction {
         match self.current_screen {
             ScreenId::Dashboard => {
@@ -321,6 +357,10 @@ impl App {
             }
             ScreenId::Database => {
                 self.database_screen
+                    .handle_event(event, &self.db, self.config.readonly)
+            }
+            ScreenId::Doctor => {
+                self.doctor_screen
                     .handle_event(event, &self.db, self.config.readonly)
             }
             ScreenId::Audit => {
@@ -351,6 +391,7 @@ impl App {
             ScreenId::Ansi => self.ansi_screen.render(frame, area),
             ScreenId::Config => self.config_screen.render(frame, area),
             ScreenId::Database => self.database_screen.render(frame, area),
+            ScreenId::Doctor => self.doctor_screen.render(frame, area),
             ScreenId::Logs => self.logs_screen.render(frame, area),
             ScreenId::Audit => self.audit_screen.render(frame, area),
             ScreenId::Help => self.help_screen.render(frame, area),
@@ -395,7 +436,7 @@ pub async fn run_tui(config: AppConfig) -> Result<(), Box<dyn std::error::Error>
                 }
                 AppEvent::Resize(_, _) => {}
                 AppEvent::Quit => {
-                    app.should_quit = true;
+                    request_quit(&mut app);
                 }
                 _ => {}
             }
@@ -704,7 +745,7 @@ fn handle_ui_event(app: &mut App, event: UiEvent) {
     // Global navigation shortcuts
     match event {
         UiEvent::Quit => {
-            app.should_quit = true;
+            request_quit(app);
         }
         UiEvent::Help => {
             app.navigate_to(ScreenId::Help);
@@ -723,8 +764,7 @@ fn handle_ui_event(app: &mut App, event: UiEvent) {
             app.navigate_to(screen);
         }
         UiEvent::Refresh => {
-            app.refresh_data();
-            app.set_status("Refreshed");
+            refresh_for_current_screen(app);
         }
         UiEvent::Search => {
             if !open_search_for_current_screen(app) {
@@ -762,10 +802,49 @@ fn apply_ui_action(app: &mut App, action: UiAction) {
         UiAction::Navigate(screen) => app.navigate_to(screen),
         UiAction::OpenModal(modal) => app.modal = Some(modal),
         UiAction::Refresh => {
-            app.refresh_data();
-            app.set_status("Refreshed");
+            refresh_for_current_screen(app);
         }
         UiAction::Quit => app.should_quit = true,
+    }
+}
+
+fn request_quit(app: &mut App) {
+    app.refresh_data();
+    if app.active_nodes > 0 {
+        app.modal = Some(ModalKind::Confirm(ConfirmModal {
+            title: "Active Nodes".to_string(),
+            message: "Nodes are active. Continue to shutdown?".to_string(),
+            detail: Some(format!(
+                "{} active node(s) are currently in use. If this sysop session started an embedded server, continuing will stop it and disconnect callers.",
+                app.active_nodes
+            )),
+            confirm_label: "Shutdown".to_string(),
+            cancel_label: "Cancel".to_string(),
+        }));
+        app.set_status("Quit confirmation required: active nodes");
+    } else if app.config.confirm_quit {
+        app.modal = Some(ModalKind::Confirm(ConfirmModal {
+            title: "Quit Sysop TUI".to_string(),
+            message: "Quit the sysop TUI?".to_string(),
+            detail: Some(
+                "If this sysop session started an embedded server, quitting will stop it."
+                    .to_string(),
+            ),
+            confirm_label: "Quit".to_string(),
+            cancel_label: "Cancel".to_string(),
+        }));
+        app.set_status("Quit confirmation required");
+    } else {
+        app.should_quit = true;
+    }
+}
+
+fn refresh_for_current_screen(app: &mut App) {
+    app.refresh_data();
+    if app.current_screen == ScreenId::Doctor {
+        app.run_doctor();
+    } else {
+        app.set_status("Refreshed");
     }
 }
 
@@ -953,6 +1032,9 @@ fn handle_form_submit(app: &mut App, form: crate::widgets::modal::FormModal) {
 
 fn handle_confirm_submit(app: &mut App, title: &str) {
     match title {
+        "Quit Sysop TUI" | "Active Nodes" => {
+            app.should_quit = true;
+        }
         "Delete Message" => {
             if let Some(db) = &app.db
                 && let Some(msg_id) = app.messages_screen.selected_message_id()
@@ -1050,6 +1132,9 @@ fn current_time_string() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::{Terminal, backend::TestBackend};
 
     fn rendered_text(terminal: &Terminal<TestBackend>, width: u16, height: u16) -> String {
@@ -1141,5 +1226,135 @@ mod tests {
         let rendered = rendered_text(&terminal, width, height);
         assert!(rendered.contains("F5 Refresh"));
         assert!(rendered.contains("Refreshed"));
+    }
+
+    #[test]
+    fn q_opens_quit_confirmation_by_default() {
+        let mut app = App::new(AppConfig::default());
+
+        handle_ui_event(&mut app, UiEvent::Quit);
+
+        assert!(!app.should_quit);
+        match app.modal {
+            Some(ModalKind::Confirm(ref modal)) => {
+                assert_eq!(modal.title, "Quit Sysop TUI");
+                assert!(modal.message.contains("Quit the sysop TUI?"));
+            }
+            _ => panic!("expected quit confirmation modal"),
+        }
+        assert_eq!(
+            app.status_message.as_deref(),
+            Some("Quit confirmation required")
+        );
+    }
+
+    #[test]
+    fn q_quits_without_prompt_when_confirm_disabled_and_no_nodes_are_active() {
+        let mut app = App::new(AppConfig {
+            confirm_quit: false,
+            ..AppConfig::default()
+        });
+
+        handle_ui_event(&mut app, UiEvent::Quit);
+
+        assert!(app.should_quit);
+        assert!(app.modal.is_none());
+    }
+
+    #[test]
+    fn q_shows_active_node_warning_even_when_confirm_disabled() {
+        let mut app = App::new(AppConfig {
+            confirm_quit: false,
+            ..AppConfig::default()
+        });
+        app.active_nodes = 2;
+
+        handle_ui_event(&mut app, UiEvent::Quit);
+
+        assert!(!app.should_quit);
+        match app.modal {
+            Some(ModalKind::Confirm(ref modal)) => {
+                assert_eq!(modal.title, "Active Nodes");
+                assert_eq!(modal.message, "Nodes are active. Continue to shutdown?");
+                assert!(
+                    modal
+                        .detail
+                        .as_deref()
+                        .is_some_and(|detail| detail.contains("2 active node(s)"))
+                );
+            }
+            _ => panic!("expected active-node confirmation modal"),
+        }
+        assert_eq!(
+            app.status_message.as_deref(),
+            Some("Quit confirmation required: active nodes")
+        );
+    }
+
+    #[test]
+    fn confirming_quit_modal_sets_should_quit() {
+        let mut app = App::new(AppConfig::default());
+        handle_ui_event(&mut app, UiEvent::Quit);
+
+        handle_ui_event(&mut app, UiEvent::Confirm);
+
+        assert!(app.should_quit);
+        assert!(app.modal.is_none());
+    }
+
+    #[test]
+    fn doctor_nav_item_runs_and_renders_verbose_report() {
+        let mut app = App::new(AppConfig {
+            db_path: Some(PathBuf::from(":memory:")),
+            ..AppConfig::default()
+        });
+        app.db = Some(OxideDb::open_memory().expect("open memory database"));
+
+        handle_ui_event(&mut app, UiEvent::NavigateTo(ScreenId::Doctor));
+
+        assert_eq!(app.current_screen, ScreenId::Doctor);
+        assert!(app.doctor_screen.report.is_some());
+        assert!(
+            app.status_message
+                .as_deref()
+                .is_some_and(|message| message.starts_with("Doctor complete:"))
+        );
+
+        let width = 120;
+        let height = 40;
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+        terminal
+            .draw(|frame| render_app(&mut app, frame))
+            .expect("render app");
+
+        let rendered = rendered_text(&terminal, width, height);
+        assert!(rendered.contains("Doctor"));
+        assert!(rendered.contains("[PASS]"));
+        assert!(rendered.contains("Schema version"));
+        assert!(rendered.contains("Detail:"));
+        assert!(rendered.contains("Fix:"));
+    }
+
+    #[test]
+    fn doctor_r_key_reruns_report() {
+        let mut app = App::new(AppConfig {
+            db_path: Some(PathBuf::from(":memory:")),
+            ..AppConfig::default()
+        });
+        app.db = Some(OxideDb::open_memory().expect("open memory database"));
+        handle_ui_event(&mut app, UiEvent::NavigateTo(ScreenId::Doctor));
+        app.doctor_screen.report = None;
+
+        handle_ui_event(
+            &mut app,
+            UiEvent::Key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE)),
+        );
+
+        assert!(app.doctor_screen.report.is_some());
+        assert!(
+            app.status_message
+                .as_deref()
+                .is_some_and(|message| message.starts_with("Doctor complete:"))
+        );
     }
 }

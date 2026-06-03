@@ -163,6 +163,9 @@ enum Command {
         /// Run the sysop TUI in read-only mode
         #[arg(long)]
         readonly: bool,
+        /// Disable the routine quit confirmation prompt when no nodes are active
+        #[arg(long)]
+        no_confirm_quit: bool,
         /// Do not start an embedded server if no live control socket is reachable
         #[arg(long)]
         connect_only: bool,
@@ -232,13 +235,16 @@ pub async fn run() -> CliResult<()> {
         Command::Config { command } => run_config(command, &ctx),
         Command::Sysop {
             readonly,
+            no_confirm_quit,
             connect_only,
             theme,
             ..
         } => {
+            let confirm_quit = ctx.config.sysop.confirm_quit && !no_confirm_quit;
             run_sysop_tui(
                 &ctx,
                 readonly,
+                confirm_quit,
                 connect_only,
                 theme
                     .as_ref()
@@ -1051,6 +1057,7 @@ name = "Test BBS"
         let sysop = Command::Sysop {
             tui: false,
             readonly: false,
+            no_confirm_quit: false,
             connect_only: false,
             theme: None,
         };
@@ -1128,11 +1135,13 @@ name = "Test BBS"
             Some(Command::Sysop {
                 tui,
                 readonly,
+                no_confirm_quit,
                 connect_only,
                 theme,
                 ..
             }) => {
                 assert!(readonly);
+                assert!(!no_confirm_quit);
                 assert!(!tui);
                 assert!(!connect_only);
                 assert_eq!(theme, None);
@@ -1149,12 +1158,28 @@ name = "Test BBS"
             Some(Command::Sysop {
                 connect_only,
                 readonly,
+                no_confirm_quit,
                 theme,
                 ..
             }) => {
                 assert!(connect_only);
                 assert!(!readonly);
+                assert!(!no_confirm_quit);
                 assert_eq!(theme, None);
+            }
+            _ => panic!("expected sysop command"),
+        }
+    }
+
+    #[test]
+    fn sysop_command_accepts_no_confirm_quit_mode() {
+        let cli = Cli::parse_from(["oxidebbs", "sysop", "--no-confirm-quit"]);
+
+        match cli.command {
+            Some(Command::Sysop {
+                no_confirm_quit, ..
+            }) => {
+                assert!(no_confirm_quit);
             }
             _ => panic!("expected sysop command"),
         }
