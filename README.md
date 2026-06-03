@@ -59,7 +59,7 @@ https://github.com/sphildreth/oxidebbs
 - 🧪 **Bundled Door Fixture** - Oxide-owned `oxide-check` DOS test door for
   validating drop files, DOSEMU2 command planning, and live COM1 byte flow
   without bundling third-party doorware.
-- 🗄️ **DecentDB Persistence** - DecentDB is the only system database, with
+- 🗄️ **DecentDB Persistence** - [DecentDB](https://github.com/sphildreth/decentdb) is the only system database, with
   schema markers, migrations, users, sessions, messages, doors, audit events,
   backup/export/import, and doctor checks.
 - 🧑‍💻 **Sysop CLI And TUI** - Local CLI commands plus a Ratatui sysop console
@@ -76,6 +76,12 @@ https://github.com/sphildreth/oxidebbs
   door inside a Linux runtime image.
 - 🧱 **Modular Rust Workspace** - Focused crates for server, core domain, term,
   telnet, DecentDB repositories, doors, and local sysop tooling.
+
+## Sysop TUI
+
+<p align="center">
+    <img src="graphics/screenshots/sysop-tui-oxide-theme.png" alt="OxideBBS sysop TUI dashboard showing node map, recent events, health, and alerts" width="900" />
+</p>
 
 ## Quick Start With Docker
 
