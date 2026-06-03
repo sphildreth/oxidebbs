@@ -22,7 +22,7 @@ OxideBBS should have three admin layers over time:
 
 ```text
 v1      CLI admin commands
-v1.x    Local Ratatui sysop console
+v1.1    Local Ratatui sysop console
 v2+     Optional read-only status web dashboard, if desired
 ```
 
@@ -509,13 +509,15 @@ Editing config through commands is not essential for v1. It is enough to validat
 
 ## Local Ratatui sysop console
 
-The Ratatui console should be v1.x unless implementation momentum is very high.
+The Ratatui console shipped in v1.1.
 
 Launch command:
 
 ```bash
-oxidebbs-server sysop
+oxidebbs sysop --tui
 ```
+
+Running `oxidebbs sysop` without `--tui` still shows the text-only sysop preview.
 
 Recommended first screen:
 
@@ -534,7 +536,7 @@ Recommended first screen:
 └───────────────┴────────────────────────────────────────────────────┘
 ```
 
-### TUI v1.x screens
+### TUI v1.1 screens
 
 - Dashboard
 - Nodes
@@ -601,7 +603,6 @@ oxidebbs-server doors add
 oxidebbs-server doors edit
 oxidebbs-server ansi convert
 oxidebbs-server config set
-oxidebbs-server sysop
 ```
 
 ## Implementation recommendation
@@ -627,11 +628,11 @@ oxidebbs-server/src/commands/logs.rs
 
 ## Final recommendation
 
-For v1, build the sysop interface as:
+For v1, the sysop interface was built as:
 
 ```text
 CLI first.
-Ratatui console later.
+Ratatui console in v1.1.
 No web admin.
 No remote sysop UI until local administration is solid.
 ```
