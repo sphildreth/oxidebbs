@@ -8,6 +8,8 @@ use thiserror::Error;
 
 use oxidebbs_core::menu::{Menu, MenuAction, MenuEntry, ScreenAsset};
 
+pub const DEFAULT_DATABASE_FILE_NAME: &str = "oxidebbs.ddb";
+
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error("failed to read config file {path}: {source}")]
@@ -280,13 +282,18 @@ impl OxideConfig {
             path: path.to_path_buf(),
             source,
         })?;
-        let config: OxideConfig =
+        let mut config: OxideConfig =
             toml::from_str(&contents).map_err(|source| ConfigError::ParseFailed {
                 path: path.to_path_buf(),
                 source,
             })?;
+        config.normalize_paths();
         config.validate()?;
         Ok(config)
+    }
+
+    pub fn normalize_paths(&mut self) {
+        self.database.path = normalize_database_path(&self.database.path);
     }
 
     pub fn validate(&self) -> Result<(), ConfigError> {
@@ -554,7 +561,7 @@ fn default_idle_timeout() -> u64 {
     900
 }
 fn default_db_path() -> PathBuf {
-    PathBuf::from("./data/oxidebbs.ddb")
+    PathBuf::from("./data").join(DEFAULT_DATABASE_FILE_NAME)
 }
 fn default_ansi_path() -> PathBuf {
     PathBuf::from("./assets/ansi")
@@ -606,6 +613,20 @@ fn default_door_time_limit() -> u32 {
 }
 fn default_network_name() -> String {
     "OxideNet".into()
+}
+
+pub fn normalize_database_path(path: impl AsRef<Path>) -> PathBuf {
+    let path = path.as_ref();
+    if path.is_dir() || path_has_trailing_separator(path) {
+        path.join(DEFAULT_DATABASE_FILE_NAME)
+    } else {
+        path.to_path_buf()
+    }
+}
+
+fn path_has_trailing_separator(path: &Path) -> bool {
+    let raw = path.as_os_str().to_string_lossy();
+    raw.ends_with('/') || raw.ends_with('\\')
 }
 
 fn parse_menu_action(action: &str, target: Option<&str>) -> Result<MenuAction, ConfigError> {
@@ -835,6 +856,33 @@ name = "Minimal"
         assert_eq!(config.nodes.count, 4);
         assert_eq!(config.terminal.default_encoding, "cp437");
         assert!(!config.ftn.enabled);
+    }
+
+    #[test]
+    fn normalizes_database_directory_path_to_default_database_file() {
+        let mut dir = std::env::temp_dir();
+        dir.push(format!(
+            "oxidebbs-db-path-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time should be valid")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("create db dir");
+
+        assert_eq!(
+            normalize_database_path(&dir),
+            dir.join(DEFAULT_DATABASE_FILE_NAME)
+        );
+        assert_eq!(
+            normalize_database_path(PathBuf::from("data/")),
+            PathBuf::from("data").join(DEFAULT_DATABASE_FILE_NAME)
+        );
+
+        let explicit_file = dir.join("custom.ddb");
+        assert_eq!(normalize_database_path(&explicit_file), explicit_file);
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

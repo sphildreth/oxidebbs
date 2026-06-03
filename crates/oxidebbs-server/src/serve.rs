@@ -2326,8 +2326,16 @@ async fn send_terminal_asset(
     config: &OxideConfig,
     capabilities: TerminalCapabilities,
 ) -> ServeResult<()> {
-    let payload = load_terminal_asset_payload(config, asset_name, capabilities)
-        .unwrap_or_else(|error| fallback_screen_payload(asset_name, &error));
+    let payload =
+        load_terminal_asset_payload(config, asset_name, capabilities).unwrap_or_else(|error| {
+            report_configured_asset_load_failure(
+                "terminal asset",
+                asset_name,
+                capabilities,
+                &error,
+            );
+            fallback_screen_payload(asset_name, &error)
+        });
     transport.write_all(&payload).await?;
     Ok(())
 }
@@ -2404,10 +2412,31 @@ async fn send_screen(
     screen_key: &str,
     capabilities: &mut TerminalCapabilities,
 ) -> ServeResult<()> {
-    let payload = load_screen_payload(config, screen_key, *capabilities)
-        .unwrap_or_else(|error| fallback_screen_payload(screen_key, &error));
+    let payload = load_screen_payload(config, screen_key, *capabilities).unwrap_or_else(|error| {
+        report_configured_asset_load_failure("screen", screen_key, *capabilities, &error);
+        fallback_screen_payload(screen_key, &error)
+    });
     transport.write_all(&payload).await?;
     Ok(())
+}
+
+fn report_configured_asset_load_failure(
+    asset_kind: &str,
+    asset_name: &str,
+    capabilities: TerminalCapabilities,
+    error: &str,
+) {
+    warn!(
+        asset_kind,
+        asset = asset_name,
+        supports_ansi = capabilities.supports_ansi,
+        width = capabilities.width,
+        "failed to load configured caller asset; sending fallback text: {error}"
+    );
+    eprintln!(
+        "warning: failed to load configured {asset_kind} {asset_name:?} for terminal ansi={} width={}: {error}; sending fallback text",
+        capabilities.supports_ansi, capabilities.width
+    );
 }
 
 fn load_screen_payload(

@@ -8,6 +8,9 @@ invokes which internal action.
 Terminal welcome art should stay informational: branding, system identity, and
 status only. Command lists belong on the active menu screen whose configured
 items are being routed at that prompt.
+Login menu screens should not clear the screen after terminal welcome art has
+been sent; otherwise the welcome art is loaded successfully and then immediately
+erased before the caller can see it.
 
 ## Caller Flow
 

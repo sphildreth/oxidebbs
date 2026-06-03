@@ -24,6 +24,7 @@ export default defineConfig({
       { text: 'Architecture', link: '/project/architecture' },
       { text: 'Menus', link: '/project/menus' },
       { text: 'Caller Commands', link: '/project/caller-commands' },
+      { text: 'Security Levels', link: '/project/security-levels' },
       { text: 'Sysop CLI', link: '/project/sysop-cli' },
       { text: 'Versioning', link: '/project/versioning' },
       { text: 'Changelog', link: '/about/changelog' }
@@ -40,6 +41,7 @@ export default defineConfig({
           { text: 'Architecture', link: '/project/architecture' },
           { text: 'Menu System', link: '/project/menus' },
           { text: 'Caller Commands', link: '/project/caller-commands' },
+          { text: 'User Security Levels', link: '/project/security-levels' },
           { text: 'Sysop CLI', link: '/project/sysop-cli' },
           { text: 'Versioning', link: '/project/versioning' },
           { text: 'Deployment', link: '/project/deployment' }

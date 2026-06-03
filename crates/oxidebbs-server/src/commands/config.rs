@@ -179,9 +179,11 @@ pub(crate) fn validate_runtime(
         }
     }
     validate_runtime_directory(&config.paths.runtime, &mut issues);
+    issues.extend(validate_terminal_assets(config));
     for screen_name in config.screens.keys() {
         issues.extend(validate_screen_assets(config, screen_name));
     }
+    issues.extend(validate_menu_screen_assets(config));
     for door in config.doors.definitions.iter().filter(|door| door.enabled) {
         issues.extend(check_configured_door(door, config));
     }
@@ -212,6 +214,51 @@ fn validate_screen_assets(
                 "screen {screen_name:?} asset {} is missing",
                 path.display()
             )));
+        }
+    }
+    issues
+}
+
+fn validate_terminal_assets(config: &crate::config::OxideConfig) -> Vec<CheckIssue> {
+    [
+        ("terminal.welcome_screen", &config.terminal.welcome_screen),
+        ("terminal.logoff_screen", &config.terminal.logoff_screen),
+    ]
+    .into_iter()
+    .filter_map(|(label, asset)| {
+        let path = config.paths.ansi.join(asset);
+        if path.is_file() {
+            None
+        } else {
+            Some(CheckIssue::error(format!(
+                "{label} asset {} is missing",
+                path.display()
+            )))
+        }
+    })
+    .collect()
+}
+
+fn validate_menu_screen_assets(config: &crate::config::OxideConfig) -> Vec<CheckIssue> {
+    let mut issues = Vec::new();
+    for (menu_name, menu) in &config.menus {
+        let Some(screen) = config.screens.get(&menu.screen) else {
+            issues.push(CheckIssue::error(format!(
+                "menu {menu_name:?} references missing screen {:?}",
+                menu.screen
+            )));
+            continue;
+        };
+
+        for asset in screen_assets(screen) {
+            let path = config.paths.screens.join(asset);
+            if !path.is_file() {
+                issues.push(CheckIssue::error(format!(
+                    "menu {menu_name:?} screen {:?} asset {} is missing",
+                    menu.screen,
+                    path.display()
+                )));
+            }
         }
     }
     issues
@@ -634,6 +681,45 @@ mod tests {
                 .iter()
                 .any(|issue| issue.message == TELNET_PLAINTEXT_EXPOSURE_WARNING)
         );
+        let _ = std::fs::remove_dir_all(runtime);
+    }
+
+    #[test]
+    fn check_reports_missing_terminal_assets() {
+        let (mut config, config_path) = load_example_config_for_repo();
+        let runtime = temp_path("missing-terminal-asset-runtime");
+        config.paths.runtime = runtime.clone();
+        config.terminal.welcome_screen = "missing-welcome.ans".to_string();
+
+        let issues = validate_runtime(&config, &config_path);
+
+        assert!(issues.iter().any(|issue| {
+            issue.level == "error"
+                && issue.message.contains("terminal.welcome_screen")
+                && issue.message.contains("missing-welcome.ans")
+        }));
+        let _ = std::fs::remove_dir_all(runtime);
+    }
+
+    #[test]
+    fn check_reports_missing_menu_screen_assets_with_menu_context() {
+        let (mut config, config_path) = load_example_config_for_repo();
+        let runtime = temp_path("missing-menu-screen-asset-runtime");
+        config.paths.runtime = runtime.clone();
+        config
+            .screens
+            .get_mut("main_menu")
+            .expect("main menu screen")
+            .ansi = Some("menus/main/missing-main.ans".to_string());
+
+        let issues = validate_runtime(&config, &config_path);
+
+        assert!(issues.iter().any(|issue| {
+            issue.level == "error"
+                && issue.message.contains("menu \"main\"")
+                && issue.message.contains("screen \"main_menu\"")
+                && issue.message.contains("missing-main.ans")
+        }));
         let _ = std::fs::remove_dir_all(runtime);
     }
 

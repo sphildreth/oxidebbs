@@ -14,7 +14,7 @@ use oxidebbs_db::{
     find_user_by_alias_ci, find_user_by_id, insert_audit_event,
 };
 
-use crate::config::{DoorDefConfig, OxideConfig};
+use crate::config::{DoorDefConfig, OxideConfig, normalize_database_path};
 use crate::serve;
 
 use crate::commands::{
@@ -183,7 +183,7 @@ pub async fn run() -> CliResult<()> {
 
     let mut config = OxideConfig::load(&config_path)?;
     if let Some(data_path) = cli.data {
-        config.database.path = data_path;
+        config.database.path = normalize_database_path(data_path);
     }
 
     let ctx = AppContext {

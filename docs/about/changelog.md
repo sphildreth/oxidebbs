@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added a sysop-facing caller command reference covering current default menu
   keys, door/message prompt commands, supported menu actions, and future/reserved
   command notes.
+- Added a sysop-facing user security levels reference covering current defaults,
+  enforced message-area gates, sysop promotion behavior, and currently reserved
+  or unenforced security-level fields.
 
 ### Changed
 
@@ -28,6 +31,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Directory-valued DecentDB paths now resolve to the default `oxidebbs.ddb`
+  file inside that directory, so `database.path = "/path/to/data/"` opens
+  `/path/to/data/oxidebbs.ddb` instead of trying to open the directory itself.
+- `config check` now reports missing configured terminal welcome/logoff assets,
+  reports missing assets for each configured menu screen with menu context, and
+  `serve` now logs and prints the asset plus terminal profile whenever it falls
+  back because a configured terminal or screen asset cannot be loaded.
 - DecentDB schema initialization now uses DecentDB catalog metadata instead of
   non-DecentDB metadata SQL, preventing valid DecentDB files from failing
   OxideBBS startup or CLI commands during schema detection.
@@ -40,6 +50,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Screen and terminal assets now normalize bare line feeds to CRLF before
   sending bytes to telnet callers, preventing plain clients from rendering each
   line farther to the right.
+- Starter login ANSI screen assets no longer clear the screen after the terminal
+  welcome asset is sent, so SyncTerm and other ANSI callers can see the welcome
+  art and login menu together.
 - Stock telnet client CR-NUL line endings are now treated as line endings
   instead of leaking NUL bytes into aliases, passwords, or subsequent prompts.
 

@@ -779,8 +779,24 @@ mod tests {
         parsed.validate().expect("validate generated config");
 
         assert_default_menu_asset_contains_items(
+            include_str!("../../../assets/screens/login/login.ans"),
+            &parsed.menus["login"].items,
+        );
+        assert_default_menu_asset_contains_items(
+            include_str!("../../../assets/screens/login/login-40.ans"),
+            &parsed.menus["login"].items,
+        );
+        assert_default_menu_asset_contains_items(
             include_str!("../../../assets/screens/login/login.asc"),
             &parsed.menus["login"].items,
+        );
+        assert_default_menu_asset_contains_items(
+            include_str!("../../../assets/screens/menus/main/main.ans"),
+            &parsed.menus["main"].items,
+        );
+        assert_default_menu_asset_contains_items(
+            include_str!("../../../assets/screens/menus/main/main-40.ans"),
+            &parsed.menus["main"].items,
         );
         assert_default_menu_asset_contains_items(
             include_str!("../../../assets/screens/menus/main/main.asc"),
@@ -796,6 +812,16 @@ mod tests {
                 .iter()
                 .all(|item| item.action != "new_user"),
             "default main menu should not include registration action"
+        );
+        assert!(
+            !include_bytes!("../../../assets/screens/login/login.ans")
+                .starts_with(oxidebbs_term::CLEAR_SCREEN_AND_HOME),
+            "login ANSI asset should not clear the terminal welcome art"
+        );
+        assert!(
+            !include_bytes!("../../../assets/screens/login/login-40.ans")
+                .starts_with(oxidebbs_term::CLEAR_SCREEN_AND_HOME),
+            "40-column login ANSI asset should not clear the terminal welcome art"
         );
     }
 

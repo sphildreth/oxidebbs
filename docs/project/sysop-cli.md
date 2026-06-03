@@ -20,6 +20,9 @@ Global options:
 - `--no-color`
 - `-v, --verbose`
 
+`--data` accepts either an explicit DecentDB file path or a directory path. When
+it points at a directory, OxideBBS uses `oxidebbs.ddb` inside that directory.
+
 JSON outputs are stable objects for `--json`:
 
 - `status`
@@ -28,6 +31,11 @@ JSON outputs are stable objects for `--json`:
 - `messages areas list`
 - `doors list`
 - `db stats`
+
+User security levels are documented in
+[User Security Levels](./security-levels.md), including the current defaults,
+message-area gates, and the distinction between numeric level `255` and the
+separate `is_sysop` flag.
 
 ## Setup flow
 
@@ -64,16 +72,26 @@ The check validates:
 - config file existence/parsing
 - `telnet.bind`
 - node count
+- configured terminal welcome/logoff assets
 - configured screen paths/assets
+- configured menu screen paths/assets with menu-specific error context
 - door working directory + command + runner availability
 - drop-file format (`DOOR.SYS` or `DORINFO1.DEF`)
 - runtime directory writability
 - Unix runtime directory mode (`0700` expected for local control socket isolation)
 
-Missing optional directories and assets are surfaced as warnings; parse failures and
-invalid bind/state values are errors.
+During live serving, missing or unreadable caller assets are logged and printed
+to the `serve` console with the screen or asset name, terminal ANSI support, and
+negotiated width before fallback text is sent.
+
+Missing optional directories are surfaced as warnings; parse failures, missing
+configured assets, and invalid bind/state values are errors.
 Binding telnet beyond loopback also surfaces as a warning because telnet sends
 credentials and caller traffic without encryption.
+
+`database.path` accepts either an explicit DecentDB file path or a directory
+path. Directory paths, including paths written with a trailing slash, resolve to
+`oxidebbs.ddb` inside that directory.
 
 ## Starting `serve`
 

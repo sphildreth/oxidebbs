@@ -28,6 +28,9 @@ other than the generated config default:
 cargo run -p oxidebbs-server -- --data /srv/oxidebbs/oxidebbs.ddb setup
 ```
 
+`--data` can also point at a directory. Directory paths, including paths written
+with a trailing slash, resolve to `oxidebbs.ddb` inside that directory.
+
 The wizard asks for:
 
 - board name
@@ -53,6 +56,8 @@ Generated configs include the v1 authentication defaults: five failed attempts
 within ten minutes lock the IP or alias scope for fifteen minutes, new callers
 start at security level `10`, and Argon2id uses `memory_cost_kib = 19456`,
 `iterations = 2`, and `parallelism = 1`.
+See [User Security Levels](./security-levels.md) for the current sysop-facing
+security-level policy and enforced gates.
 Generated configs also include `[audit].retention_days = 365`; retention cleanup
 is an explicit maintenance operation, not an automatic side effect of audit
 inserts.

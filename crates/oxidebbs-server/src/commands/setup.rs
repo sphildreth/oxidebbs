@@ -8,6 +8,7 @@ use oxidebbs_db::{
     insert_message_area, insert_user,
 };
 
+use crate::config::normalize_database_path;
 use crate::setup;
 use crate::sysop_cli::{
     CliError, CliResult, current_timestamp, generated_uuid, hash_password, print_json,
@@ -63,8 +64,9 @@ pub fn run_setup_command(
 ) -> CliResult<()> {
     let mut answers = setup_answers(args.clone())?;
     if let Some(data_path) = data_override {
-        answers.database_path = data_path;
+        answers.database_path = normalize_database_path(data_path);
     }
+    answers.database_path = normalize_database_path(&answers.database_path);
     setup::run_setup_with_answers(&args.output, args.force, &answers)?;
 
     let db = OxideDb::open_or_create(&answers.database_path)?;
