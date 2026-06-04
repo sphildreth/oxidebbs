@@ -7,7 +7,7 @@ use oxidebbs_db::{
     find_network_area_by_tag_and_profile, finish_network_packet, insert_message,
     insert_network_duplicate_log, insert_network_message, insert_network_packet,
     insert_network_path_node, insert_network_seen_by_node, list_network_links,
-    list_network_messages,
+    list_network_messages, list_message_areas,
 };
 use oxidebbs_network::FtnAddress;
 use sha2::{Digest, Sha256};
@@ -237,15 +237,158 @@ impl<'db> Tosser<'db> {
         message: &PacketMessage,
     ) -> Result<TossResult, FtnError> {
         if message.area_tag.trim().is_empty() {
+            return self.process_netmail(packet_id, header, message);
+        }
+
+        self.process_echomail(packet_id, header, link, message)
+    }
+
+    fn process_netmail(
+        &self,
+        packet_id: &str,
+        header: &PacketHeader,
+        message: &PacketMessage,
+    ) -> Result<TossResult, FtnError> {
+        let origin = origin_address(header);
+        let destination = destination_address(header);
+        let local_address = profile_address(&self.profile)?;
+        if destination != local_address {
             return self.record_quarantined_network_message(
                 packet_id,
                 header,
                 message,
-                "netmail runtime delivery is not wired to a local netmail area yet",
+                "non-local netmail forwarding is not wired to the outbound route queue yet",
             );
         }
 
-        self.process_echomail(packet_id, header, link, message)
+        let Some(area) = list_message_areas(self.db)?.into_iter().find(|area| {
+            area.enabled
+                && area.kind == "netmail"
+                && area.network_id.as_deref() == Some(self.profile.id.as_str())
+        }) else {
+            return self.record_quarantined_network_message(
+                packet_id,
+                header,
+                message,
+                "no enabled local netmail area is configured for this network profile",
+            );
+        };
+
+        let parsed_body = parse_message_body(&String::from_utf8_lossy(&message.body));
+        let msgid = parsed_body.kludges.iter().find_map(|kludge| match kludge {
+            EchomailKludge::Msgid(value) => Some(value.clone()),
+            _ => None,
+        });
+        let replyid = parsed_body.kludges.iter().find_map(|kludge| match kludge {
+            EchomailKludge::Reply(value) => Some(value.clone()),
+            _ => None,
+        });
+        let display_body = parsed_body.body_lines.join("\n");
+        let created_at = current_timestamp(self.db)?;
+        let duplicate_area = format!("netmail:{destination}");
+        let duplicate = duplicate_key(
+            self.profile.id.clone(),
+            duplicate_area.clone(),
+            origin.clone(),
+            msgid.as_deref(),
+            &message.body,
+        );
+
+        if self.is_duplicate(&duplicate)? {
+            insert_network_message(
+                self.db,
+                &NetworkMessageRecord {
+                    id: generated_uuid(self.db)?,
+                    network_id: self.profile.id.clone(),
+                    local_message_id: None,
+                    message_type: "netmail".to_string(),
+                    area_tag: None,
+                    origin_address: origin.to_string(),
+                    destination_address: Some(destination.to_string()),
+                    from_name: nonblank(&message.from_user, "Unknown"),
+                    to_name: Some(nonblank(&message.to_user, "Sysop")),
+                    subject: nonblank(&message.subject, "(no subject)"),
+                    raw_text: message.body.clone(),
+                    display_body,
+                    msgid: msgid.clone(),
+                    replyid,
+                    created_at: created_at.clone(),
+                    imported_at: Some(created_at.clone()),
+                    exported_at: None,
+                    duplicate_hash: Some(duplicate.message_id.clone()),
+                    packet_id: Some(packet_id.to_string()),
+                    status: "duplicate".to_string(),
+                },
+            )?;
+            insert_network_duplicate_log(
+                self.db,
+                &NetworkDuplicateLogRecord {
+                    id: generated_uuid(self.db)?,
+                    network_id: self.profile.id.clone(),
+                    duplicate_hash: duplicate.message_id,
+                    msgid,
+                    area_tag: Some(duplicate_area),
+                    origin_address: origin.to_string(),
+                    detected_at: created_at,
+                    action: "rejected".to_string(),
+                },
+            )?;
+            return Ok(TossResult {
+                messages_duplicate: 1,
+                ..TossResult::default()
+            });
+        }
+
+        let network_message_id = generated_uuid(self.db)?;
+        let local_message_id = generated_uuid(self.db)?;
+        insert_message(
+            self.db,
+            &MessageRecord {
+                id: local_message_id.clone(),
+                area_id: area.id,
+                author_user_id: String::new(),
+                author_kind: "network".to_string(),
+                author_display_name: nonblank(&message.from_user, "Unknown"),
+                author_network_address: Some(origin.to_string()),
+                to_user_id: None,
+                subject: nonblank(&message.subject, "(no subject)"),
+                body: display_body.clone(),
+                created_at: created_at.clone(),
+                reply_to_id: None,
+                network_message_id: Some(network_message_id.clone()),
+                visibility: "normal".to_string(),
+            },
+        )?;
+        insert_network_message(
+            self.db,
+            &NetworkMessageRecord {
+                id: network_message_id,
+                network_id: self.profile.id.clone(),
+                local_message_id: Some(local_message_id),
+                message_type: "netmail".to_string(),
+                area_tag: None,
+                origin_address: origin.to_string(),
+                destination_address: Some(destination.to_string()),
+                from_name: nonblank(&message.from_user, "Unknown"),
+                to_name: Some(nonblank(&message.to_user, "Sysop")),
+                subject: nonblank(&message.subject, "(no subject)"),
+                raw_text: message.body.clone(),
+                display_body,
+                msgid,
+                replyid,
+                created_at: created_at.clone(),
+                imported_at: Some(created_at),
+                exported_at: None,
+                duplicate_hash: Some(duplicate.message_id),
+                packet_id: Some(packet_id.to_string()),
+                status: "imported".to_string(),
+            },
+        )?;
+
+        Ok(TossResult {
+            messages_imported: 1,
+            ..TossResult::default()
+        })
     }
 
     fn process_echomail(

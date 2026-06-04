@@ -10,7 +10,8 @@ pub mod scanner;
 pub mod tosser;
 
 pub use areafix::{
-    AreaFixCommand, AreaFixParseError, parse_areafix_command, parse_areafix_commands,
+    AreaFixCommand, AreaFixParseError, AreaFixProcessResult, AreaFixProcessor,
+    parse_areafix_command, parse_areafix_commands,
 };
 pub use bundle::{
     BundleClassification, BundleCreator, BundleError, BundleExtractor, BundleFormat,

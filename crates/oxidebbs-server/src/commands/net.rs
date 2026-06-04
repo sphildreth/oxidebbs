@@ -2,13 +2,15 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use clap::Subcommand;
 use serde_json::{Value as JsonValue, json};
 
 use oxidebbs_binkp::{
-    BinkpClient, BinkpClientHandshake, BinkpOutboundFile, transport_security_plan,
+    BinkpClient, BinkpClientHandshake, BinkpOutboundFile, LinkSessionRegistry,
+    transport_security_plan,
 };
 use oxidebbs_core::FtnAddress;
 use oxidebbs_db::{
@@ -32,6 +34,8 @@ use crate::sysop_cli::{
     AppContext, CliError, CliResult, audit, current_timestamp, emit_ok, generated_uuid,
     open_database, print_json,
 };
+
+static BINKP_LINK_SESSIONS: OnceLock<LinkSessionRegistry> = OnceLock::new();
 
 #[derive(Subcommand)]
 pub enum NetCommand {
@@ -466,6 +470,9 @@ fn poll_link_once(
     link: &NetworkLinkRecord,
     paths: &TosserPaths,
 ) -> CliResult<PollExecution> {
+    let _session_permit = binkp_link_sessions()
+        .try_acquire(&link.key)
+        .map_err(|error| CliError::Message(error.to_string()))?;
     let started_at = current_timestamp(db)?;
     let poll_result = execute_binkp_poll(db, profile, link, paths);
     match poll_result {
@@ -488,6 +495,10 @@ fn poll_link_once(
             Err(error)
         }
     }
+}
+
+fn binkp_link_sessions() -> &'static LinkSessionRegistry {
+    BINKP_LINK_SESSIONS.get_or_init(LinkSessionRegistry::new)
 }
 
 fn execute_binkp_poll(
