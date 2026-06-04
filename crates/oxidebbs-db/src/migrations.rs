@@ -17,6 +17,8 @@ pub fn migrate_to_current(db: &Db) -> decentdb::Result<()> {
             2 => migrate_2_to_3(db)?,
             3 => migrate_3_to_4(db)?,
             4 => migrate_4_to_5(db)?,
+            5 => migrate_5_to_6(db)?,
+            6 => migrate_6_to_7(db)?,
             unknown => {
                 return Err(DbError::sql(format!(
                     "Unsupported migration source schema version {unknown}; expected {SCHEMA_VERSION} or older known versions"
@@ -85,6 +87,161 @@ fn migrate_4_to_5(db: &Db) -> decentdb::Result<()> {
             "Cannot apply migration 4 -> 5 because schema_version marker is missing",
         )),
     }
+}
+
+fn migrate_5_to_6(db: &Db) -> decentdb::Result<()> {
+    match existing_schema_version(db)? {
+        Some(5) => {
+            run_migration_transaction(db, || {
+                rebuild_doors_for_security_level(db)?;
+                set_schema_version(db, 6)
+            })?;
+            Ok(())
+        }
+        Some(other) => Err(DbError::sql(format!(
+            "Cannot apply migration 5 -> 6 from schema version {other}"
+        ))),
+        None => Err(DbError::sql(
+            "Cannot apply migration 5 -> 6 because schema_version marker is missing",
+        )),
+    }
+}
+
+fn migrate_6_to_7(db: &Db) -> decentdb::Result<()> {
+    match existing_schema_version(db)? {
+        Some(6) => {
+            run_migration_transaction(db, || {
+                create_file_tables(db)?;
+                set_schema_version(db, 7)
+            })?;
+            Ok(())
+        }
+        Some(other) => Err(DbError::sql(format!(
+            "Cannot apply migration 6 -> 7 from schema version {other}"
+        ))),
+        None => Err(DbError::sql(
+            "Cannot apply migration 6 -> 7 because schema_version marker is missing",
+        )),
+    }
+}
+
+fn create_file_tables(db: &Db) -> decentdb::Result<()> {
+    db.execute_batch(
+        "CREATE TABLE IF NOT EXISTS file_areas (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            key TEXT NOT NULL UNIQUE CHECK (LENGTH(TRIM(key)) > 0),
+            name TEXT NOT NULL CHECK (LENGTH(TRIM(name)) > 0),
+            description TEXT NOT NULL DEFAULT '',
+            root_path TEXT NOT NULL CHECK (LENGTH(TRIM(root_path)) > 0),
+            read_security_level INT NOT NULL DEFAULT 0 CHECK (read_security_level >= 0 AND read_security_level <= 255),
+            download_security_level INT NOT NULL DEFAULT 10 CHECK (download_security_level >= 0 AND download_security_level <= 255),
+            upload_security_level INT NOT NULL DEFAULT 0 CHECK (upload_security_level >= 0 AND upload_security_level <= 255),
+            max_upload_bytes INT CHECK (max_upload_bytes IS NULL OR max_upload_bytes >= 0),
+            enabled BOOL NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS file_entries (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            area_id UUID NOT NULL REFERENCES file_areas(id) ON DELETE CASCADE,
+            storage_name TEXT NOT NULL CHECK (LENGTH(TRIM(storage_name)) > 0),
+            display_name TEXT NOT NULL CHECK (LENGTH(TRIM(display_name)) > 0),
+            original_name TEXT,
+            size_bytes INT NOT NULL DEFAULT 0 CHECK (size_bytes >= 0),
+            content_crc32 TEXT,
+            description TEXT NOT NULL DEFAULT '',
+            uploader_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+            download_count INT NOT NULL DEFAULT 0 CHECK (download_count >= 0),
+            approved BOOL NOT NULL DEFAULT FALSE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS file_transfers (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            node_number INT NOT NULL CHECK (node_number > 0),
+            user_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+            area_id UUID REFERENCES file_areas(id) ON DELETE SET NULL,
+            file_entry_id UUID REFERENCES file_entries(id) ON DELETE SET NULL,
+            direction TEXT NOT NULL CHECK (direction = 'download' OR direction = 'upload'),
+            protocol TEXT NOT NULL CHECK (protocol = 'zmodem' OR protocol = 'xmodem_crc'),
+            requested_name TEXT,
+            storage_name TEXT,
+            declared_size_bytes INT CHECK (declared_size_bytes IS NULL OR declared_size_bytes >= 0),
+            transferred_payload_bytes INT NOT NULL DEFAULT 0 CHECK (transferred_payload_bytes >= 0),
+            committed_size_bytes INT CHECK (committed_size_bytes IS NULL OR committed_size_bytes >= 0),
+            started_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            ended_at TIMESTAMPTZ,
+            duration_ms INT CHECK (duration_ms IS NULL OR duration_ms >= 0),
+            outcome TEXT NOT NULL DEFAULT 'started' CHECK (outcome = 'started' OR outcome = 'success' OR outcome = 'cancelled' OR outcome = 'failed'),
+            error_code TEXT,
+            error_message TEXT,
+            retry_count INT NOT NULL DEFAULT 0 CHECK (retry_count >= 0)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_file_entries_area_id ON file_entries (area_id);
+        CREATE INDEX IF NOT EXISTS idx_file_entries_approved ON file_entries (approved);
+        CREATE INDEX IF NOT EXISTS idx_file_transfers_user_id ON file_transfers (user_id);
+        CREATE INDEX IF NOT EXISTS idx_file_transfers_started_at ON file_transfers (started_at);",
+    )?;
+    Ok(())
+}
+
+fn rebuild_doors_for_security_level(db: &Db) -> decentdb::Result<()> {
+    db.execute_batch(
+        "ALTER TABLE doors RENAME TO oxidebbs_schema5_doors;
+         ALTER TABLE door_runs RENAME TO oxidebbs_schema5_door_runs;
+
+         DROP INDEX IF EXISTS idx_door_runs_door_id;
+         DROP INDEX IF EXISTS idx_door_runs_user_id;
+         DROP INDEX IF EXISTS idx_door_runs_started_at;
+
+         CREATE TABLE doors_v6 (
+             id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+             key TEXT NOT NULL UNIQUE CHECK (LENGTH(TRIM(key)) > 0),
+             name TEXT NOT NULL CHECK (LENGTH(TRIM(name)) > 0),
+             runner TEXT NOT NULL CHECK (LENGTH(TRIM(runner)) > 0),
+             working_dir TEXT NOT NULL CHECK (LENGTH(TRIM(working_dir)) > 0),
+             command TEXT NOT NULL CHECK (LENGTH(TRIM(command)) > 0),
+             drop_file TEXT NOT NULL CHECK (LENGTH(TRIM(drop_file)) > 0),
+             exclusive BOOL NOT NULL DEFAULT FALSE,
+             time_limit_minutes INT NOT NULL DEFAULT 30 CHECK (time_limit_minutes > 0),
+             enabled BOOL NOT NULL DEFAULT TRUE,
+             min_security_level INT NOT NULL DEFAULT 0 CHECK (min_security_level >= 0 AND min_security_level <= 255)
+         );
+
+         INSERT INTO doors_v6 (id, key, name, runner, working_dir, command, drop_file, exclusive, time_limit_minutes, enabled, min_security_level)
+         SELECT id, key, name, runner, working_dir, command, drop_file, exclusive, time_limit_minutes, enabled, 0
+         FROM oxidebbs_schema5_doors;
+
+         ALTER TABLE doors_v6 RENAME TO doors;
+
+         CREATE TABLE door_runs_v6 (
+             id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+             door_id UUID NOT NULL REFERENCES doors(id) ON DELETE RESTRICT,
+             user_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+             node_number INT NOT NULL CHECK (node_number > 0),
+             started_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+             ended_at TIMESTAMPTZ,
+             exit_code INT,
+             timed_out BOOL NOT NULL DEFAULT FALSE,
+             disconnect_forced BOOL NOT NULL DEFAULT FALSE,
+             bytes_in INT NOT NULL DEFAULT 0 CHECK (bytes_in >= 0),
+             bytes_out INT NOT NULL DEFAULT 0 CHECK (bytes_out >= 0)
+         );
+
+         INSERT INTO door_runs_v6 (id, door_id, user_id, node_number, started_at, ended_at, exit_code, timed_out, disconnect_forced, bytes_in, bytes_out)
+         SELECT id, door_id, user_id, node_number, started_at, ended_at, exit_code, timed_out, disconnect_forced, bytes_in, bytes_out
+         FROM oxidebbs_schema5_door_runs;
+
+         ALTER TABLE door_runs_v6 RENAME TO door_runs;
+
+         CREATE INDEX IF NOT EXISTS idx_door_runs_door_id ON door_runs (door_id);
+         CREATE INDEX IF NOT EXISTS idx_door_runs_user_id ON door_runs (user_id);
+         CREATE INDEX IF NOT EXISTS idx_door_runs_started_at ON door_runs (started_at);",
+    )?;
+    Ok(())
 }
 
 fn ensure_v3_tables_for_user_rebuild(db: &Db) -> decentdb::Result<()> {
@@ -835,6 +992,9 @@ mod tests {
 
         assert_eq!(schema::schema_version(&db).expect("schema before 4->5"), 4);
         migrate_4_to_5(&db).expect("apply migration 4->5");
+        assert_eq!(schema::schema_version(&db).expect("schema after 4->5"), 5);
+        migrate_5_to_6(&db).expect("apply migration 5->6");
+        migrate_6_to_7(&db).expect("apply migration 6->7");
 
         assert_eq!(
             schema::schema_version(&db).expect("schema version"),
@@ -956,5 +1116,99 @@ mod tests {
             })
             .count();
         assert_eq!(archive_count, 2);
+    }
+
+    #[test]
+    fn migration_schema_6_to_7_adds_file_tables() {
+        let path = std::env::temp_dir().join(format!(
+            "oxidebbs-migration-6-to-7-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time should be valid")
+                .as_nanos()
+        ));
+        {
+            let db = Db::open_or_create(&path, DbConfig::default()).expect("create DecentDB");
+            create_full_schema_at_version_6(&db).expect("create v6 schema");
+            assert_eq!(
+                schema::existing_schema_version(&db).expect("version"),
+                Some(6)
+            );
+        }
+        {
+            let db = Db::open_or_create(&path, DbConfig::default()).expect("reopen DecentDB");
+            assert_eq!(
+                schema::existing_schema_version(&db).expect("existing"),
+                Some(6)
+            );
+            migrate_6_to_7(&db).expect("migrate 6->7");
+            assert_eq!(
+                schema::schema_version(&db).expect("version after migration"),
+                7
+            );
+
+            let file_tables = db.list_tables().expect("list tables");
+            assert!(file_tables.iter().any(|t| t.name == "file_areas"));
+            assert!(file_tables.iter().any(|t| t.name == "file_entries"));
+            assert!(file_tables.iter().any(|t| t.name == "file_transfers"));
+        }
+        let _ = std::fs::remove_file(path);
+    }
+
+    fn create_full_schema_at_version_6(db: &Db) -> decentdb::Result<()> {
+        db.execute_batch(
+            "CREATE TABLE system_config (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE users (
+                id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+                alias TEXT NOT NULL UNIQUE CHECK (LENGTH(TRIM(alias)) > 0),
+                alias_normalized TEXT NOT NULL UNIQUE CHECK (LENGTH(TRIM(alias_normalized)) > 0),
+                real_name TEXT NOT NULL CHECK (LENGTH(TRIM(real_name)) > 0),
+                email TEXT,
+                password_hash TEXT NOT NULL,
+                security_level INT NOT NULL DEFAULT 10 CHECK (security_level >= 0 AND security_level <= 255),
+                is_sysop BOOL NOT NULL DEFAULT FALSE,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                last_login_at TIMESTAMPTZ,
+                total_calls INT NOT NULL DEFAULT 0 CHECK (total_calls >= 0),
+                time_bank_minutes INT NOT NULL DEFAULT 0 CHECK (time_bank_minutes >= 0),
+                status TEXT NOT NULL DEFAULT 'active'
+                    CHECK (status = 'active' OR status = 'locked' OR status = 'disabled')
+            );
+
+            CREATE TABLE sessions (
+                id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+                node_number INT NOT NULL CHECK (node_number > 0),
+                user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+                transport TEXT NOT NULL CHECK (transport = 'telnet'),
+                remote_address TEXT NOT NULL DEFAULT '',
+                remote_ip IPADDR,
+                remote_port INT CHECK (remote_port IS NULL OR (remote_port >= 0 AND remote_port <= 65535)),
+                started_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                ended_at TIMESTAMPTZ,
+                disconnect_reason TEXT
+            );
+
+            CREATE TABLE message_areas (
+                id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+                key TEXT NOT NULL UNIQUE CHECK (LENGTH(TRIM(key)) > 0),
+                name TEXT NOT NULL CHECK (LENGTH(TRIM(name)) > 0),
+                description TEXT NOT NULL DEFAULT '',
+                kind TEXT NOT NULL DEFAULT 'local',
+                network_id TEXT,
+                read_security_level INT NOT NULL DEFAULT 0 CHECK (read_security_level >= 0 AND read_security_level <= 255),
+                post_security_level INT NOT NULL DEFAULT 10 CHECK (post_security_level >= 0 AND post_security_level <= 255),
+                moderated BOOL NOT NULL DEFAULT FALSE,
+                enabled BOOL NOT NULL DEFAULT TRUE,
+                CHECK (kind = 'local' OR kind = 'echomail' OR kind = 'netmail')
+            );
+
+            INSERT INTO system_config (key, value) VALUES ('schema_version', '6');",
+        )?;
+        Ok(())
     }
 }

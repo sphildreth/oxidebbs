@@ -1,0 +1,10 @@
+[package]
+name = "oxidebbs-binkp"
+version = "1.2.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+tokio.workspace = true
+thiserror.workspace = true

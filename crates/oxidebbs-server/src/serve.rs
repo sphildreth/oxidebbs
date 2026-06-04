@@ -79,6 +79,7 @@ const CP437_INPUT_REJECT_LINE: &str = "This BBS only accepts CP437-compatible te
 const DUMMY_PASSWORD_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$b3hpZGViYnMtZHVtbXktYXV0aC1zYWx0$CNvsc4yCQyC6gccREXpHZ6l9604svk9VP98AyAVSMtY";
 const PROMPT_TERMINATOR: &str = "\r\n";
 const MAIN_MENU_POST_LOGIN: &str = "Please choose from the menu.\r\n";
+const ACCESS_DENIED_MESSAGE: &str = "Access denied. Return to menu.\r\n";
 const TERMINAL_CAPABILITY_NEGOTIATION_TIMEOUT: Duration = Duration::from_millis(300);
 #[cfg(unix)]
 const STALE_NODE_SWEEP_INTERVAL: Duration = Duration::from_secs(30);
@@ -545,7 +546,16 @@ async fn handle_caller(
                 );
 
                 if !in_main_menu {
-                    match current_menu.route(&key) {
+                    let route = current_menu.route(&key);
+                    if route.is_some()
+                        && let Some(entry) = current_menu.route_entry(&key)
+                        && entry.min_security_level > 0
+                    {
+                        send_text(&mut transport, ACCESS_DENIED_MESSAGE).await?;
+                        send_menu_prompt(&mut transport, &current_menu).await?;
+                        continue;
+                    }
+                    match route {
                         Some(MenuAction::Login) => {
                             debug!(node = %node_number, "caller selected login flow");
                             let mut auth_state = AuthFlowState {
@@ -643,7 +653,7 @@ async fn handle_caller(
                         Some(MenuAction::Logoff) => {
                             debug!(node = %node_number, "caller selected login-menu logoff");
                             disconnect_reason = "caller_logoff".to_string();
-                            send_text(&mut transport, "Goodbye.\r\n").await?;
+                            send_logoff_screen(&mut transport, &config, capabilities).await;
                             break;
                         }
                         Some(MenuAction::Submenu { menu_id }) => {
@@ -667,6 +677,22 @@ async fn handle_caller(
                         }
                     }
                 } else {
+                    let entry = current_menu.route_entry(&key);
+                    let user_security = authenticated_user.as_ref().map(|user| user.security_level);
+                    let denied = match (entry, user_security) {
+                        (Some(entry), Some(level)) => level < entry.min_security_level,
+                        (Some(entry), None) => entry.min_security_level > 0,
+                        (None, _) => false,
+                    };
+                    if denied {
+                        debug!(
+                            node = %node_number,
+                            "caller denied by menu item min_security_level"
+                        );
+                        send_text(&mut transport, ACCESS_DENIED_MESSAGE).await?;
+                        send_menu_prompt(&mut transport, &current_menu).await?;
+                        continue;
+                    }
                     match current_menu.route(&key) {
                         Some(MenuAction::Doors) => {
                             debug!(node = %node_number, "caller selected doors");
@@ -729,7 +755,7 @@ async fn handle_caller(
                         Some(MenuAction::Logoff) => {
                             debug!(node = %node_number, "caller selected main-menu logoff");
                             disconnect_reason = "caller_logoff".to_string();
-                            send_text(&mut transport, "Goodbye.\r\n").await?;
+                            send_logoff_screen(&mut transport, &config, capabilities).await;
                             break;
                         }
                         Some(MenuAction::ShowScreen { screen }) => {
@@ -1529,6 +1555,18 @@ async fn run_doors_flow(
             door_name = %door.name,
             "caller selected door"
         );
+
+        if user.security_level < door.min_security_level as i32 {
+            debug!(
+                node = %state.node_number,
+                user_level = user.security_level,
+                door_level = door.min_security_level,
+                door_key = %door.key,
+                "caller denied by door min_security_level"
+            );
+            send_text(transport, ACCESS_DENIED_MESSAGE).await?;
+            continue;
+        }
 
         if let Err(message) = service.validate_door(door, state.node_number) {
             warn!(
@@ -2500,6 +2538,24 @@ async fn send_terminal_asset(
         });
     transport.write_all(&payload).await?;
     Ok(())
+}
+
+async fn send_logoff_screen(
+    transport: &mut TcpTransport,
+    config: &OxideConfig,
+    capabilities: TerminalCapabilities,
+) {
+    let asset_name = &config.terminal.logoff_screen;
+    let payload =
+        load_terminal_asset_payload(config, asset_name, capabilities).unwrap_or_else(|error| {
+            warn!(
+                asset = asset_name,
+                supports_ansi = capabilities.supports_ansi,
+                "failed to load configured logoff screen; falling back to plain goodbye: {error}"
+            );
+            normalize_caller_line_endings(&encode_text("Goodbye.\r\n"))
+        });
+    let _ = transport.write_all(&payload).await;
 }
 
 fn load_terminal_asset_payload(

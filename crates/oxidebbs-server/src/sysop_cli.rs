@@ -25,9 +25,9 @@ use crate::serve;
 
 use crate::commands::{
     AnsiCommand, AuditCommand, ConfigCommand, DbCommand, DoorsCommand, LogsCommand,
-    MessagesCommand, NodesCommand, ServeArgs, SetupArgs, UsersCommand, run_ansi, run_audit,
-    run_check, run_config, run_config_set, run_db, run_doors, run_logs, run_messages, run_nodes,
-    run_serve, run_setup_command, run_status, run_sysop_tui, run_users,
+    MessagesCommand, NetCommand, NodesCommand, ServeArgs, SetupArgs, UsersCommand, run_ansi,
+    run_audit, run_check, run_config, run_config_set, run_db, run_doors, run_logs, run_messages,
+    run_net, run_nodes, run_serve, run_setup_command, run_status, run_sysop_tui, run_users,
 };
 
 pub(crate) type CliResult<T> = Result<T, CliError>;
@@ -141,6 +141,12 @@ enum Command {
         command: MessagesCommand,
     },
 
+    /// FTN network operations (mail toss, scan, poll, nodelist, areas, links)
+    Net {
+        #[command(subcommand)]
+        command: NetCommand,
+    },
+
     /// Inspect and control node/session state
     Nodes {
         #[command(subcommand)]
@@ -199,10 +205,15 @@ pub async fn run() -> CliResult<()> {
             return run_setup_command(args, cli.data, cli.json);
         }
         Command::Config {
-            command: ConfigCommand::Set { key, value },
+            command:
+                ConfigCommand::Set {
+                    key,
+                    value,
+                    dry_run,
+                },
         } => {
             init_console_logging(cli.verbose)?;
-            return run_config_set(&config_path, &key, &value, cli.json);
+            return run_config_set(&config_path, &key, &value, cli.json, dry_run);
         }
         _ => {}
     }
@@ -233,6 +244,7 @@ pub async fn run() -> CliResult<()> {
         Command::Logs { command } => run_logs(command, &ctx),
         Command::Audit { command } => run_audit(command, &ctx),
         Command::Config { command } => run_config(command, &ctx),
+        Command::Net { command } => run_net(command, &ctx),
         Command::Sysop {
             readonly,
             no_confirm_quit,
@@ -1014,8 +1026,8 @@ mod tests {
         assert_eq!(
             names,
             vec![
-                "ansi", "audit", "check", "config", "db", "doors", "logs", "messages", "nodes",
-                "serve", "setup", "status", "sysop", "users",
+                "ansi", "audit", "check", "config", "db", "doors", "logs", "messages", "net",
+                "nodes", "serve", "setup", "status", "sysop", "users",
             ]
         );
     }

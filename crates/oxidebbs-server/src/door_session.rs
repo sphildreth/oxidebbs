@@ -809,6 +809,7 @@ impl<'a> DoorService<'a> {
             exclusive: door.exclusive,
             time_limit_minutes: i64::from(door.time_limit_minutes),
             enabled: self.config.doors.enabled && door.enabled,
+            min_security_level: i64::from(door.min_security_level),
         }
     }
 }
@@ -1351,6 +1352,7 @@ fn door_to_core(door: &DoorDefinitionRecord) -> ServeResult<DoorDefinition> {
             ServeError::Runtime(format!("door time limit is out of range: {error}"))
         })?,
         enabled: door.enabled,
+        min_security_level: door.min_security_level as i32,
     })
 }
 
@@ -1484,8 +1486,9 @@ mod tests {
     use super::*;
     use crate::config::{
         AuditConfig, AuthConfig, BoardConfig, DatabaseConfig, DoorDefConfig, DoorsConfig,
-        FlowConfig, FtnConfig, LoggingConfig, MenuConfig, NetworkConfig, NodesConfig, PathsConfig,
-        ScreenConfig, SysopConfig, TelnetConfig, TerminalConfig,
+        FileTransfersConfig, FlowConfig, FtnConfig, LoggingConfig, MenuConfig, NetworkConfig,
+        NodesConfig, PathsConfig, ScreenConfig, SerialConfig, SysopConfig, TelnetConfig,
+        TerminalConfig,
     };
 
     const USER_ID: &str = "00000000-0000-4000-8000-000000000701";
@@ -1547,10 +1550,13 @@ mod tests {
                     exclusive: false,
                     time_limit_minutes: 1,
                     enabled: true,
+                    min_security_level: 0,
                 }],
             },
             network: NetworkConfig::default(),
             ftn: FtnConfig::default(),
+            serial: SerialConfig::default(),
+            file_transfers: FileTransfersConfig::default(),
         }
     }
 
@@ -1617,6 +1623,7 @@ mod tests {
             exclusive: false,
             time_limit_minutes: 1,
             enabled: true,
+            min_security_level: 0,
         };
         let doors = vec![door];
         let menu = render_door_menu(&doors);
@@ -1649,6 +1656,7 @@ mod tests {
             exclusive: false,
             time_limit_minutes: 1,
             enabled: true,
+            min_security_level: 0,
         };
         let mut user = test_user();
         user.id = "not-a-uuid".to_string();

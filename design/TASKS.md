@@ -15,24 +15,24 @@ re-opening scope decisions.
 | Phase | Title | Status |
 | --- | --- | --- |
 | P0 | Scope freeze and ADR baseline | Complete |
-| P1 | Release hygiene and stale-future sweep | Active |
-| P2 | Schema, config, and DbWriter foundation | Planned |
-| P3 | Caller authorization and flow polish | Planned |
-| P4 | Serial/modem transport and file transfers | Planned |
-| P5 | Door ecosystem expansion | Planned |
-| P6 | Database maintenance operations | Planned |
-| P7 | Sysop CLI completion | Planned |
-| P8 | Sysop TUI completion | Planned |
-| P9 | Shared network foundation | Planned |
-| P10 | Legacy FTN packet and message engine | Planned |
-| P11 | FTN toss, scan, and bundles | Planned |
-| P12 | FTN routing, nodelist, and AreaFix | Planned |
-| P13 | BinkP transport | Planned |
-| P14 | FTN operations, hardening, and docs | Planned |
-| P15 | OxideNet implementation | Planned |
-| P16 | Remote admin and status surface | Planned |
-| P17 | Repository and release automation | Planned |
-| P18 | Final integration and release readiness | Planned |
+| P1 | Release hygiene and stale-future sweep | Complete |
+| P2 | Schema, config, and DbWriter foundation | Complete |
+| P3 | Caller authorization and flow polish | Complete |
+| P4 | Serial/modem transport and file transfers | Complete |
+| P5 | Door ecosystem expansion | Complete |
+| P6 | Database maintenance operations | Complete |
+| P7 | Sysop CLI completion | Complete |
+| P8 | Sysop TUI completion | Complete |
+| P9 | Shared network foundation | Complete |
+| P10 | Legacy FTN packet and message engine | Complete |
+| P11 | FTN toss, scan, and bundles | Complete |
+| P12 | FTN routing, nodelist, and AreaFix | Complete |
+| P13 | BinkP transport | Complete |
+| P14 | FTN operations, hardening, and docs | Complete |
+| P15 | OxideNet implementation | Complete |
+| P16 | Remote admin and status surface | Complete |
+| P17 | Repository and release automation | Complete |
+| P18 | Final integration and release readiness | Complete |
 
 ## v1.1.0 Release Readiness
 
@@ -75,26 +75,27 @@ should use [`design/RELEASE_v1_2_PLAN.md`](./RELEASE_v1_2_PLAN.md) for active
 scope decisions rather than re-scoping items from this historical list.
 
 The following items were intentionally deferred from `v1.1.0` according to the
-recommended decisions in `design/RELEASE_v1_1_PLAN.md`:
+recommended decisions in `design/RELEASE_v1_1_PLAN.md`. All items were completed
+in v1.2.
 
-- [ ] Menu-level `min_security_level` enforcement for caller menu routing.
-- [ ] Caller-side `S` / Sysop command or sysop submenu.
-- [ ] CLI/TUI door add/edit workflows that mutate door definitions.
-- [ ] Additional door drop-file formats such as `CHAIN.TXT`, `DOORFILE.SR`,
+- [x] Menu-level `min_security_level` enforcement for caller menu routing.
+- [x] Caller-side `S` / Sysop command or sysop submenu.
+- [x] CLI/TUI door add/edit workflows that mutate door definitions.
+- [x] Additional door drop-file formats such as `CHAIN.TXT`, `DOORFILE.SR`,
   Wildcat variants, and PCBoard variants.
-- [ ] `db compact`, pending a safe DecentDB compaction API contract.
-- [ ] Audit retention purge CLI wrapper.
-- [ ] Dedicated logoff screen rendering from `terminal.logoff_screen`.
-- [ ] DbWriter service for high-contention write scaling.
-- [ ] Physical serial/modem caller transport.
-- [ ] Caller file-area transfers: ZMODEM primary and XMODEM-CRC fallback.
-- [ ] Full FTN implementation, including packet parser/writer, tosser, scanner,
+- [x] `db compact`, pending a safe DecentDB compaction API contract.
+- [x] Audit retention purge CLI wrapper.
+- [x] Dedicated logoff screen rendering from `terminal.logoff_screen`.
+- [x] DbWriter service for high-contention write scaling.
+- [x] Physical serial/modem caller transport.
+- [x] Caller file-area transfers: ZMODEM primary and XMODEM-CRC fallback.
+- [x] Full FTN implementation, including packet parser/writer, tosser, scanner,
   bundles, nodelist, duplicate detection, netmail routing, AreaFix, required
   BinkP transport for FTN/FidoNet mail exchange, and operational CLI.
-- [ ] OxideNet implementation beyond the current foundation/design work.
-- [ ] Remote web admin or status dashboard with a full security model.
-- [ ] Native door API and remote door-provider integrations.
-- [ ] Codeberg mirror automation.
+- [x] OxideNet implementation beyond the current foundation/design work.
+- [x] Remote web admin or status dashboard with a full security model.
+- [x] Native door API and remote door-provider integrations.
+- [x] Codeberg mirror automation.
 
 ## Future Backlog
 

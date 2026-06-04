@@ -12,6 +12,8 @@ pub struct DoorDefinition {
     pub exclusive: bool,
     pub time_limit_minutes: u32,
     pub enabled: bool,
+    #[serde(default)]
+    pub min_security_level: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

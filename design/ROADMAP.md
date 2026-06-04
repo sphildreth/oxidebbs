@@ -100,16 +100,17 @@
   containment, audit/CP437 policy, caller I/O performance, message query
   performance, and low-risk load-test notes.
 
-## Future
+## v1.2 Deferred Scope (Completed)
 
-The following items were previous future work that is now scoped into the
-active v1.2 deferred-scope release. See
-[`design/RELEASE_v1_2_PLAN.md`](./RELEASE_v1_2_PLAN.md) for the full phase map.
+The following items were previously listed as future scope. All items have been
+completed in the v1.2 deferred-scope release per
+[`design/RELEASE_v1_2_PLAN.md`](./RELEASE_v1_2_PLAN.md) and
+[ADR 0018](./adr/0018-v1-2-completes-deferred-scope.md).
 
-- Physical serial/modem transport
-- BinkP polling for FTN/FidoNet mail exchange
-- Full FTN tosser/scanner
-- OxideNet network support
-- Caller file-area transfers: ZMODEM primary and XMODEM-CRC fallback
-- Dedicated logoff screen rendering
-- DbWriter service if write contention emerges
+- [x] Physical serial/modem transport
+- [x] BinkP polling for FTN/FidoNet mail exchange
+- [x] Full FTN tosser/scanner
+- [x] OxideNet network support
+- [x] Caller file-area transfers: ZMODEM primary and XMODEM-CRC fallback
+- [x] Dedicated logoff screen rendering
+- [x] DbWriter service if write contention emerges

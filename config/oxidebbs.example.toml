@@ -88,6 +88,13 @@ ascii = "menus/main/main.asc"
 text = "menus/main/main.txt"
 pause = false
 
+[screens.sysop_menu]
+ansi = "menus/sysop/sysop.ans"
+ansi_40 = "menus/sysop/sysop-40.ans"
+ascii = "menus/sysop/sysop.asc"
+text = "menus/sysop/sysop.txt"
+pause = false
+
 [menus.main]
 screen = "main_menu"
 prompt = "Command? "
@@ -122,6 +129,33 @@ label = "Messages"
 action = "messages"
 
 [[menus.main.items]]
+key = "G"
+label = "Goodbye"
+action = "logoff"
+
+[[menus.main.items]]
+key = "S"
+label = "Sysop"
+action = "submenu"
+target = "sysop"
+min_security_level = 255
+
+[menus.sysop]
+screen = "sysop_menu"
+prompt = "Sysop? "
+
+[[menus.sysop.items]]
+key = "N"
+label = "Node Status"
+action = "noop"
+
+[[menus.sysop.items]]
+key = "R"
+label = "Return to main"
+action = "submenu"
+target = "main"
+
+[[menus.sysop.items]]
 key = "G"
 label = "Goodbye"
 action = "logoff"
@@ -167,3 +201,16 @@ enabled = false
 compression = "zip"
 transport_security = "plaintext_legacy"
 legacy_compatible = true
+
+[serial]
+enabled = false
+
+[[serial.devices]]
+name = "modem"
+path = "/dev/ttyUSB0"
+baud_rate = 115200
+flow_control = "rtscts"
+
+[file_transfers]
+enabled = false
+max_upload_bytes = 1048576

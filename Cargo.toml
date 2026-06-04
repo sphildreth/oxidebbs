@@ -9,6 +9,10 @@ members = [
     "crates/oxidebbs-door",
     "crates/oxidebbs-sysop",
     "crates/oxidebbs-network",
+    "crates/oxidebbs-transfer",
+    "crates/oxidebbs-ftn",
+    "crates/oxidebbs-binkp",
+    "crates/oxidebbs-oxidenet",
 ]
 
 [workspace.package]

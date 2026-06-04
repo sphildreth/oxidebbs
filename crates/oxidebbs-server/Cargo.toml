@@ -12,6 +12,7 @@ oxidebbs-telnet = { path = "../oxidebbs-telnet" }
 oxidebbs-db = { path = "../oxidebbs-db" }
 oxidebbs-door = { path = "../oxidebbs-door" }
 oxidebbs-sysop = { path = "../oxidebbs-sysop" }
+oxidebbs-ftn = { path = "../oxidebbs-ftn" }
 argon2.workspace = true
 clap.workspace = true
 rand_core.workspace = true

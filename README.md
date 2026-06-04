@@ -241,7 +241,12 @@ Useful docs:
 │   ├── oxidebbs-telnet/     # telnet transport and negotiation
 │   ├── oxidebbs-db/         # DecentDB repository layer and schema helpers
 │   ├── oxidebbs-door/       # door metadata, drop files, runners
-│   └── oxidebbs-sysop/      # local Ratatui sysop console and services
+│   ├── oxidebbs-sysop/      # local Ratatui sysop console and services
+│   ├── oxidebbs-transfer/   # file-transfer protocols (ZMODEM, XMODEM-CRC)
+│   ├── oxidebbs-network/    # shared network protocol types and tables
+│   ├── oxidebbs-ftn/        # legacy FTN packet engine and tosser/scanner
+│   ├── oxidebbs-binkp/      # BinkP client/server for FTN/OxideNet transport
+│   └── oxidebbs-oxidenet/   # OxideNet first-party network profile
 ├── assets/                  # bundled ANSI, ASCII, text, and screen assets
 ├── config/                  # example board and door configuration
 ├── design/                  # specs, roadmap, ADRs, and architecture notes
@@ -274,18 +279,17 @@ update the relevant design docs and ADRs.
 
 ## Current Boundaries
 
-- Telnet is the supported caller transport for the v1 release line.
+- Telnet and serial/modem are both supported caller transports as of v1.2.
 - DecentDB is the only system database.
 - Remote caller UI is ANSI/CP437 byte-oriented, not Unicode-first.
 - Ratatui is used only for the local sysop console, not caller screens.
 - Physical modem/serial support, BinkP polling for FTN/FidoNet mail exchange,
   full FTN/OxideNet runtime, caller file-area transfer support, and other
-  previously-deferred features are now scoped into the active v1.2 release.
+  previously-deferred features are now complete in v1.2.
   See [`design/RELEASE_v1_2_PLAN.md`](design/RELEASE_v1_2_PLAN.md) for the
-  full deferred-scope roadmap.
-- Future caller file-transfer scope is ZMODEM as the primary protocol,
-  XMODEM-CRC as the fallback protocol, and no YMODEM/XMODEM-1k support unless a
-  later ADR changes scope.
+  full deferred-scope implementation map.
+- Caller file-transfer uses ZMODEM as the primary protocol with XMODEM-CRC as
+  the fallback protocol.
 - Public telnet exposure is an operator decision. Telnet sends credentials and
   caller traffic in plaintext; the generated config binds to `127.0.0.1:2323`
   by default.

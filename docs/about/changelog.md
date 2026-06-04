@@ -5,6 +5,19 @@ All notable changes to OxideBBS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Menu-level `min_security_level` enforcement for caller menu routing.
+- Per-door `min_security_level` enforcement at door selection time.
+- Caller sysop submenu with `min_security_level = 255` in the default example config.
+- Dedicated logoff screen rendering from `terminal.logoff_screen` configuration.
+
+### Changed
+- Schema version bumped to 6 to add `min_security_level` column on the `doors` table.
+- Menu items and door definitions now carry `min_security_level` (defaults to 0).
+- The caller menu and door dispatch enforce security levels before executing actions.
+
 ## [1.1.0] - 2026-06-03
 
 ### Added

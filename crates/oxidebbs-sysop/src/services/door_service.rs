@@ -1,8 +1,8 @@
 use crate::SysopError;
 use crate::services::audit_service::AuditService;
 use oxidebbs_db::{
-    Db, DoorDefinitionRecord, DoorRunRecord, find_door_by_key, list_door_definitions,
-    list_door_runs, update_door_enabled,
+    Db, DoorDefinitionRecord, DoorRunRecord, find_door_by_key, insert_door_definition,
+    list_door_definitions, list_door_runs, update_door_definition, update_door_enabled,
 };
 use oxidebbs_door::parse_doors_toml;
 
@@ -42,6 +42,30 @@ impl DoorAdminService {
         Ok(())
     }
 
+    pub fn insert_door(db: &Db, door: &DoorDefinitionRecord) -> Result<(), SysopError> {
+        insert_door_definition(db, door)?;
+        AuditService::record(
+            db,
+            "door_inserted",
+            None,
+            None,
+            &format!("door={} name={}", door.key, door.name),
+        )?;
+        Ok(())
+    }
+
+    pub fn update_door(db: &Db, door: &DoorDefinitionRecord) -> Result<(), SysopError> {
+        update_door_definition(db, door)?;
+        AuditService::record(
+            db,
+            "door_updated",
+            None,
+            None,
+            &format!("door={} name={}", door.key, door.name),
+        )?;
+        Ok(())
+    }
+
     pub fn check_config(contents: &str) -> Result<(usize, usize), SysopError> {
         let definitions = parse_doors_toml(contents)?;
         let enabled = definitions.iter().filter(|d| d.enabled).count();
@@ -70,6 +94,7 @@ mod tests {
             exclusive: false,
             time_limit_minutes: 30,
             enabled: true,
+            min_security_level: 0,
         }
     }
 

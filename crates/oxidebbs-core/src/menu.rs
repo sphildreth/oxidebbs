@@ -19,6 +19,8 @@ pub struct MenuEntry {
     pub key: String,
     pub label: String,
     pub action: MenuAction,
+    #[serde(default)]
+    pub min_security_level: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -51,11 +53,16 @@ pub enum MenuError {
 impl Menu {
     /// Returns an action for a pressed key, matching ASCII keys case-insensitively.
     pub fn route(&self, pressed_key: &str) -> Option<MenuAction> {
+        self.route_entry(pressed_key)
+            .map(|entry| entry.action.clone())
+    }
+
+    /// Returns the full entry for a pressed key, including min_security_level.
+    pub fn route_entry(&self, pressed_key: &str) -> Option<&MenuEntry> {
         let normalized = normalize_key(pressed_key)?;
         self.entries
             .iter()
             .find(|entry| normalize_key(&entry.key) == Some(normalized))
-            .map(|entry| entry.action.clone())
     }
 
     /// Validates that menu entries use unique hotkeys after ASCII case normalization.
@@ -111,11 +118,13 @@ mod tests {
                     key: "D".to_string(),
                     label: "Doors".to_string(),
                     action: MenuAction::Doors,
+                    min_security_level: 0,
                 },
                 MenuEntry {
                     key: "L".to_string(),
                     label: "Logoff".to_string(),
                     action: MenuAction::Logoff,
+                    min_security_level: 0,
                 },
                 MenuEntry {
                     key: "S".to_string(),
@@ -125,6 +134,7 @@ mod tests {
                             asset: "ansi/show.ans".to_string(),
                         },
                     },
+                    min_security_level: 0,
                 },
             ],
         }
@@ -162,11 +172,13 @@ mod tests {
                     key: "D".to_string(),
                     label: "Doors".to_string(),
                     action: MenuAction::Doors,
+                    min_security_level: 0,
                 },
                 MenuEntry {
                     key: "d".to_string(),
                     label: "Different doors".to_string(),
                     action: MenuAction::Messages,
+                    min_security_level: 0,
                 },
             ],
             pre_menu_screens: vec![],
@@ -199,5 +211,50 @@ mod tests {
                 }
             })
         );
+    }
+
+    #[test]
+    fn route_entry_returns_full_entry_with_security_level() {
+        let menu = Menu {
+            id: "main".to_string(),
+            title: "Main menu".to_string(),
+            description: None,
+            screen: ScreenAsset {
+                asset: "screens/menus/main/main.ans".to_string(),
+            },
+            pre_menu_screens: vec![],
+            entries: vec![
+                MenuEntry {
+                    key: "D".to_string(),
+                    label: "Doors".to_string(),
+                    action: MenuAction::Doors,
+                    min_security_level: 10,
+                },
+                MenuEntry {
+                    key: "M".to_string(),
+                    label: "Messages".to_string(),
+                    action: MenuAction::Messages,
+                    min_security_level: 0,
+                },
+                MenuEntry {
+                    key: "S".to_string(),
+                    label: "Sysop".to_string(),
+                    action: MenuAction::Submenu {
+                        menu_id: "sysop".to_string(),
+                    },
+                    min_security_level: 255,
+                },
+            ],
+        };
+
+        let entry = menu.route_entry("D").unwrap();
+        assert_eq!(entry.min_security_level, 10);
+        assert_eq!(entry.action, MenuAction::Doors);
+
+        let entry = menu.route_entry("s").unwrap();
+        assert_eq!(entry.min_security_level, 255);
+        assert!(matches!(entry.action, MenuAction::Submenu { .. }));
+
+        assert!(menu.route_entry("Z").is_none());
     }
 }

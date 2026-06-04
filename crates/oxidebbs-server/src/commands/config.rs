@@ -19,8 +19,15 @@ pub enum ConfigCommand {
     Show,
     Check,
     Paths,
-    Get { key: String },
-    Set { key: String, value: String },
+    Get {
+        key: String,
+    },
+    Set {
+        key: String,
+        value: String,
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 pub fn run_config(command: ConfigCommand, ctx: &AppContext) -> CliResult<()> {
@@ -71,7 +78,11 @@ pub fn run_config(command: ConfigCommand, ctx: &AppContext) -> CliResult<()> {
             }
             Ok(())
         }
-        ConfigCommand::Set { .. } => unreachable!("config set is handled before config load"),
+        ConfigCommand::Set {
+            key,
+            value,
+            dry_run,
+        } => run_config_set(&ctx.config_path, &key, &value, ctx.json, dry_run),
     }
 }
 
@@ -524,16 +535,102 @@ pub fn run_config_set(
     key: &str,
     raw_value: &str,
     json_output: bool,
+    dry_run: bool,
 ) -> CliResult<()> {
+    let allowed_keys = [
+        "board.name",
+        "board.tagline",
+        "board.sysop_name",
+        "terminal.welcome_screen",
+        "terminal.logoff_screen",
+        "auth.new_user_security_level",
+        "nodes.count",
+        "telnet.idle_timeout_seconds",
+    ];
+    if !allowed_keys.contains(&key) {
+        let allowed = allowed_keys.join(", ");
+        return Err(CliError::Message(format!(
+            "config set for key {key:?} is not supported. allowed keys: {allowed}"
+        )));
+    }
+
     let raw = std::fs::read_to_string(config_path)?;
     let mut parsed: toml::Value = toml::from_str(&raw)?;
-    set_toml_path(&mut parsed, key, infer_toml_value(raw_value))?;
+
+    let old_value = get_toml_path(&parsed, key);
+    let new_toml = infer_toml_value(raw_value);
+
+    let old_str = old_value
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "<absent>".to_string());
+    let new_str = new_toml.to_string();
+
+    let config = crate::config::OxideConfig::load(config_path)?;
+    let mut next = config.clone();
+    match key {
+        "board.name" => next.board.name = raw_value.to_string(),
+        "board.tagline" => next.board.tagline = raw_value.to_string(),
+        "board.sysop_name" => next.board.sysop_name = raw_value.to_string(),
+        "terminal.welcome_screen" => next.terminal.welcome_screen = raw_value.to_string(),
+        "terminal.logoff_screen" => next.terminal.logoff_screen = raw_value.to_string(),
+        "auth.new_user_security_level" => {
+            next.auth.new_user_security_level = raw_value
+                .parse::<i32>()
+                .map_err(|e| CliError::Message(format!("invalid integer: {e}")))?;
+        }
+        "nodes.count" => {
+            next.nodes.count = raw_value
+                .parse::<u16>()
+                .map_err(|e| CliError::Message(format!("invalid integer: {e}")))?;
+        }
+        "telnet.idle_timeout_seconds" => {
+            next.telnet.idle_timeout_seconds = raw_value
+                .parse::<u64>()
+                .map_err(|e| CliError::Message(format!("invalid integer: {e}")))?;
+        }
+        _ => {}
+    }
+
+    next.validate()
+        .map_err(|e| CliError::Message(e.to_string()))?;
+
+    if dry_run {
+        if json_output {
+            print_json(&serde_json::json!({
+                "ok": true,
+                "dry_run": true,
+                "key": key,
+                "old": old_str,
+                "new": new_str,
+                "backup_path": config_path.with_extension("toml.TIMESTAMP").display().to_string(),
+            }))?;
+        } else {
+            println!(
+                "[dry-run] would set {} from {:?} to {:?}",
+                key, old_str, new_str
+            );
+            println!(
+                "[dry-run] backup would be saved to {}.TIMESTAMP",
+                config_path.display()
+            );
+        }
+        return Ok(());
+    }
+
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let backup_path = config_path.with_extension(format!("toml.{timestamp}"));
+    std::fs::copy(config_path, &backup_path)?;
+    set_toml_path(&mut parsed, key, new_toml)?;
     let updated = toml::to_string_pretty(&parsed)?;
     std::fs::write(config_path, updated)?;
+
     emit_ok(
         json_output,
         "configuration updated",
-        serde_json::json!({"key": key}),
+        serde_json::json!({"key": key, "old": old_str, "new": new_str, "backup": backup_path.display().to_string()}),
     )
 }
 

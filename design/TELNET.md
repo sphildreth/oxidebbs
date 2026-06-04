@@ -6,7 +6,7 @@ Provide stable telnet access for classic BBS clients, especially
 SyncTERM-style clients, while keeping ordinary command-line telnet sessions
 readable.
 
-Telnet is the only remote transport for v1. Serial/modem support is deferred.
+Telnet is the only remote transport for v1. Serial/modem support is available since v1.2.
 
 ## Required Capabilities
 

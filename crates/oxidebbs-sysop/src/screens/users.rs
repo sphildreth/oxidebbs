@@ -8,7 +8,7 @@ use crate::screens::common::UiAction;
 use crate::services::user_service::UserAdminService;
 use crate::theme::Theme;
 use crate::widgets::modal::{ConfirmModal, FormField, FormModal, ModalKind};
-use oxidebbs_db::{OxideDb, UserRecord};
+use oxidebbs_db::{AuditEventRecord, OxideDb, UserRecord};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UserSort {
@@ -18,20 +18,39 @@ pub enum UserSort {
     LastLogin,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UserDetailView {
+    Detail,
+    Audit,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UserEditField {
+    Alias,
+    RealName,
+    SecurityLevel,
+    IsSysop,
+    Status,
+}
+
 pub struct UsersScreen {
     pub theme: Theme,
     pub users: Vec<UserRecord>,
     pub table_state: TableState,
     pub filter: String,
     pub sort: UserSort,
-    pub detail_user: Option<String>, // user id
+    pub detail_user: Option<String>,
     pub pending_action: Option<UserPendingAction>,
+    pub detail_view: UserDetailView,
+    pub audit_history: Vec<AuditEventRecord>,
+    pub edit_field: Option<UserEditField>,
+    pub edit_value: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UserPendingAction {
     ResetPassword { user_id: String },
-    SetSecurityLevel { user_id: String },
+    SetSecurityLevel { user_id: String, level: i64 },
     ToggleStatus { user_id: String, new_status: String },
     ToggleSysop { user_id: String, new_sysop: bool },
 }
@@ -48,6 +67,10 @@ impl UsersScreen {
             sort: UserSort::Alias,
             detail_user: None,
             pending_action: None,
+            detail_view: UserDetailView::Detail,
+            audit_history: Vec::new(),
+            edit_field: None,
+            edit_value: String::new(),
         }
     }
 
@@ -98,6 +121,10 @@ impl UsersScreen {
         db: &Option<OxideDb>,
         readonly: bool,
     ) -> UiAction {
+        if self.edit_field.is_some() {
+            return self.handle_edit_field_event(event, readonly);
+        }
+
         if self.detail_user.is_some() {
             return self.handle_detail_event(event, db, readonly);
         }
@@ -122,6 +149,8 @@ impl UsersScreen {
                 KeyCode::Enter => {
                     if let Some(id) = self.selected_user_id() {
                         self.detail_user = Some(id);
+                        self.detail_view = UserDetailView::Detail;
+                        self.audit_history.clear();
                     }
                 }
                 KeyCode::Char('f') | KeyCode::Char('/') => {
@@ -299,8 +328,10 @@ impl UsersScreen {
             UserPendingAction::ToggleSysop { user_id, new_sysop } => {
                 UserAdminService::set_sysop(db.db(), &user_id, new_sysop)
             }
-            UserPendingAction::ResetPassword { .. }
-            | UserPendingAction::SetSecurityLevel { .. } => Ok(()),
+            UserPendingAction::SetSecurityLevel { user_id, level } => {
+                UserAdminService::set_security_level(db.db(), &user_id, level)
+            }
+            UserPendingAction::ResetPassword { .. } => Ok(()),
         }
     }
 
@@ -308,22 +339,186 @@ impl UsersScreen {
         self.pending_action = None;
     }
 
-    fn handle_detail_event(
-        &mut self,
-        event: UiEvent,
-        _db: &Option<OxideDb>,
-        _readonly: bool,
-    ) -> UiAction {
+    fn handle_edit_field_event(&mut self, event: UiEvent, _readonly: bool) -> UiAction {
         match event {
-            UiEvent::Key(key) if key.code == KeyCode::Esc => {
-                self.detail_user = None;
-            }
+            UiEvent::Key(key) => match key.code {
+                KeyCode::Esc => {
+                    self.edit_field = None;
+                    self.edit_value.clear();
+                }
+                KeyCode::Enter => {
+                    let field = self.edit_field.take();
+                    let value = std::mem::take(&mut self.edit_value);
+                    if let Some(field) = field
+                        && let Some(ref user_id) = self.detail_user
+                    {
+                        return self.apply_edit_field(
+                            field,
+                            user_id.clone(),
+                            value.trim().to_string(),
+                        );
+                    }
+                }
+                KeyCode::Backspace => {
+                    self.edit_value.pop();
+                }
+                KeyCode::Char(c) => {
+                    self.edit_value.push(c);
+                }
+                _ => {}
+            },
             UiEvent::Cancel => {
-                self.detail_user = None;
+                self.edit_field = None;
+                self.edit_value.clear();
             }
             _ => {}
         }
         UiAction::None
+    }
+
+    fn apply_edit_field(
+        &mut self,
+        field: UserEditField,
+        user_id: String,
+        value: String,
+    ) -> UiAction {
+        match field {
+            UserEditField::SecurityLevel => {
+                if let Ok(level) = value.parse::<i64>() {
+                    self.pending_action =
+                        Some(UserPendingAction::SetSecurityLevel { user_id, level });
+                    return UiAction::OpenModal(ModalKind::Confirm(ConfirmModal {
+                        title: "Update Security Level".to_string(),
+                        message: format!("Set security level to {level}?"),
+                        detail: None,
+                        confirm_label: "Update".to_string(),
+                        cancel_label: "Cancel".to_string(),
+                    }));
+                }
+                UiAction::None
+            }
+            UserEditField::IsSysop => {
+                let new_sysop = value.eq_ignore_ascii_case("yes")
+                    || value.eq_ignore_ascii_case("true")
+                    || value.eq_ignore_ascii_case("y");
+                let user_alias = self
+                    .users
+                    .iter()
+                    .find(|u| u.id == user_id)
+                    .map(|u| u.alias.as_str())
+                    .unwrap_or("user");
+                self.pending_action = Some(UserPendingAction::ToggleSysop { user_id, new_sysop });
+                UiAction::OpenModal(ModalKind::Confirm(ConfirmModal {
+                    title: if new_sysop {
+                        "Grant Sysop".to_string()
+                    } else {
+                        "Revoke Sysop".to_string()
+                    },
+                    message: format!(
+                        "{} sysop privileges for {user_alias}?",
+                        if new_sysop { "Grant" } else { "Revoke" },
+                    ),
+                    detail: None,
+                    confirm_label: "Confirm".to_string(),
+                    cancel_label: "Cancel".to_string(),
+                }))
+            }
+            UserEditField::Status => {
+                let status = value.to_ascii_lowercase();
+                if matches!(status.as_str(), "active" | "locked" | "disabled") {
+                    let verb = if status == "disabled" {
+                        "Disable"
+                    } else {
+                        "Enable"
+                    };
+                    self.pending_action = Some(UserPendingAction::ToggleStatus {
+                        user_id,
+                        new_status: status.clone(),
+                    });
+                    return UiAction::OpenModal(ModalKind::Confirm(ConfirmModal {
+                        title: format!("Set Status to {status}"),
+                        message: format!("{verb} this user?"),
+                        detail: None,
+                        confirm_label: "Confirm".to_string(),
+                        cancel_label: "Cancel".to_string(),
+                    }));
+                }
+                UiAction::None
+            }
+            UserEditField::Alias | UserEditField::RealName => UiAction::None,
+        }
+    }
+
+    fn handle_detail_event(
+        &mut self,
+        event: UiEvent,
+        db: &Option<OxideDb>,
+        readonly: bool,
+    ) -> UiAction {
+        match event {
+            UiEvent::Key(key) if key.code == KeyCode::Esc => {
+                self.close_detail();
+            }
+            UiEvent::Key(key) if key.code == KeyCode::Char('a') => {
+                if let Some(ref user_id) = self.detail_user
+                    && let Some(db) = db
+                {
+                    self.audit_history =
+                        UserAdminService::view_user_audit_history(db.db(), user_id, 50)
+                            .unwrap_or_default();
+                    self.detail_view = UserDetailView::Audit;
+                }
+            }
+            UiEvent::Key(key) if key.code == KeyCode::Char('d') => {
+                self.detail_view = UserDetailView::Detail;
+            }
+            UiEvent::Key(key) if key.code == KeyCode::Char('e') && !readonly => {
+                if let Some(ref user_id) = self.detail_user
+                    && let Some(user) = self.users.iter().find(|u| &u.id == user_id)
+                    && key.modifiers == crossterm::event::KeyModifiers::NONE
+                {
+                    self.edit_field = Some(UserEditField::SecurityLevel);
+                    self.edit_value = user.security_level.to_string();
+                }
+            }
+            UiEvent::Key(key) if key.code == KeyCode::Char('l') && !readonly => {
+                if let Some(ref user_id) = self.detail_user
+                    && let Some(user) = self.users.iter().find(|u| &u.id == user_id)
+                {
+                    self.edit_field = Some(UserEditField::SecurityLevel);
+                    self.edit_value = user.security_level.to_string();
+                }
+            }
+            UiEvent::Key(key) if key.code == KeyCode::Char('s') && !readonly => {
+                if let Some(ref user_id) = self.detail_user
+                    && let Some(user) = self.users.iter().find(|u| &u.id == user_id)
+                {
+                    self.edit_field = Some(UserEditField::IsSysop);
+                    self.edit_value = if user.is_sysop {
+                        "No".to_string()
+                    } else {
+                        "Yes".to_string()
+                    };
+                }
+            }
+            UiEvent::Key(key) if key.code == KeyCode::Char('t') && !readonly => {
+                self.edit_field = Some(UserEditField::Status);
+                self.edit_value = String::new();
+            }
+            UiEvent::Cancel => {
+                self.close_detail();
+            }
+            _ => {}
+        }
+        UiAction::None
+    }
+
+    fn close_detail(&mut self) {
+        self.detail_user = None;
+        self.detail_view = UserDetailView::Detail;
+        self.audit_history.clear();
+        self.edit_field = None;
+        self.edit_value.clear();
     }
 
     fn handle_pending_action(
@@ -345,6 +540,9 @@ impl UsersScreen {
                         UserPendingAction::ToggleSysop { user_id, new_sysop } => {
                             let _ = UserAdminService::set_sysop(db.db(), &user_id, new_sysop);
                         }
+                        UserPendingAction::SetSecurityLevel { user_id, level } => {
+                            let _ = UserAdminService::set_security_level(db.db(), &user_id, level);
+                        }
                         _ => {}
                     }
                 }
@@ -363,7 +561,14 @@ impl UsersScreen {
 
     pub fn render(&self, frame: &mut Frame, area: Rect) {
         if let Some(ref user_id) = self.detail_user {
-            self.render_detail(frame, area, user_id);
+            if self.edit_field.is_some() {
+                self.render_edit_field(frame, area);
+            } else {
+                match self.detail_view {
+                    UserDetailView::Detail => self.render_detail(frame, area, user_id),
+                    UserDetailView::Audit => self.render_audit_history(frame, area),
+                }
+            }
             return;
         }
 
@@ -513,6 +718,11 @@ impl UsersScreen {
             lines.push(Line::from("User not found."));
         }
 
+        let main_layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(5), Constraint::Length(3)])
+            .split(area);
+
         Paragraph::new(lines)
             .style(self.theme.normal_style())
             .block(
@@ -520,6 +730,110 @@ impl UsersScreen {
                     .borders(Borders::ALL)
                     .border_style(self.theme.block_style(true))
                     .title(" User Detail ")
+                    .title_style(self.theme.title_style()),
+            )
+            .render(main_layout[0], frame.buffer_mut());
+
+        let hints = "Esc Back | A Audit History | L Edit Security | S Toggle Sysop | T Edit Status";
+        Paragraph::new(hints)
+            .style(self.theme.muted_style())
+            .block(Block::default().borders(Borders::ALL))
+            .render(main_layout[1], frame.buffer_mut());
+    }
+
+    fn render_audit_history(&self, frame: &mut Frame, area: Rect) {
+        let user = self
+            .detail_user
+            .as_ref()
+            .and_then(|id| self.users.iter().find(|u| &u.id == id));
+
+        let title = user
+            .map(|u| format!(" Audit History: {} ", u.alias))
+            .unwrap_or_else(|| " Audit History ".to_string());
+
+        let header = Row::new(vec!["Type", "Details", "Created"])
+            .style(self.theme.label_style())
+            .height(1);
+
+        let rows: Vec<Row> = self
+            .audit_history
+            .iter()
+            .map(|e| {
+                Row::new(vec![
+                    e.event_type.clone(),
+                    e.details.clone(),
+                    e.created_at.clone(),
+                ])
+                .style(self.theme.normal_style())
+            })
+            .collect();
+
+        let widths = [
+            Constraint::Length(26),
+            Constraint::Min(20),
+            Constraint::Length(26),
+        ];
+
+        let main_layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(5), Constraint::Length(3)])
+            .split(area);
+
+        ratatui::prelude::StatefulWidget::render(
+            Table::new(rows, widths).header(header).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(self.theme.block_style(true))
+                    .title(title)
+                    .title_style(self.theme.title_style()),
+            ),
+            main_layout[0],
+            frame.buffer_mut(),
+            &mut TableState::default(),
+        );
+
+        let hints = "Esc Back | D User Detail";
+        Paragraph::new(hints)
+            .style(self.theme.muted_style())
+            .block(Block::default().borders(Borders::ALL))
+            .render(main_layout[1], frame.buffer_mut());
+    }
+
+    fn render_edit_field(&self, frame: &mut Frame, area: Rect) {
+        let label = match self.edit_field {
+            Some(UserEditField::SecurityLevel) => "Security Level",
+            Some(UserEditField::IsSysop) => "Sysop (Yes/No)",
+            Some(UserEditField::Status) => "Status (active/locked/disabled)",
+            Some(UserEditField::Alias) => "Alias",
+            Some(UserEditField::RealName) => "Real Name",
+            None => "Edit",
+        };
+
+        let display_value = if self.edit_value.is_empty() {
+            "<enter value>".to_string()
+        } else {
+            self.edit_value.clone()
+        };
+
+        let lines = vec![
+            Line::from(vec![
+                Span::styled("Field: ", self.theme.label_style()),
+                Span::styled(label, self.theme.normal_style()),
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("> ", self.theme.selected_style()),
+                Span::styled(&display_value, self.theme.normal_style()),
+            ]),
+        ];
+
+        Paragraph::new(lines)
+            .style(self.theme.normal_style())
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(self.theme.block_style(true))
+                    .title(" Edit Field ")
                     .title_style(self.theme.title_style()),
             )
             .render(area, frame.buffer_mut());

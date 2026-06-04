@@ -44,17 +44,13 @@ sysop. `users demote-sysop` clears the sysop flag, but it does not lower the
 numeric security level. Run `users set-level` after demotion when the account
 should also lose level `255`.
 
-## Not Enforced Today
+## Enforced Since v1.2
 
-These areas do not currently use user security levels:
+These areas now use user security levels since v1.2:
 
-- Door launching from the caller `Doors` menu
-- Caller menu routing
-- Local sysop CLI authorization
-
-The menu item config model includes `min_security_level`, but the current caller
-runtime does not enforce that field. Treat it as reserved until menu-level
-security filtering is implemented and documented.
+- Door launching from the caller `Doors` menu: if `min_security_level` is set on a door definition, callers with lower security levels are denied access. The effective door launch level is the maximum of the invoking menu item level and the door definition level.
+- Caller menu routing: menu items with `min_security_level` above the authenticated user's level are rejected with an access-denied message. Unauthenticated callers are denied any menu item with `min_security_level > 0`.
+- The starter main menu includes a `S` Sysop submenu entry gated with `min_security_level = 255`, accessible only to sysop-level callers.
 
 The local sysop CLI is controlled by local machine access, config path/database
 access, and the Unix control socket boundary. It is not a remote caller privilege

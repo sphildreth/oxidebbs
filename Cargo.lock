@@ -1115,10 +1115,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
+name = "oxidebbs-binkp"
+version = "1.2.0"
+dependencies = [
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "oxidebbs-core"
 version = "1.1.0"
 dependencies = [
  "oxidebbs-network",
+ "oxidebbs-transfer",
  "serde",
  "thiserror 2.0.18",
 ]
@@ -1141,9 +1150,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxidebbs-ftn"
+version = "1.2.0"
+dependencies = [
+ "oxidebbs-network",
+ "serde",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "oxidebbs-network"
 version = "1.1.0"
 dependencies = [
+ "serde",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "oxidebbs-oxidenet"
+version = "1.2.0"
+dependencies = [
+ "oxidebbs-network",
  "serde",
  "thiserror 2.0.18",
 ]
@@ -1158,6 +1185,7 @@ dependencies = [
  "oxidebbs-core",
  "oxidebbs-db",
  "oxidebbs-door",
+ "oxidebbs-ftn",
  "oxidebbs-sysop",
  "oxidebbs-telnet",
  "oxidebbs-term",
@@ -1203,6 +1231,13 @@ dependencies = [
 [[package]]
 name = "oxidebbs-term"
 version = "1.1.0"
+
+[[package]]
+name = "oxidebbs-transfer"
+version = "1.1.0"
+dependencies = [
+ "thiserror 2.0.18",
+]
 
 [[package]]
 name = "parking_lot"

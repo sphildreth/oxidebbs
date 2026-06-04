@@ -1076,16 +1076,23 @@ fn handle_confirm_submit(app: &mut App, title: &str) {
                 }
             }
         }
-        "Enable User" | "Disable User" | "Grant Sysop" | "Revoke Sysop" => {
-            match app.users_screen.confirm_pending_action(&app.db) {
+        "Enable User"
+        | "Disable User"
+        | "Grant Sysop"
+        | "Revoke Sysop"
+        | "Set Status to active"
+        | "Set Status to locked"
+        | "Set Status to disabled"
+        | "Update Security Level" => match app.users_screen.confirm_pending_action(&app.db) {
+            Ok(()) => app.refresh_data(),
+            Err(error) => set_error(app, title, error),
+        },
+        "Enable Door" | "Disable Door" | "Add Door" | "Update Door" => {
+            match app.doors_screen.confirm_pending_action(&app.db) {
                 Ok(()) => app.refresh_data(),
                 Err(error) => set_error(app, title, error),
             }
         }
-        "Enable Door" | "Disable Door" => match app.doors_screen.confirm_pending_action(&app.db) {
-            Ok(()) => app.refresh_data(),
-            Err(error) => set_error(app, title, error),
-        },
         _ => {}
     }
 }

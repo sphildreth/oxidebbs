@@ -7,5 +7,6 @@ authors.workspace = true
 
 [dependencies]
 oxidebbs-network = { path = "../oxidebbs-network" }
+oxidebbs-transfer = { path = "../oxidebbs-transfer" }
 serde.workspace = true
 thiserror.workspace = true

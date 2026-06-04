@@ -1,5 +1,6 @@
 //! Door definitions, drop files, and runners.
 
+use std::collections::HashMap;
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -216,6 +217,70 @@ pub fn render_dorinfo1_def(board_name: &str, sysop_name: &str, caller: &DoorCall
         + "\r\n"
 }
 
+pub fn render_chain_txt(_caller: &DoorCaller, node_number: u16, baud_rate: u32) -> String {
+    format!("{} {} COM1\r\n", node_number, baud_rate)
+}
+
+pub fn render_doorfile_sr(
+    caller: &DoorCaller,
+    node_number: u16,
+    baud_rate: u32,
+    board_name: &str,
+    sysop_name: &str,
+) -> String {
+    [
+        board_name.to_string(),
+        sysop_name.to_string(),
+        "COM1".to_string(),
+        baud_rate.to_string(),
+        "8N1".to_string(),
+        node_number.to_string(),
+        caller.alias.clone(),
+        caller.real_name.clone(),
+        caller.location.clone(),
+        caller.security_level.to_string(),
+        caller.minutes_remaining.to_string(),
+        "N".to_string(),
+        "0".to_string(),
+    ]
+    .join("\r\n")
+        + "\r\n"
+}
+
+pub fn render_pcboard_sys(
+    caller: &DoorCaller,
+    node_number: u16,
+    baud_rate: u32,
+    board_name: &str,
+) -> String {
+    [
+        board_name.to_string(),
+        caller.alias.clone(),
+        caller.real_name.clone(),
+        "COM1".to_string(),
+        baud_rate.to_string(),
+        "8N1".to_string(),
+        node_number.to_string(),
+        caller.security_level.to_string(),
+        caller.minutes_remaining.to_string(),
+    ]
+    .join("\r\n")
+        + "\r\n"
+}
+
+pub fn render_callinfo_bbs(caller: &DoorCaller, node_number: u16, baud_rate: u32) -> String {
+    [
+        caller.alias.clone(),
+        node_number.to_string(),
+        baud_rate.to_string(),
+        "COM1".to_string(),
+        "Y".to_string(),
+        caller.location.clone(),
+    ]
+    .join("\r\n")
+        + "\r\n"
+}
+
 pub fn prepare_door_run(request: &DoorRunRequest) -> Result<DoorRunPlan, DoorError> {
     fs::create_dir_all(&request.runtime_dir)?;
     let drop_file_path = request.runtime_dir.join(&request.door.drop_file);
@@ -223,6 +288,21 @@ pub fn prepare_door_run(request: &DoorRunRequest) -> Result<DoorRunPlan, DoorErr
         "DORINFO1.DEF" => {
             render_dorinfo1_def(&request.board_name, &request.sysop_name, &request.caller)
         }
+        "CHAIN.TXT" => render_chain_txt(&request.caller, request.node_number, 38_400),
+        "DOORFILE.SR" => render_doorfile_sr(
+            &request.caller,
+            request.node_number,
+            38_400,
+            &request.board_name,
+            &request.sysop_name,
+        ),
+        "PCBOARD.SYS" => render_pcboard_sys(
+            &request.caller,
+            request.node_number,
+            38_400,
+            &request.board_name,
+        ),
+        "CALLINFO.BBS" => render_callinfo_bbs(&request.caller, request.node_number, 38_400),
         _ => render_door_sys(&request.caller, request.node_number, 38_400),
     };
     fs::write(&drop_file_path, drop_contents)?;
@@ -405,6 +485,37 @@ fn default_enabled() -> bool {
     true
 }
 
+pub trait RemoteDoorProvider: Send + Sync {
+    fn validate_config(&self) -> Result<(), DoorError>;
+
+    fn dry_run_session(&self, caller: &DoorCaller) -> Result<DoorRunResult, DoorError>;
+}
+
+#[derive(Default)]
+pub struct ProviderRegistry {
+    providers: HashMap<String, Box<dyn RemoteDoorProvider>>,
+}
+
+impl ProviderRegistry {
+    pub fn new() -> Self {
+        Self {
+            providers: HashMap::new(),
+        }
+    }
+
+    pub fn register(&mut self, name: impl Into<String>, provider: Box<dyn RemoteDoorProvider>) {
+        self.providers.insert(name.into(), provider);
+    }
+
+    pub fn get(&self, name: &str) -> Option<&dyn RemoteDoorProvider> {
+        self.providers.get(name).map(Box::as_ref)
+    }
+
+    pub fn names(&self) -> Vec<&str> {
+        self.providers.keys().map(String::as_str).collect()
+    }
+}
+
 impl DoorConfigFile {
     fn into_definitions(self) -> Result<Vec<DoorDefinition>, DoorError> {
         self.definitions
@@ -436,6 +547,7 @@ impl DoorConfigDefinition {
             exclusive: self.exclusive,
             time_limit_minutes: self.time_limit_minutes,
             enabled: self.enabled,
+            min_security_level: 0,
         })
     }
 }
@@ -470,6 +582,7 @@ mod tests {
             exclusive: false,
             time_limit_minutes: 1,
             enabled: true,
+            min_security_level: 0,
         }
     }
 
@@ -782,6 +895,84 @@ command = "LORD.EXE"
         DryRunDoorRunner.run(&request).expect("dry run");
 
         assert!(runtime_dir.join("DOOR.SYS").is_file());
+
+        cleanup_node_runtime_dir(&base).expect("cleanup");
+    }
+
+    #[test]
+    fn renders_chain_txt_with_caller_context() {
+        let contents = render_chain_txt(&caller(), 3, 38_400);
+        assert_eq!(contents, "3 38400 COM1\r\n");
+    }
+
+    #[test]
+    fn renders_doorfile_sr_with_caller_context() {
+        let contents = render_doorfile_sr(&caller(), 1, 38_400, "Oxide", "Sysop");
+        assert!(contents.starts_with("Oxide\r\nSysop\r\n"));
+        assert!(contents.contains("Alice\r\nAlice Sysop\r\n"));
+        assert!(contents.ends_with("\r\n"));
+    }
+
+    #[test]
+    fn renders_pcboard_sys_with_caller_context() {
+        let contents = render_pcboard_sys(&caller(), 2, 57_600, "Oxide");
+        assert!(contents.starts_with("Oxide\r\nAlice\r\n"));
+        assert!(contents.contains("57600\r\n"));
+    }
+
+    #[test]
+    fn renders_callinfo_bbs_with_caller_context() {
+        let contents = render_callinfo_bbs(&caller(), 1, 38_400);
+        assert!(contents.starts_with("Alice\r\n1\r\n38400\r\n"));
+        assert!(contents.contains("Y\r\n"));
+        assert!(contents.ends_with("Localhost\r\n"));
+    }
+
+    #[test]
+    fn provider_registry_registers_and_retrieves_providers() {
+        struct StubProvider;
+
+        impl RemoteDoorProvider for StubProvider {
+            fn validate_config(&self) -> Result<(), DoorError> {
+                Ok(())
+            }
+
+            fn dry_run_session(&self, _caller: &DoorCaller) -> Result<DoorRunResult, DoorError> {
+                Ok(DoorRunResult {
+                    exit_code: Some(0),
+                    timed_out: false,
+                })
+            }
+        }
+
+        let mut registry = ProviderRegistry::new();
+        registry.register("stub", Box::new(StubProvider));
+
+        assert!(registry.get("stub").is_some());
+        assert!(registry.get("missing").is_none());
+        assert_eq!(registry.names(), vec!["stub"]);
+    }
+
+    #[test]
+    fn prepare_door_run_writes_chain_txt() {
+        let base = temp_path("runtime-chain");
+        let runtime_dir = prepare_node_runtime_dir(&base, 1).expect("runtime");
+        let working_dir = base.join("door-files");
+        write_command_fixture(&working_dir, "LORD.EXE");
+        let request = DoorRunRequest {
+            door: door_with_working_dir("CHAIN.TXT", &working_dir),
+            caller: caller(),
+            board_name: "Test Board".to_string(),
+            sysop_name: "Test Sysop".to_string(),
+            node_number: 3,
+            runtime_dir: runtime_dir.clone(),
+        };
+
+        DryRunDoorRunner.run(&request).expect("dry run");
+
+        let drop_file = fs::read_to_string(runtime_dir.join("CHAIN.TXT")).expect("drop file");
+        assert!(drop_file.starts_with("3 "));
+        assert!(drop_file.contains("COM1\r\n"));
 
         cleanup_node_runtime_dir(&base).expect("cleanup");
     }

@@ -12,6 +12,7 @@ pub struct DoorDefinitionRecord {
     pub exclusive: bool,
     pub time_limit_minutes: i64,
     pub enabled: bool,
+    pub min_security_level: i64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -41,8 +42,8 @@ pub struct DoorRunFinish {
 
 pub fn insert_door_definition(db: &Db, door: &DoorDefinitionRecord) -> decentdb::Result<()> {
     db.execute_with_params(
-        "INSERT INTO doors (id, key, name, runner, working_dir, command, drop_file, exclusive, time_limit_minutes, enabled)
-         VALUES (UUID_PARSE($1), $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+        "INSERT INTO doors (id, key, name, runner, working_dir, command, drop_file, exclusive, time_limit_minutes, enabled, min_security_level)
+         VALUES (UUID_PARSE($1), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
         &[
             Value::Text(door.id.clone()),
             Value::Text(door.key.clone()),
@@ -54,6 +55,7 @@ pub fn insert_door_definition(db: &Db, door: &DoorDefinitionRecord) -> decentdb:
             Value::Bool(door.exclusive),
             Value::Int64(door.time_limit_minutes),
             Value::Bool(door.enabled),
+            Value::Int64(door.min_security_level),
         ],
     )?;
     Ok(())
@@ -61,7 +63,7 @@ pub fn insert_door_definition(db: &Db, door: &DoorDefinitionRecord) -> decentdb:
 
 pub fn list_door_definitions(db: &Db) -> decentdb::Result<Vec<DoorDefinitionRecord>> {
     let result = db.execute(
-        "SELECT UUID_TO_STRING(id), key, name, runner, working_dir, command, drop_file, exclusive, time_limit_minutes, enabled
+        "SELECT UUID_TO_STRING(id), key, name, runner, working_dir, command, drop_file, exclusive, time_limit_minutes, enabled, min_security_level
          FROM doors ORDER BY key",
     )?;
     Ok(result.rows().iter().map(row_to_door).collect())
@@ -69,7 +71,7 @@ pub fn list_door_definitions(db: &Db) -> decentdb::Result<Vec<DoorDefinitionReco
 
 pub fn find_door_by_key(db: &Db, key: &str) -> decentdb::Result<Option<DoorDefinitionRecord>> {
     let result = db.execute_with_params(
-        "SELECT UUID_TO_STRING(id), key, name, runner, working_dir, command, drop_file, exclusive, time_limit_minutes, enabled
+        "SELECT UUID_TO_STRING(id), key, name, runner, working_dir, command, drop_file, exclusive, time_limit_minutes, enabled, min_security_level
          FROM doors WHERE key = $1",
         &[Value::Text(key.to_string())],
     )?;
@@ -87,8 +89,8 @@ pub fn update_door_enabled(db: &Db, id: &str, enabled: bool) -> decentdb::Result
 pub fn update_door_definition(db: &Db, door: &DoorDefinitionRecord) -> decentdb::Result<()> {
     db.execute_with_params(
         "UPDATE doors
-         SET key = $1, name = $2, runner = $3, working_dir = $4, command = $5, drop_file = $6, exclusive = $7, time_limit_minutes = $8, enabled = $9
-         WHERE id = UUID_PARSE($10)",
+         SET key = $1, name = $2, runner = $3, working_dir = $4, command = $5, drop_file = $6, exclusive = $7, time_limit_minutes = $8, enabled = $9, min_security_level = $10
+         WHERE id = UUID_PARSE($11)",
         &[
             Value::Text(door.key.clone()),
             Value::Text(door.name.clone()),
@@ -99,6 +101,7 @@ pub fn update_door_definition(db: &Db, door: &DoorDefinitionRecord) -> decentdb:
             Value::Bool(door.exclusive),
             Value::Int64(door.time_limit_minutes),
             Value::Bool(door.enabled),
+            Value::Int64(door.min_security_level),
             Value::Text(door.id.clone()),
         ],
     )?;
@@ -173,6 +176,7 @@ fn row_to_door(row: &decentdb::QueryRow) -> DoorDefinitionRecord {
         exclusive: bool_value(&values[7]),
         time_limit_minutes: int_value(&values[8]),
         enabled: bool_value(&values[9]),
+        min_security_level: int_value(&values[10]),
     }
 }
 
@@ -278,6 +282,7 @@ mod tests {
             exclusive: false,
             time_limit_minutes: 30,
             enabled: true,
+            min_security_level: 0,
         }
     }
 

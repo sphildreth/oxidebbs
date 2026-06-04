@@ -64,7 +64,7 @@ A live caller interaction. A session has a transport, user context, terminal sta
 
 ### Transport
 
-The I/O abstraction used by callers. v1 supports telnet. v2 may support serial/modem.
+The I/O abstraction used by callers. v1 supports telnet. v1.2 supports serial/modem through ADR 0019.
 
 ### Menu
 
@@ -93,7 +93,7 @@ pub trait Transport {
 Implementations:
 
 - `TelnetTransport` for v1
-- `SerialTransport` later
+- `SerialTransport` implemented
 - `LoopbackTransport` for tests
 
 The `serve` runtime binds the configured telnet address, opens DecentDB before

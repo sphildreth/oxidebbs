@@ -52,6 +52,8 @@ pub enum UsersCommand {
     },
     Delete {
         alias_or_id: String,
+        #[arg(long)]
+        reason: Option<String>,
     },
 }
 
@@ -136,13 +138,38 @@ pub fn run_users(command: UsersCommand, ctx: &AppContext) -> CliResult<()> {
             update_user_status(db.db(), &user.id, "active")?;
             emit_ok(ctx.json, "user enabled", json!({"user": user.alias}))?;
         }
-        UsersCommand::Disable { alias_or_id } | UsersCommand::Delete { alias_or_id } => {
+        UsersCommand::Disable { alias_or_id } => {
             let user = require_user(&db, &alias_or_id)?;
             update_user_status(db.db(), &user.id, "disabled")?;
             emit_ok(
                 ctx.json,
-                "user disabled; delete is implemented as a safe disable",
+                "user disabled",
                 json!({"user": user.alias, "status": "disabled"}),
+            )?;
+        }
+        UsersCommand::Delete {
+            alias_or_id,
+            reason,
+        } => {
+            let reason_text = reason.ok_or_else(|| {
+                CliError::Message("--reason is required for users delete".to_string())
+            })?;
+            let user = require_user(&db, &alias_or_id)?;
+            update_user_status(db.db(), &user.id, "disabled")?;
+            crate::sysop_cli::audit(
+                &db,
+                "user:delete",
+                Some(&user.id),
+                None,
+                &format!(
+                    "user {} ({}) disabled; reason: {}",
+                    user.alias, user.id, reason_text
+                ),
+            )?;
+            emit_ok(
+                ctx.json,
+                "user disabled; delete is implemented as a safe disable",
+                json!({"user": user.alias, "status": "disabled", "reason": reason_text}),
             )?;
         }
         UsersCommand::PromoteSysop { alias_or_id } => {

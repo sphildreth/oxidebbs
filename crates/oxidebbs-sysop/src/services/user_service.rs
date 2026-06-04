@@ -3,8 +3,9 @@ use crate::services::audit_service::AuditService;
 use argon2::password_hash::{PasswordHasher, SaltString};
 use argon2::{Algorithm, Argon2, Params, Version};
 use oxidebbs_db::{
-    Db, UserRecord, find_user_by_alias_ci, find_user_by_id, list_users, update_user_is_sysop,
-    update_user_password_hash, update_user_security_level, update_user_status,
+    AuditEventRecord, Db, UserRecord, find_user_by_alias_ci, find_user_by_id, list_users,
+    update_user_is_sysop, update_user_password_hash, update_user_security_level,
+    update_user_status,
 };
 use rand_core::OsRng;
 
@@ -86,6 +87,14 @@ impl UserAdminService {
             &format!("is_sysop={is_sysop}"),
         )?;
         Ok(())
+    }
+
+    pub fn view_user_audit_history(
+        db: &Db,
+        user_id: &str,
+        limit: i64,
+    ) -> Result<Vec<AuditEventRecord>, SysopError> {
+        Ok(oxidebbs_db::list_audit_events_for_user(db, user_id, limit)?)
     }
 }
 

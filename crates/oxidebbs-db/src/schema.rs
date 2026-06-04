@@ -339,7 +339,8 @@ fn create_full_schema(db: &Db) -> decentdb::Result<()> {
             drop_file TEXT NOT NULL CHECK (LENGTH(TRIM(drop_file)) > 0),
             exclusive BOOL NOT NULL DEFAULT FALSE,
             time_limit_minutes INT NOT NULL DEFAULT 30 CHECK (time_limit_minutes > 0),
-            enabled BOOL NOT NULL DEFAULT TRUE
+            enabled BOOL NOT NULL DEFAULT TRUE,
+            min_security_level INT NOT NULL DEFAULT 0 CHECK (min_security_level >= 0 AND min_security_level <= 255)
         );
 
         CREATE TABLE IF NOT EXISTS door_runs (
@@ -382,7 +383,65 @@ fn create_full_schema(db: &Db) -> decentdb::Result<()> {
         CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions (started_at);
         CREATE INDEX IF NOT EXISTS idx_door_runs_door_id ON door_runs (door_id);
         CREATE INDEX IF NOT EXISTS idx_door_runs_user_id ON door_runs (user_id);
-        CREATE INDEX IF NOT EXISTS idx_door_runs_started_at ON door_runs (started_at);",
+        CREATE INDEX IF NOT EXISTS idx_door_runs_started_at ON door_runs (started_at);
+
+        CREATE TABLE IF NOT EXISTS file_areas (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            key TEXT NOT NULL UNIQUE CHECK (LENGTH(TRIM(key)) > 0),
+            name TEXT NOT NULL CHECK (LENGTH(TRIM(name)) > 0),
+            description TEXT NOT NULL DEFAULT '',
+            root_path TEXT NOT NULL CHECK (LENGTH(TRIM(root_path)) > 0),
+            read_security_level INT NOT NULL DEFAULT 0 CHECK (read_security_level >= 0 AND read_security_level <= 255),
+            download_security_level INT NOT NULL DEFAULT 10 CHECK (download_security_level >= 0 AND download_security_level <= 255),
+            upload_security_level INT NOT NULL DEFAULT 0 CHECK (upload_security_level >= 0 AND upload_security_level <= 255),
+            max_upload_bytes INT CHECK (max_upload_bytes IS NULL OR max_upload_bytes >= 0),
+            enabled BOOL NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS file_entries (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            area_id UUID NOT NULL REFERENCES file_areas(id) ON DELETE CASCADE,
+            storage_name TEXT NOT NULL CHECK (LENGTH(TRIM(storage_name)) > 0),
+            display_name TEXT NOT NULL CHECK (LENGTH(TRIM(display_name)) > 0),
+            original_name TEXT,
+            size_bytes INT NOT NULL DEFAULT 0 CHECK (size_bytes >= 0),
+            content_crc32 TEXT,
+            description TEXT NOT NULL DEFAULT '',
+            uploader_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+            download_count INT NOT NULL DEFAULT 0 CHECK (download_count >= 0),
+            approved BOOL NOT NULL DEFAULT FALSE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS file_transfers (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            node_number INT NOT NULL CHECK (node_number > 0),
+            user_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+            area_id UUID REFERENCES file_areas(id) ON DELETE SET NULL,
+            file_entry_id UUID REFERENCES file_entries(id) ON DELETE SET NULL,
+            direction TEXT NOT NULL CHECK (direction = 'download' OR direction = 'upload'),
+            protocol TEXT NOT NULL CHECK (protocol = 'zmodem' OR protocol = 'xmodem_crc'),
+            requested_name TEXT,
+            storage_name TEXT,
+            declared_size_bytes INT CHECK (declared_size_bytes IS NULL OR declared_size_bytes >= 0),
+            transferred_payload_bytes INT NOT NULL DEFAULT 0 CHECK (transferred_payload_bytes >= 0),
+            committed_size_bytes INT CHECK (committed_size_bytes IS NULL OR committed_size_bytes >= 0),
+            started_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            ended_at TIMESTAMPTZ,
+            duration_ms INT CHECK (duration_ms IS NULL OR duration_ms >= 0),
+            outcome TEXT NOT NULL DEFAULT 'started' CHECK (outcome = 'started' OR outcome = 'success' OR outcome = 'cancelled' OR outcome = 'failed'),
+            error_code TEXT,
+            error_message TEXT,
+            retry_count INT NOT NULL DEFAULT 0 CHECK (retry_count >= 0)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_file_entries_area_id ON file_entries (area_id);
+        CREATE INDEX IF NOT EXISTS idx_file_entries_approved ON file_entries (approved);
+        CREATE INDEX IF NOT EXISTS idx_file_transfers_user_id ON file_transfers (user_id);
+        CREATE INDEX IF NOT EXISTS idx_file_transfers_started_at ON file_transfers (started_at);",
     )?;
     set_schema_version(db, SCHEMA_VERSION)?;
     Ok(())
@@ -512,6 +571,9 @@ mod tests {
             "sessions",
             "doors",
             "door_runs",
+            "file_areas",
+            "file_entries",
+            "file_transfers",
         ];
         for table in &tables {
             let result = db

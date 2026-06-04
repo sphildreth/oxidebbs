@@ -61,6 +61,10 @@ pub struct OxideConfig {
     pub network: NetworkConfig,
     #[serde(default)]
     pub ftn: FtnConfig,
+    #[serde(default)]
+    pub serial: SerialConfig,
+    #[serde(default)]
+    pub file_transfers: FileTransfersConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -302,6 +306,8 @@ pub struct DoorDefConfig {
     pub time_limit_minutes: u32,
     #[serde(default = "default_true")]
     pub enabled: bool,
+    #[serde(default)]
+    pub min_security_level: i32,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -365,6 +371,32 @@ pub struct FtnConfig {
     pub enabled: bool,
     #[serde(default = "default_network_name")]
     pub reserved_network_name: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct SerialConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub devices: Vec<SerialDeviceConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SerialDeviceConfig {
+    pub name: String,
+    pub path: String,
+    #[serde(default = "default_serial_baud_rate")]
+    pub baud_rate: u32,
+    #[serde(default = "default_serial_flow_control")]
+    pub flow_control: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct FileTransfersConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_file_transfers_max_upload_bytes")]
+    pub max_upload_bytes: i64,
 }
 
 impl OxideConfig {
@@ -679,6 +711,7 @@ impl OxideConfig {
                     key: item.key.clone(),
                     label: item.label.clone(),
                     action: parse_menu_action(&item.action, item.target.as_deref())?,
+                    min_security_level: item.min_security_level,
                 })
             })
             .collect::<Result<Vec<_>, ConfigError>>()?;
@@ -839,6 +872,15 @@ fn default_bundle_compression() -> String {
 }
 fn default_transport_security() -> String {
     "tls_required".into()
+}
+fn default_serial_baud_rate() -> u32 {
+    115_200
+}
+fn default_serial_flow_control() -> String {
+    "rtscts".into()
+}
+fn default_file_transfers_max_upload_bytes() -> i64 {
+    1_048_576
 }
 
 fn validate_config_key(section: &str, key: &str) -> Result<(), ConfigError> {

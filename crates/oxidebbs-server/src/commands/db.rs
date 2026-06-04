@@ -151,6 +151,8 @@ struct ImportDoorDefinitionRecord {
     exclusive: bool,
     time_limit_minutes: i64,
     enabled: bool,
+    #[serde(default)]
+    min_security_level: i64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -438,6 +440,7 @@ impl From<ImportDoorDefinitionRecord> for DoorDefinitionRecord {
             exclusive: record.exclusive,
             time_limit_minutes: record.time_limit_minutes,
             enabled: record.enabled,
+            min_security_level: record.min_security_level,
         }
     }
 }
@@ -864,7 +867,8 @@ fn door_json(door: &oxidebbs_db::DoorDefinitionRecord) -> JsonValue {
         "drop_file": door.drop_file,
         "exclusive": door.exclusive,
         "time_limit_minutes": door.time_limit_minutes,
-        "enabled": door.enabled
+        "enabled": door.enabled,
+        "min_security_level": door.min_security_level
     })
 }
 
@@ -1773,7 +1777,7 @@ pub fn run_db(command: DbCommand, ctx: &AppContext) -> CliResult<()> {
                 ),
             )
         }
-        DbCommand::Doctor | DbCommand::Verify => {
+        DbCommand::Doctor => {
             let db = open_database(&ctx.config)?;
             let version = db.schema_version()?;
             let stats = db_stats(db.db(), live_active_session_count(ctx)?)?;
@@ -1785,6 +1789,131 @@ pub fn run_db(command: DbCommand, ctx: &AppContext) -> CliResult<()> {
                 println!("database OK: {}", ctx.config.database.path.display());
                 println!("schema version: {version}");
                 print_stats(&stats);
+            }
+            Ok(())
+        }
+        DbCommand::Verify => {
+            let db = open_database(&ctx.config)?;
+            let mut pass = 0usize;
+            let warn = 0usize;
+            let mut fail = 0usize;
+            let mut results: Vec<serde_json::Value> = Vec::new();
+
+            let schema_version = db
+                .schema_version()
+                .map_err(|e| CliError::Message(e.to_string()))?;
+            let schema_ok = schema_version == oxidebbs_db::SCHEMA_VERSION;
+            if schema_ok {
+                pass += 1;
+                results.push(serde_json::json!({"check": "schema_version", "status": "pass", "value": schema_version}));
+            } else {
+                fail += 1;
+                results.push(serde_json::json!({"check": "schema_version", "status": "fail", "expected": oxidebbs_db::SCHEMA_VERSION, "actual": schema_version}));
+            }
+            let tables = [
+                "users",
+                "auth_attempts",
+                "message_areas",
+                "messages",
+                "sessions",
+                "doors",
+                "door_runs",
+                "audit_events",
+                "network_profiles",
+                "network_links",
+                "network_areas",
+                "network_packets",
+                "network_messages",
+                "network_seen_by",
+                "network_path",
+                "network_duplicate_log",
+                "network_poll_log",
+                "network_area_subscriptions",
+                "network_nodelist",
+                "file_areas",
+                "file_entries",
+                "file_transfers",
+            ];
+            for table in &tables {
+                match db.db().execute(&format!("SELECT COUNT(*) FROM {table}")) {
+                    Ok(_) => {
+                        pass += 1;
+                        results.push(serde_json::json!({"check": format!("table_exists:{table}"), "status": "pass"}));
+                    }
+                    Err(e) => {
+                        fail += 1;
+                        results.push(serde_json::json!({"check": format!("table_exists:{table}"), "status": "fail", "error": e.to_string()}));
+                    }
+                }
+            }
+            fn repo_read_check(name: &str, db: &Db) -> (serde_json::Value, bool) {
+                let result: Result<(), String> = match name {
+                    "users" => oxidebbs_db::list_users(db)
+                        .map(|_| ())
+                        .map_err(|e| e.to_string()),
+                    "messages" => oxidebbs_db::list_messages(db)
+                        .map(|_| ())
+                        .map_err(|e| e.to_string()),
+                    "doors" => oxidebbs_db::list_door_definitions(db)
+                        .map(|_| ())
+                        .map_err(|e| e.to_string()),
+                    "sessions" => oxidebbs_db::list_recent_sessions(db, 1)
+                        .map(|_| ())
+                        .map_err(|e| e.to_string()),
+                    "file_areas" => oxidebbs_db::list_file_areas(db)
+                        .map(|_| ())
+                        .map_err(|e| e.to_string()),
+                    _ => Ok(()),
+                };
+                match result {
+                    Ok(()) => (
+                        serde_json::json!({"check": format!("repo_read:{name}"), "status": "pass"}),
+                        true,
+                    ),
+                    Err(e) => (
+                        serde_json::json!({"check": format!("repo_read:{name}"), "status": "fail", "error": e}),
+                        false,
+                    ),
+                }
+            }
+            for name in ["users", "messages", "doors", "sessions", "file_areas"] {
+                let (result, ok) = repo_read_check(name, db.db());
+                results.push(result);
+                if ok {
+                    pass += 1;
+                } else {
+                    fail += 1;
+                }
+            }
+
+            if ctx.json {
+                print_json(&serde_json::json!({
+                    "ok": fail == 0,
+                    "pass": pass,
+                    "warn": warn,
+                    "fail": fail,
+                    "results": results
+                }))?;
+            } else {
+                println!("database verify: {}", ctx.config.database.path.display());
+                for result in &results {
+                    let check = result["check"].as_str().unwrap_or("?");
+                    let status = result["status"].as_str().unwrap_or("?");
+                    let error = result.get("error").and_then(|v| v.as_str()).unwrap_or("");
+                    let extra = if !error.is_empty() {
+                        format!(" - {error}")
+                    } else {
+                        String::new()
+                    };
+                    println!("  [{status}] {check}{extra}");
+                }
+                println!("\npass: {pass}, warn: {warn}, fail: {fail}");
+            }
+
+            if fail > 0 {
+                return Err(CliError::Message(format!(
+                    "database verify failed with {fail} failures"
+                )));
             }
             Ok(())
         }
@@ -2011,6 +2140,7 @@ mod tests {
             exclusive: false,
             time_limit_minutes: 30,
             enabled: true,
+            min_security_level: 0,
         };
         let door_run = DoorRunRecord {
             id: "00000000-0000-4000-8000-000000000501".to_string(),

@@ -124,6 +124,8 @@ possibly OxideNet.
 
 ## 5. v1.1 / v1.2 requirements
 
+All items in this section have been completed as of the v1.2 release.
+
 ### FTN-style networking foundation
 
 - Internal network-address model
@@ -143,6 +145,8 @@ possibly OxideNet.
 - Config inspection
 
 ## 6. v1.2 candidates (previously v2 candidates)
+
+**Note:** All v1.2 candidates have been implemented as of the v1.2 release.
 
 The following items were previously listed as v2 or future scope. They are now
 scoped into the active v1.2 deferred-scope release per

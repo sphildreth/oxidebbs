@@ -8,6 +8,7 @@ mod audit_repo;
 mod auth_repo;
 mod db_writer;
 mod door_repo;
+mod file_repo;
 mod message_repo;
 mod migrations;
 mod network_repo;
@@ -15,7 +16,7 @@ mod schema;
 mod session_repo;
 mod user_repo;
 
-pub const SCHEMA_VERSION: i64 = 5;
+pub const SCHEMA_VERSION: i64 = 7;
 
 pub use audit_repo::{
     AuditEventRecord, insert_audit_event, insert_audit_event_preserving_record, list_audit_events,
@@ -30,6 +31,11 @@ pub use door_repo::{
     DoorDefinitionRecord, DoorRunFinish, DoorRunRecord, find_door_by_key, find_door_run_by_id,
     finish_door_run, insert_door_definition, insert_door_run, list_door_definitions,
     list_door_runs, update_door_definition, update_door_enabled,
+};
+pub use file_repo::{
+    FileAreaRecord, FileEntryRecord, FileTransferRecord, find_file_area_by_key,
+    find_file_entry_by_id, find_file_transfer_by_id, insert_file_area, insert_file_entry,
+    insert_file_transfer, list_file_areas, list_file_entries, list_file_transfers,
 };
 pub use message_repo::{
     MessageAreaRecord, MessageRecord, find_message_area_by_key, find_message_by_id, insert_message,

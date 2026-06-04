@@ -16,8 +16,9 @@ use oxidebbs_db::{
     list_door_definitions, list_door_runs, update_door_definition, update_door_enabled,
 };
 use oxidebbs_door::{
-    DoorCaller, DoorRunRequest, DoorRunner, DryRunDoorRunner, node_runtime_dir, render_door_sys,
-    render_dorinfo1_def, runner_supports_dosemu2_cli,
+    DoorCaller, DoorRunRequest, DoorRunner, DryRunDoorRunner, node_runtime_dir,
+    render_callinfo_bbs, render_chain_txt, render_door_sys, render_doorfile_sr,
+    render_dorinfo1_def, render_pcboard_sys, runner_supports_dosemu2_cli,
 };
 
 use crate::config::DoorDefConfig;
@@ -69,10 +70,8 @@ pub enum DoorsCommand {
     },
     Test(DoorTestArgs),
     Dropfile(DoorDropfileArgs),
-    Add,
-    Edit {
-        door_key: String,
-    },
+    Add(DoorAddArgs),
+    Edit(DoorEditArgs),
     Runs {
         #[command(subcommand)]
         command: Option<DoorRunsCommand>,
@@ -102,6 +101,51 @@ pub struct DoorDropfileArgs {
     pub format: String,
     #[arg(long)]
     pub output: Option<std::path::PathBuf>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct DoorAddArgs {
+    pub key: String,
+    pub name: String,
+    #[arg(long, default_value = "dosemu")]
+    pub runner: String,
+    pub working_dir: String,
+    pub command: String,
+    #[arg(long, default_value = "door.sys")]
+    pub drop_file: String,
+    #[arg(long)]
+    pub exclusive: bool,
+    #[arg(long, default_value_t = 30)]
+    pub time_limit_minutes: u32,
+    #[arg(long, default_value_t = true)]
+    pub enabled: bool,
+    #[arg(long, default_value_t = 0)]
+    pub min_security_level: i32,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct DoorEditArgs {
+    pub door_key: String,
+    #[arg(long)]
+    pub key: Option<String>,
+    #[arg(long)]
+    pub name: Option<String>,
+    #[arg(long)]
+    pub runner: Option<String>,
+    #[arg(long)]
+    pub working_dir: Option<String>,
+    #[arg(long)]
+    pub command: Option<String>,
+    #[arg(long)]
+    pub drop_file: Option<String>,
+    #[arg(long)]
+    pub exclusive: Option<bool>,
+    #[arg(long)]
+    pub time_limit_minutes: Option<u32>,
+    #[arg(long)]
+    pub enabled: Option<bool>,
+    #[arg(long)]
+    pub min_security_level: Option<i32>,
 }
 
 #[derive(Subcommand)]
@@ -240,16 +284,8 @@ pub fn run_doors(command: DoorsCommand, ctx: &AppContext) -> CliResult<()> {
         }
         DoorsCommand::Test(args) => run_door_test(args, ctx, &db)?,
         DoorsCommand::Dropfile(args) => run_door_dropfile(args, ctx, &db)?,
-        DoorsCommand::Add => {
-            return Err(CliError::Message(
-                "door add is intentionally deferred to config-file editing for v1; use [[doors.definitions]] in the board config".to_string(),
-            ));
-        }
-        DoorsCommand::Edit { door_key } => {
-            return Err(CliError::Message(format!(
-                "door edit for {door_key:?} is intentionally deferred to config-file editing for v1"
-            )));
-        }
+        DoorsCommand::Add(args) => run_door_add(args, ctx, &db)?,
+        DoorsCommand::Edit(args) => run_door_edit(args, ctx, &db)?,
         DoorsCommand::Runs { command } => match command
             .unwrap_or(DoorRunsCommand::List { limit: 25 })
         {
@@ -381,9 +417,19 @@ pub fn run_door_dropfile(
             &caller,
         ),
         "DOOR.SYS" => render_door_sys(&caller, args.node, 38_400),
+        "CHAIN.TXT" => render_chain_txt(&caller, args.node, 38_400),
+        "DOORFILE.SR" => render_doorfile_sr(
+            &caller,
+            args.node,
+            38_400,
+            &ctx.config.board.name,
+            &ctx.config.board.sysop_name,
+        ),
+        "PCBOARD.SYS" => render_pcboard_sys(&caller, args.node, 38_400, &ctx.config.board.name),
+        "CALLINFO.BBS" => render_callinfo_bbs(&caller, args.node, 38_400),
         other => {
             return Err(CliError::Message(format!(
-                "unsupported drop-file format {other:?}; supported formats are DOOR.SYS and DORINFO1.DEF"
+                "unsupported drop-file format {other:?}; supported formats are DOOR.SYS, DORINFO1.DEF, CHAIN.TXT, DOORFILE.SR, PCBOARD.SYS, and CALLINFO.BBS"
             )));
         }
     };
@@ -395,6 +441,115 @@ pub fn run_door_dropfile(
         print_json(&json!({"format": format, "contents": contents}))?;
     } else {
         print!("{contents}");
+    }
+    Ok(())
+}
+
+fn run_door_add(args: DoorAddArgs, ctx: &AppContext, db: &oxidebbs_db::OxideDb) -> CliResult<()> {
+    validate_door_fields_before_write(
+        &args.key,
+        &args.command,
+        args.time_limit_minutes,
+        &args.drop_file,
+    )?;
+    if find_door_by_key(db.db(), &args.key)?.is_some() {
+        return Err(CliError::Message(format!(
+            "door {:?} already exists; use `doors edit` to update it",
+            args.key
+        )));
+    }
+    let record = DoorDefinitionRecord {
+        id: generated_uuid(db)?,
+        key: args.key.clone(),
+        name: args.name.clone(),
+        runner: args.runner.clone(),
+        working_dir: args.working_dir.clone(),
+        command: args.command.clone(),
+        drop_file: args.drop_file.clone(),
+        exclusive: args.exclusive,
+        time_limit_minutes: i64::from(args.time_limit_minutes),
+        enabled: args.enabled,
+        min_security_level: i64::from(args.min_security_level),
+    };
+    insert_door_definition(db.db(), &record)?;
+    emit_ok(
+        ctx.json,
+        "door created",
+        json!({"door": args.key, "id": record.id}),
+    )?;
+    Ok(())
+}
+
+fn run_door_edit(args: DoorEditArgs, ctx: &AppContext, db: &oxidebbs_db::OxideDb) -> CliResult<()> {
+    let existing = require_effective_door(db, &ctx.config, &args.door_key)?;
+    let key = args.key.unwrap_or(existing.key);
+    let name = args.name.unwrap_or(existing.name);
+    let runner = args.runner.unwrap_or(existing.runner);
+    let working_dir = args.working_dir.unwrap_or(existing.working_dir);
+    let command = args.command.unwrap_or(existing.command);
+    let drop_file = args.drop_file.unwrap_or(existing.drop_file);
+    let exclusive = args.exclusive.unwrap_or(existing.exclusive);
+    let time_limit_minutes = args
+        .time_limit_minutes
+        .map(u32::try_from)
+        .transpose()
+        .map_err(|_| CliError::Message("time_limit_minutes must fit in u32".to_string()))?
+        .unwrap_or(u32::try_from(existing.time_limit_minutes).unwrap_or(30));
+    let enabled = args.enabled.unwrap_or(existing.enabled);
+    let min_security_level = args
+        .min_security_level
+        .unwrap_or(existing.min_security_level as i32);
+
+    validate_door_fields_before_write(&key, &command, time_limit_minutes, &drop_file)?;
+
+    let record = DoorDefinitionRecord {
+        id: existing.id,
+        key,
+        name,
+        runner,
+        working_dir,
+        command,
+        drop_file,
+        exclusive,
+        time_limit_minutes: i64::from(time_limit_minutes),
+        enabled,
+        min_security_level: i64::from(min_security_level),
+    };
+    update_door_definition(db.db(), &record)?;
+    emit_ok(
+        ctx.json,
+        "door updated",
+        json!({"door": record.key, "id": record.id}),
+    )?;
+    Ok(())
+}
+
+fn validate_door_fields_before_write(
+    key: &str,
+    command: &str,
+    time_limit_minutes: u32,
+    drop_file: &str,
+) -> CliResult<()> {
+    if key.trim().is_empty() {
+        return Err(CliError::Message("door key must not be blank".to_string()));
+    }
+    if command.trim().is_empty() {
+        return Err(CliError::Message(
+            "door command must not be blank".to_string(),
+        ));
+    }
+    if !(1..=240).contains(&time_limit_minutes) {
+        return Err(CliError::Message(
+            "time limit minutes must be between 1 and 240".to_string(),
+        ));
+    }
+    if !matches!(
+        drop_file.to_ascii_uppercase().as_str(),
+        "DOOR.SYS" | "DORINFO1.DEF" | "CHAIN.TXT" | "DOORFILE.SR" | "PCBOARD.SYS" | "CALLINFO.BBS"
+    ) {
+        return Err(CliError::Message(format!(
+            "unsupported drop-file format {drop_file:?}"
+        )));
     }
     Ok(())
 }
@@ -551,7 +706,7 @@ fn check_door(door: &DoorDefinitionRecord, config: &crate::config::OxideConfig) 
     }
     if !matches!(
         door.drop_file.to_ascii_uppercase().as_str(),
-        "DOOR.SYS" | "DORINFO1.DEF"
+        "DOOR.SYS" | "DORINFO1.DEF" | "CHAIN.TXT" | "DOORFILE.SR" | "PCBOARD.SYS" | "CALLINFO.BBS"
     ) {
         issues.push(CheckIssue::error(format!(
             "drop-file format {:?} is not supported",
@@ -689,6 +844,7 @@ fn door_record_from_config_with_id(
         exclusive: door.exclusive,
         time_limit_minutes: i64::from(door.time_limit_minutes),
         enabled: board_doors_enabled && door.enabled,
+        min_security_level: i64::from(door.min_security_level),
     }
 }
 
@@ -704,6 +860,7 @@ fn door_to_core(door: &DoorDefinitionRecord) -> DoorDefinition {
         exclusive: door.exclusive,
         time_limit_minutes: u32::try_from(door.time_limit_minutes).unwrap_or(30),
         enabled: door.enabled,
+        min_security_level: door.min_security_level as i32,
     }
 }
 
@@ -728,7 +885,8 @@ fn door_json(door: &DoorDefinitionRecord) -> JsonValue {
         "drop_file": door.drop_file,
         "exclusive": door.exclusive,
         "time_limit_minutes": door.time_limit_minutes,
-        "enabled": door.enabled
+        "enabled": door.enabled,
+        "min_security_level": door.min_security_level
     })
 }
 
@@ -765,6 +923,7 @@ mod tests {
             exclusive: false,
             time_limit_minutes: 30,
             enabled: true,
+            min_security_level: 0,
         }];
 
         let payload = doors_json_payload(&doors);
@@ -809,6 +968,7 @@ mod tests {
             exclusive: false,
             time_limit_minutes: 30,
             enabled: true,
+            min_security_level: 0,
         };
         let mut config: crate::config::OxideConfig =
             toml::from_str("[board]\nname = \"Test\"\n").expect("config");
@@ -886,6 +1046,7 @@ mod tests {
             exclusive: false,
             time_limit_minutes: 241,
             enabled: true,
+            min_security_level: 0,
         };
         let mut config: crate::config::OxideConfig =
             toml::from_str("[board]\nname = \"Test\"\n").expect("config");
@@ -964,6 +1125,7 @@ mod tests {
                 exclusive: true,
                 time_limit_minutes: 1,
                 enabled: false,
+                min_security_level: 0,
             },
         )
         .expect("insert stale door");

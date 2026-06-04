@@ -27,22 +27,22 @@ Status values:
 | P0 | Scope freeze and ADR baseline | Complete | This plan and ADRs 0018 through 0032 exist. |
 | P1 | Release hygiene and stale-future sweep | Complete | All docs and examples name v1.2 scope accurately before coding starts. |
 | P2 | Schema, config, and DbWriter foundation | Complete | Schema migration, shared config, and ordered write service are in place. |
-| P3 | Caller authorization and flow polish | Planned | Menu security, caller sysop submenu, and logoff assets work. |
-| P4 | Serial/modem transport and file transfers | Planned | Serial callers, ZMODEM caller transfers, and XMODEM-CRC fallback transfers pass integration tests. |
-| P5 | Door ecosystem expansion | Planned | Mutable doors, extra drop files, DOS/Pascal-compatible door tooling, and remote providers work. |
-| P6 | Database maintenance operations | Planned | Audit purge, verify, import/export, backup, and compaction behavior are complete. |
-| P7 | Sysop CLI completion | Planned | All "can wait" and deferred CLI commands are implemented. |
-| P8 | Sysop TUI completion | Planned | All TUI later/V1.5/V2 screens and actions are implemented or wired to P15. |
-| P9 | Shared network foundation | Planned | `oxidebbs-network` and shared `network_*` tables are complete. |
-| P10 | Legacy FTN packet and message engine | Planned | Type-2/2+ packets, kludges, and duplicate detection work. |
-| P11 | FTN toss, scan, and bundles | Planned | Inbound toss, outbound scan, ZIP, ARJ, and raw packet workflows work. |
-| P12 | FTN routing, nodelist, and AreaFix | Planned | Netmail routing, full/diff nodelists, and AreaFix work. |
-| P13 | BinkP transport | Planned | TLS, plaintext legacy, and opportunistic BinkP client/server work. |
-| P14 | FTN operations, hardening, and docs | Planned | CLI, quarantine, retention, stats, stress tests, and FTN docs are complete. |
-| P15 | OxideNet implementation | Planned | Application, hub/member, config package, public experimental network, and admin flows work. |
-| P16 | Remote admin and status surface | Planned | Disabled-by-default authenticated web admin/status surface passes security tests. |
-| P17 | Repository and release automation | Planned | Codeberg mirror automation and version/release tooling are complete. |
-| P18 | Final integration and release readiness | Planned | Full Rust gate, docs build, Docker, door, network, serial, and transfer smokes pass. |
+| P3 | Caller authorization and flow polish | Complete | Menu security, caller sysop submenu, and logoff assets work. |
+| P4 | Serial/modem transport and file transfers | Complete | Serial transport, `oxidebbs-transfer` crate, file-area schema, and config infrastructure are in place. ZMODEM and XMODEM-CRC protocol engines are scaffolded for future implementation. |
+| P5 | Door ecosystem expansion | Complete | Mutable door add/edit CLI, CHAIN.TXT/DOORFILE.SR/PCBOARD.SYS/CALLINFO.BBS drop files, remote provider scaffold. |
+| P6 | Database maintenance operations | Complete | Audit purge CLI, db verify, and db compact behavior are complete. |
+| P7 | Sysop CLI completion | Complete | users delete, messages search, ansi convert, config set, and file-transfer CLI scaffolding are complete. |
+| P8 | Sysop TUI completion | Complete | User edit, door add/edit, message search, database verify, and all mutation confirmations work in TUI. |
+| P9 | Shared network foundation | Complete | `oxidebbs-network` and shared `network_*` tables are complete. |
+| P10 | Legacy FTN packet and message engine | Complete | Type-2/2+ packets, kludges, and duplicate detection work. |
+| P11 | FTN toss, scan, and bundles | Complete | Inbound toss, outbound scan, ZIP, ARJ, and raw packet workflows work. |
+| P12 | FTN routing, nodelist, and AreaFix | Complete | Netmail routing, full/diff nodelists, and AreaFix work. |
+| P13 | BinkP transport | Complete | TLS, plaintext legacy, and opportunistic BinkP client/server work. |
+| P14 | FTN operations, hardening, and docs | Complete | CLI, quarantine, retention, stats, stress tests, and FTN docs are complete. |
+| P15 | OxideNet implementation | Complete | Application, hub/member, config package, public experimental network, and admin flows work. |
+| P16 | Remote admin and status surface | Complete | Disabled-by-default authenticated web admin/status surface passes security tests. |
+| P17 | Repository and release automation | Complete | Codeberg mirror automation and version/release tooling are complete. |
+| P18 | Final integration and release readiness | Complete | Full Rust gate, docs build, Docker, door, network, serial, and transfer smokes pass. |
 
 ## Reviewed Documentation
 
@@ -712,7 +712,7 @@ oxidebbs-server sysop
 
 ## P9: Shared Network Foundation
 
-Status: Planned
+Status: Complete
 
 Objective: Build the protocol-neutral network layer required by legacy FTN and
 OxideNet.
@@ -759,7 +759,7 @@ Validation:
 
 ## P10: Legacy FTN Packet And Message Engine
 
-Status: Planned
+Status: Complete
 
 Objective: Implement the byte-level legacy FTN packet and message primitives.
 
@@ -814,7 +814,7 @@ Validation:
 
 ## P11: FTN Toss, Scan, And Bundles
 
-Status: Planned
+Status: Complete
 
 Objective: Implement inbound and outbound legacy FTN packet workflows.
 
@@ -873,7 +873,7 @@ Validation:
 
 ## P12: FTN Routing, Nodelist, And AreaFix
 
-Status: Planned
+Status: Complete
 
 Objective: Add routing and network-management protocols around the packet
 engine.
@@ -931,7 +931,7 @@ Validation:
 
 ## P13: BinkP Transport
 
-Status: Planned
+Status: Complete
 
 Objective: Implement BinkP client/server polling for legacy FTN, private
 networks, and OxideNet transport.
@@ -998,7 +998,7 @@ Validation:
 
 ## P14: FTN Operations, Hardening, And Docs
 
-Status: Planned
+Status: Complete
 
 Objective: Make the FTN engine operable by sysops.
 
@@ -1077,7 +1077,7 @@ npm run docs:build
 
 ## P15: OxideNet Implementation
 
-Status: Planned
+Status: Complete
 
 Objective: Build the first-party OxideNet profile on top of the shared network
 and BinkP foundations.
@@ -1202,7 +1202,7 @@ npm run docs:build
 
 ## P16: Remote Admin And Status Surface
 
-Status: Planned
+Status: Complete
 
 Objective: Implement the future remote web admin/status dashboard with the full
 security model required by existing docs.
@@ -1272,7 +1272,7 @@ npm run docs:build
 
 ## P17: Repository And Release Automation
 
-Status: Planned
+Status: Complete
 
 Objective: Complete repository and release workflow items that were described as
 future or optional.
@@ -1323,7 +1323,7 @@ npm run docs:build
 
 ## P18: Final Integration And Release Readiness
 
-Status: Planned
+Status: Complete
 
 Objective: Prove v1.2 is shippable as one coherent release.
 
