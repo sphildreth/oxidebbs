@@ -22,6 +22,7 @@ export default defineConfig({
       { text: 'Docker', link: '/project/docker' },
       { text: 'Setup', link: '/project/setup' },
       { text: 'Architecture', link: '/project/architecture' },
+      { text: 'FTN', link: '/ftn/architecture' },
       { text: 'Menus', link: '/project/menus' },
       { text: 'Caller Commands', link: '/project/caller-commands' },
       { text: 'Security Levels', link: '/project/security-levels' },
@@ -48,6 +49,10 @@ export default defineConfig({
           { text: 'Versioning', link: '/project/versioning' },
           { text: 'Deployment', link: '/project/deployment' }
         ]
+      },
+      {
+        text: 'FTN Networking',
+        items: [{ text: 'Architecture', link: '/ftn/architecture' }]
       },
       {
         text: 'About',

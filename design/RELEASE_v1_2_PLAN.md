@@ -131,6 +131,7 @@ declared complete.
 | Netmail routing | `FTN_PLAN.md`, `OXIDENET_PRD.md` | P12 |
 | AreaFix | `FTN_PLAN.md`, `OXIDENET_PRD.md` | P12 |
 | BinkP client/server and polling | `README.md`, `PRD.md`, `ROADMAP.md`, `FTN_PLAN.md` | P13 |
+| Built-in mailer boundaries and external-mailer directory drop mode | `MAILER.md`, `FTN_PLAN.md` | P13, P14 |
 | BinkP TLS opportunistic mode | `FTN_PLAN.md` | P13 |
 | FTN CLI: toss, scan, poll, status, queue, nodelist, areas, links, packets, AreaFix, logs | `FTN_PLAN.md` | P14 |
 | Packet quarantine dashboard and retention | `FTN_PLAN.md`, `OXIDENET_PRD.md` | P14, P15 |
@@ -985,6 +986,7 @@ Acceptance criteria:
 Documentation updates:
 
 - `docs/ftn/binkp.md`
+- `design/MAILER.md`
 - `docs/ftn/configuration.md`
 - `docs/ftn/troubleshooting.md`
 
@@ -1057,6 +1059,7 @@ Acceptance criteria:
 Documentation updates:
 
 - `docs/ftn/architecture.md`
+- `design/MAILER.md`
 - `docs/ftn/setup.md`
 - `docs/ftn/sysop-guide.md`
 - `docs/ftn/cli.md`

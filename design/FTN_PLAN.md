@@ -7,6 +7,8 @@ Implementation plan for FTN (FidoNet Technology Network) support in OxideBBS.
 ## Related documents
 
 - `design/FTN_NETWORKING.md` — early design notes
+- `design/MAILER.md` — built-in BinkP mailer, tosser/scanner boundaries, and
+  external-mailer directory drop mode
 - `design/OXIDENET_PRD.md` — OxideNet-specific product requirements
 - `design/adr/0009-ftn-abstraction.md` — ADR: keep FTN packet I/O behind a network boundary
 - `design/SPEC.md` — section 13: FTN/OxideNet boundary
@@ -2252,6 +2254,7 @@ Complete documentation for sysops, developers, and FTN network operators.
 | Document | Purpose |
 |---|---|
 | `docs/ftn/architecture.md` | Crate layout, module structure, data flow |
+| `design/MAILER.md` | Built-in mailer boundaries, BinkP runtime model, spool layout |
 | `docs/ftn/packet-format.md` | Type-2/Type-2+ packet format reference |
 | `docs/ftn/echomail.md` | Echomail message format, kludge reference |
 | `docs/ftn/netmail.md` | Netmail message format, routing |
