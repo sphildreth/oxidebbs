@@ -57,6 +57,25 @@ pub fn send_file<W: Write>(writer: &mut W, file: &BinkpOutboundFile) -> Result<(
     Ok(())
 }
 
+/// Send zero or more BinkP file offers and finish with `M_EOB`.
+///
+/// An empty batch is valid and sends only the end-of-batch marker, allowing an
+/// empty poll to complete cleanly at the stream layer.
+///
+/// # Errors
+///
+/// Returns protocol errors for invalid file metadata and I/O errors from the
+/// stream.
+pub fn send_batch<W: Write>(writer: &mut W, files: &[BinkpOutboundFile]) -> Result<(), BinkpError> {
+    for file in files {
+        validate_binkp_file_name(&file.name)?;
+    }
+    for file in files {
+        send_file(writer, file)?;
+    }
+    send_end_of_batch(writer)
+}
+
 /// Send the BinkP end-of-batch marker.
 ///
 /// # Errors
@@ -157,6 +176,24 @@ pub fn receive_next_file<S: Read + Write>(
         declared_size: descriptor.declared_size,
         bytes,
     }))
+}
+
+/// Receive BinkP files until the peer sends `M_EOB`.
+///
+/// This helper owns only the command/data-frame loop. Runtime client/server
+/// layers are still responsible for connection lifetime, TLS, spool placement,
+/// retry policy, and poll logging.
+///
+/// # Errors
+///
+/// Returns protocol errors for malformed file exchange or I/O errors from the
+/// stream.
+pub fn receive_batch<S: Read + Write>(stream: &mut S) -> Result<Vec<BinkpInboundFile>, BinkpError> {
+    let mut files = Vec::new();
+    while let Some(file) = receive_next_file(stream)? {
+        files.push(file);
+    }
+    Ok(files)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -266,6 +303,85 @@ mod tests {
         assert_eq!(got.frame_type, FrameType::Command);
         assert_eq!(got.command, M_GOT);
         assert_eq!(got.payload, b"00000001.pkt");
+    }
+
+    #[test]
+    fn empty_batch_writes_and_receives_eob_only() {
+        let mut wire = Vec::new();
+        send_batch(&mut wire, &[]).expect("send empty batch");
+        let mut stream = ScriptStream::new(wire);
+
+        let files = receive_batch(&mut stream).expect("receive empty batch");
+
+        assert!(files.is_empty());
+        assert!(stream.writes.is_empty());
+    }
+
+    #[test]
+    fn batch_round_trips_multiple_files_and_acknowledges_each() {
+        let files = vec![
+            BinkpOutboundFile::new("00000001.pkt", 1234, b"first".to_vec()).expect("first"),
+            BinkpOutboundFile::new("00000002.pkt", 1235, b"second".to_vec()).expect("second"),
+        ];
+        let mut wire = Vec::new();
+        send_batch(&mut wire, &files).expect("send batch");
+        let mut stream = ScriptStream::new(wire);
+
+        let received = receive_batch(&mut stream).expect("receive batch");
+
+        assert_eq!(received.len(), 2);
+        assert_eq!(received[0].name, "00000001.pkt");
+        assert_eq!(received[0].bytes, b"first");
+        assert_eq!(received[1].name, "00000002.pkt");
+        assert_eq!(received[1].bytes, b"second");
+
+        let mut acks = Cursor::new(stream.writes);
+        let first_ack = read_frame(&mut acks).expect("read first ack");
+        assert_eq!(first_ack.command, M_GOT);
+        assert_eq!(first_ack.payload, b"00000001.pkt");
+        let second_ack = read_frame(&mut acks).expect("read second ack");
+        assert_eq!(second_ack.command, M_GOT);
+        assert_eq!(second_ack.payload, b"00000002.pkt");
+    }
+
+    #[test]
+    fn large_batch_file_is_chunked_and_reassembled() {
+        let bytes = vec![b'x'; MAX_DATA_FRAME + 5];
+        let file = BinkpOutboundFile::new("large.pkt", 1234, bytes.clone()).expect("valid file");
+        let mut wire = Vec::new();
+        send_batch(&mut wire, std::slice::from_ref(&file)).expect("send batch");
+
+        let mut frames = Cursor::new(wire.clone());
+        let offer = read_frame(&mut frames).expect("offer");
+        let first_data = read_frame(&mut frames).expect("first data");
+        let second_data = read_frame(&mut frames).expect("second data");
+        assert_eq!(offer.command, M_FILE);
+        assert_eq!(first_data.payload.len(), MAX_DATA_FRAME);
+        assert_eq!(second_data.payload.len(), 5);
+
+        let mut stream = ScriptStream::new(wire);
+        let received = receive_batch(&mut stream).expect("receive batch");
+
+        assert_eq!(received.len(), 1);
+        assert_eq!(
+            received[0].declared_size,
+            u64::try_from(bytes.len()).unwrap()
+        );
+        assert_eq!(received[0].bytes, bytes);
+    }
+
+    #[test]
+    fn batch_validates_all_outbound_names_before_writing() {
+        let valid = BinkpOutboundFile::new("good.pkt", 0, Vec::new()).expect("valid file");
+        let mut invalid =
+            BinkpOutboundFile::new("also-good.pkt", 0, Vec::new()).expect("initially valid file");
+        invalid.name = "../bad.pkt".to_string();
+        let mut wire = Vec::new();
+
+        let error = send_batch(&mut wire, &[valid, invalid]).expect_err("unsafe batch item");
+
+        assert!(matches!(error, BinkpError::Protocol(_)));
+        assert!(wire.is_empty());
     }
 
     #[test]

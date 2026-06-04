@@ -35,8 +35,14 @@ JSON outputs are stable objects for `--json`:
 - `files transfers recent`
 - `net status`
 - `net links list`
+- `net links show`
 - `net areas list`
+- `net queue`
+- `net packets inbound`
+- `net packets outbound`
+- `net packets quarantine`
 - `net logs`
+- `net poll --dry-run`
 - `net nodelist list`
 - `net nodelist lookup`
 - `db stats`
@@ -256,7 +262,8 @@ The check validates:
 - configured screen paths/assets
 - configured menu screen paths/assets with menu-specific error context
 - door working directory + command + runner availability
-- drop-file format (`DOOR.SYS` or `DORINFO1.DEF`)
+- drop-file format (`DOOR.SYS`, `DORINFO1.DEF`, `CHAIN.TXT`, `DOORFILE.SR`,
+  `PCBOARD.SYS`, or `CALLINFO.BBS`)
 - runtime directory writability
 - Unix runtime directory mode (`0700` expected for local control socket isolation)
 
@@ -367,6 +374,18 @@ but no remote HTTP admin server is started yet. Any enabled remote admin runtime
 must add CSRF, replay protection, audit logging, and rate limiting before it can
 accept mutations; the current admin/control surface remains local CLI plus Unix
 control socket.
+
+## Messages
+
+```bash
+cargo run -p oxidebbs-server -- messages search "packet"
+cargo run -p oxidebbs-server -- messages search "retro" --area retro.echo
+cargo run -p oxidebbs-server -- messages search "1:105/42" --network fidonet
+```
+
+`messages search` matches subject, body, author display name, area key, remote
+author address, network message id, and area network id. `--area`, `--user`,
+`--network`, `--limit`, and global `--json` narrow or format the result set.
 
 ## Doors and caller launch
 
@@ -487,7 +506,7 @@ Operational notes:
 cargo run -p oxidebbs-server -- db backup backups/oxidebbs.ddb
 cargo run -p oxidebbs-server -- db export --format json > backups/oxidebbs.json
 cargo run -p oxidebbs-server -- db import --format json backups/oxidebbs.json
-cargo run -p oxidebbs-server -- db compact
+cargo run -p oxidebbs-server -- db compact --output backups/oxidebbs-compacted.ddb
 cargo run -p oxidebbs-server -- audit purge-retention --dry-run
 ```
 
@@ -498,8 +517,9 @@ cargo run -p oxidebbs-server -- audit purge-retention --dry-run
   - validates schema and all foreign-key references before writing
   - preserves UUIDs and load ordering
   - executes in one transaction and fails atomically
-- `db compact` currently returns a hard unsupported error because DecentDB has no
-  safe compaction API contract in this release.
+- `db compact --output <path> [--overwrite]` writes and verifies a separate
+  compacted DecentDB file. It refuses the active database path; stop the server
+  before manually replacing the active database with the compacted output.
 - `[audit].retention_days` defaults to `365`. Runtime audit inserts do not
   purge old rows automatically; use `audit purge-retention` for scheduled
   maintenance, or `audit purge-before <timestamp>` for an explicit cutoff.
@@ -515,20 +535,32 @@ cargo run -p oxidebbs-server -- audit purge-retention --dry-run
 
 ## FTN network commands
 
-Implemented `net` commands currently cover read-only status/list/log views and
+Implemented `net` commands currently cover status/list/log views, queue and
+packet inspection, subscription metadata updates, poll dry-run preflight, and
 full nodelist import/lookup:
 
 ```bash
 cargo run -p oxidebbs-server -- net status fidonet
 cargo run -p oxidebbs-server -- net links list --network fidonet
+cargo run -p oxidebbs-server -- net links show fidonet-hub
 cargo run -p oxidebbs-server -- net areas list --network fidonet
-cargo run -p oxidebbs-server -- net logs fidonet-hub
+cargo run -p oxidebbs-server -- net areas subscribe TEST.ECHO fidonet-hub --network fidonet
+cargo run -p oxidebbs-server -- net queue fidonet-hub
+cargo run -p oxidebbs-server -- net packets summary --network fidonet
+cargo run -p oxidebbs-server -- net packets show <packet-id>
+cargo run -p oxidebbs-server -- net packets retry <packet-id>
+cargo run -p oxidebbs-server -- net packets mark-quarantined <packet-id> --reason "operator review"
+cargo run -p oxidebbs-server -- net packets outbound --network fidonet
+cargo run -p oxidebbs-server -- net logs fidonet-hub --limit 25
+cargo run -p oxidebbs-server -- net poll fidonet-hub --dry-run
 cargo run -p oxidebbs-server -- net nodelist import NODELIST.123 --network fidonet
 cargo run -p oxidebbs-server -- net nodelist lookup 1:105/42 --network fidonet
 ```
 
 `net toss`, `net scan`, and `net poll` return explicit not-implemented errors
-until the tosser, scanner, and BinkP session engine are complete.
+until the tosser, scanner, and BinkP session engine are complete, except for
+`net poll --dry-run`. Packet retry/quarantine commands update DecentDB packet
+state only; they do not move spool files or process packets yet.
 
 See [FTN CLI](../ftn/cli.md) and [FTN Nodelists](../ftn/nodelist.md) for the
 current scope and limitations.

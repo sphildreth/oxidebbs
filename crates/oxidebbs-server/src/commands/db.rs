@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use clap::Subcommand;
 use serde::Deserialize;
@@ -15,7 +15,7 @@ use oxidebbs_db::{
     MessageAreaRecord, MessageRecord, NetworkAreaRecord, NetworkDuplicateLogRecord,
     NetworkLinkRecord, NetworkMessageRecord, NetworkNodelistRecord, NetworkPacketRecord,
     NetworkPathNode, NetworkPollLogRecord, NetworkProfileRecord, NetworkSeenByNode,
-    NetworkSubscriptionRecord, SessionRecord, UserRecord, Value,
+    NetworkSubscriptionRecord, SessionRecord, UserRecord, Value, evict_shared_wal,
     insert_audit_event_preserving_record, insert_auth_attempt, insert_door_definition,
     insert_door_run, insert_message, insert_message_area, insert_network_area,
     insert_network_duplicate_log, insert_network_link, insert_network_message,
@@ -1731,10 +1731,251 @@ fn perform_db_import(db: &oxidebbs_db::OxideDb, payload: ImportSchema) -> CliRes
     Ok(())
 }
 
-fn db_compact() -> CliResult<()> {
-    Err(CliError::Message(
-        "db compact is unavailable: DecentDB does not expose a supported compaction API in this release".to_string(),
-    ))
+#[derive(Debug, Clone)]
+struct DatabaseVerifyReport {
+    pass: usize,
+    warn: usize,
+    fail: usize,
+    results: Vec<serde_json::Value>,
+}
+
+fn verify_database(db: &oxidebbs_db::OxideDb) -> DatabaseVerifyReport {
+    let mut pass = 0usize;
+    let warn = 0usize;
+    let mut fail = 0usize;
+    let mut results: Vec<serde_json::Value> = Vec::new();
+
+    match db.schema_version() {
+        Ok(schema_version) => {
+            let schema_ok = schema_version == oxidebbs_db::SCHEMA_VERSION;
+            if schema_ok {
+                pass += 1;
+                results.push(serde_json::json!({"check": "schema_version", "status": "pass", "value": schema_version}));
+            } else {
+                fail += 1;
+                results.push(serde_json::json!({"check": "schema_version", "status": "fail", "expected": oxidebbs_db::SCHEMA_VERSION, "actual": schema_version}));
+            }
+        }
+        Err(error) => {
+            fail += 1;
+            results.push(serde_json::json!({"check": "schema_version", "status": "fail", "error": error.to_string()}));
+        }
+    }
+
+    let tables = [
+        "users",
+        "auth_attempts",
+        "message_areas",
+        "messages",
+        "sessions",
+        "doors",
+        "door_runs",
+        "audit_events",
+        "network_profiles",
+        "network_links",
+        "network_areas",
+        "network_packets",
+        "network_messages",
+        "network_seen_by",
+        "network_path",
+        "network_duplicate_log",
+        "network_poll_log",
+        "network_area_subscriptions",
+        "network_nodelist",
+        "file_areas",
+        "file_entries",
+        "file_transfers",
+    ];
+    for table in &tables {
+        match db.db().execute(&format!("SELECT COUNT(*) FROM {table}")) {
+            Ok(_) => {
+                pass += 1;
+                results.push(
+                    serde_json::json!({"check": format!("table_exists:{table}"), "status": "pass"}),
+                );
+            }
+            Err(error) => {
+                fail += 1;
+                results.push(serde_json::json!({"check": format!("table_exists:{table}"), "status": "fail", "error": error.to_string()}));
+            }
+        }
+    }
+
+    for name in ["users", "messages", "doors", "sessions", "file_areas"] {
+        let result: Result<(), String> = match name {
+            "users" => oxidebbs_db::list_users(db.db())
+                .map(|_| ())
+                .map_err(|error| error.to_string()),
+            "messages" => oxidebbs_db::list_messages(db.db())
+                .map(|_| ())
+                .map_err(|error| error.to_string()),
+            "doors" => oxidebbs_db::list_door_definitions(db.db())
+                .map(|_| ())
+                .map_err(|error| error.to_string()),
+            "sessions" => oxidebbs_db::list_recent_sessions(db.db(), 1)
+                .map(|_| ())
+                .map_err(|error| error.to_string()),
+            "file_areas" => oxidebbs_db::list_file_areas(db.db())
+                .map(|_| ())
+                .map_err(|error| error.to_string()),
+            _ => Ok(()),
+        };
+
+        match result {
+            Ok(()) => {
+                pass += 1;
+                results.push(
+                    serde_json::json!({"check": format!("repo_read:{name}"), "status": "pass"}),
+                );
+            }
+            Err(error) => {
+                fail += 1;
+                results.push(serde_json::json!({"check": format!("repo_read:{name}"), "status": "fail", "error": error}));
+            }
+        }
+    }
+
+    DatabaseVerifyReport {
+        pass,
+        warn,
+        fail,
+        results,
+    }
+}
+
+fn emit_verify_report(
+    ctx: &AppContext,
+    path: &Path,
+    report: &DatabaseVerifyReport,
+) -> CliResult<()> {
+    if ctx.json {
+        print_json(&serde_json::json!({
+            "ok": report.fail == 0,
+            "pass": report.pass,
+            "warn": report.warn,
+            "fail": report.fail,
+            "results": report.results
+        }))?;
+    } else {
+        println!("database verify: {}", path.display());
+        for result in &report.results {
+            let check = result["check"].as_str().unwrap_or("?");
+            let status = result["status"].as_str().unwrap_or("?");
+            let error = result
+                .get("error")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            let extra = if !error.is_empty() {
+                format!(" - {error}")
+            } else {
+                String::new()
+            };
+            println!("  [{status}] {check}{extra}");
+        }
+        println!(
+            "\npass: {}, warn: {}, fail: {}",
+            report.pass, report.warn, report.fail
+        );
+    }
+
+    if report.fail > 0 {
+        return Err(CliError::Message(format!(
+            "database verify failed with {} failures",
+            report.fail
+        )));
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone)]
+struct CompactResult {
+    source: PathBuf,
+    output: PathBuf,
+    source_bytes: u64,
+    output_bytes: u64,
+    schema_version: i64,
+    verify_passes: usize,
+}
+
+fn db_compact(source_path: &Path, output_path: &Path, overwrite: bool) -> CliResult<CompactResult> {
+    if !source_path.exists() {
+        return Err(CliError::Message(format!(
+            "database file {} does not exist",
+            source_path.display()
+        )));
+    }
+
+    if let Some(parent) = output_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)?;
+    }
+
+    reject_compact_output_source_collision(source_path, output_path)?;
+
+    if output_path.exists() {
+        if !overwrite {
+            return Err(CliError::Message(format!(
+                "compact output {} already exists; pass --overwrite to replace it",
+                output_path.display()
+            )));
+        }
+        fs::remove_file(output_path)?;
+    }
+
+    let db = oxidebbs_db::OxideDb::open_or_create(source_path)?;
+    let source_bytes = fs::metadata(source_path)?.len();
+    db.db().checkpoint_wal()?;
+    db.db().save_as(output_path)?;
+    evict_shared_wal(output_path)?;
+    drop(db);
+
+    let compacted = oxidebbs_db::OxideDb::open_or_create(output_path)?;
+    let report = verify_database(&compacted);
+    if report.fail > 0 {
+        return Err(CliError::Message(format!(
+            "compacted database {} failed verification with {} failures",
+            output_path.display(),
+            report.fail
+        )));
+    }
+
+    Ok(CompactResult {
+        source: source_path.to_path_buf(),
+        output: output_path.to_path_buf(),
+        source_bytes,
+        output_bytes: fs::metadata(output_path)?.len(),
+        schema_version: compacted.schema_version()?,
+        verify_passes: report.pass,
+    })
+}
+
+fn reject_compact_output_source_collision(source_path: &Path, output_path: &Path) -> CliResult<()> {
+    let source = fs::canonicalize(source_path)?;
+    let output = if output_path.exists() {
+        fs::canonicalize(output_path)?
+    } else {
+        let parent = output_path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        let file_name = output_path.file_name().ok_or_else(|| {
+            CliError::Message(format!(
+                "compact output path {} must name a database file",
+                output_path.display()
+            ))
+        })?;
+        fs::canonicalize(parent)?.join(file_name)
+    };
+
+    if source == output {
+        return Err(CliError::Message(
+            "compact output must not be the active database path".to_string(),
+        ));
+    }
+
+    Ok(())
 }
 
 #[derive(Subcommand)]
@@ -1755,7 +1996,12 @@ pub enum DbCommand {
         format: String,
         path: std::path::PathBuf,
     },
-    Compact,
+    Compact {
+        #[arg(long)]
+        output: std::path::PathBuf,
+        #[arg(long, default_value_t = false)]
+        overwrite: bool,
+    },
     Verify,
 }
 
@@ -1794,128 +2040,8 @@ pub fn run_db(command: DbCommand, ctx: &AppContext) -> CliResult<()> {
         }
         DbCommand::Verify => {
             let db = open_database(&ctx.config)?;
-            let mut pass = 0usize;
-            let warn = 0usize;
-            let mut fail = 0usize;
-            let mut results: Vec<serde_json::Value> = Vec::new();
-
-            let schema_version = db
-                .schema_version()
-                .map_err(|e| CliError::Message(e.to_string()))?;
-            let schema_ok = schema_version == oxidebbs_db::SCHEMA_VERSION;
-            if schema_ok {
-                pass += 1;
-                results.push(serde_json::json!({"check": "schema_version", "status": "pass", "value": schema_version}));
-            } else {
-                fail += 1;
-                results.push(serde_json::json!({"check": "schema_version", "status": "fail", "expected": oxidebbs_db::SCHEMA_VERSION, "actual": schema_version}));
-            }
-            let tables = [
-                "users",
-                "auth_attempts",
-                "message_areas",
-                "messages",
-                "sessions",
-                "doors",
-                "door_runs",
-                "audit_events",
-                "network_profiles",
-                "network_links",
-                "network_areas",
-                "network_packets",
-                "network_messages",
-                "network_seen_by",
-                "network_path",
-                "network_duplicate_log",
-                "network_poll_log",
-                "network_area_subscriptions",
-                "network_nodelist",
-                "file_areas",
-                "file_entries",
-                "file_transfers",
-            ];
-            for table in &tables {
-                match db.db().execute(&format!("SELECT COUNT(*) FROM {table}")) {
-                    Ok(_) => {
-                        pass += 1;
-                        results.push(serde_json::json!({"check": format!("table_exists:{table}"), "status": "pass"}));
-                    }
-                    Err(e) => {
-                        fail += 1;
-                        results.push(serde_json::json!({"check": format!("table_exists:{table}"), "status": "fail", "error": e.to_string()}));
-                    }
-                }
-            }
-            fn repo_read_check(name: &str, db: &Db) -> (serde_json::Value, bool) {
-                let result: Result<(), String> = match name {
-                    "users" => oxidebbs_db::list_users(db)
-                        .map(|_| ())
-                        .map_err(|e| e.to_string()),
-                    "messages" => oxidebbs_db::list_messages(db)
-                        .map(|_| ())
-                        .map_err(|e| e.to_string()),
-                    "doors" => oxidebbs_db::list_door_definitions(db)
-                        .map(|_| ())
-                        .map_err(|e| e.to_string()),
-                    "sessions" => oxidebbs_db::list_recent_sessions(db, 1)
-                        .map(|_| ())
-                        .map_err(|e| e.to_string()),
-                    "file_areas" => oxidebbs_db::list_file_areas(db)
-                        .map(|_| ())
-                        .map_err(|e| e.to_string()),
-                    _ => Ok(()),
-                };
-                match result {
-                    Ok(()) => (
-                        serde_json::json!({"check": format!("repo_read:{name}"), "status": "pass"}),
-                        true,
-                    ),
-                    Err(e) => (
-                        serde_json::json!({"check": format!("repo_read:{name}"), "status": "fail", "error": e}),
-                        false,
-                    ),
-                }
-            }
-            for name in ["users", "messages", "doors", "sessions", "file_areas"] {
-                let (result, ok) = repo_read_check(name, db.db());
-                results.push(result);
-                if ok {
-                    pass += 1;
-                } else {
-                    fail += 1;
-                }
-            }
-
-            if ctx.json {
-                print_json(&serde_json::json!({
-                    "ok": fail == 0,
-                    "pass": pass,
-                    "warn": warn,
-                    "fail": fail,
-                    "results": results
-                }))?;
-            } else {
-                println!("database verify: {}", ctx.config.database.path.display());
-                for result in &results {
-                    let check = result["check"].as_str().unwrap_or("?");
-                    let status = result["status"].as_str().unwrap_or("?");
-                    let error = result.get("error").and_then(|v| v.as_str()).unwrap_or("");
-                    let extra = if !error.is_empty() {
-                        format!(" - {error}")
-                    } else {
-                        String::new()
-                    };
-                    println!("  [{status}] {check}{extra}");
-                }
-                println!("\npass: {pass}, warn: {warn}, fail: {fail}");
-            }
-
-            if fail > 0 {
-                return Err(CliError::Message(format!(
-                    "database verify failed with {fail} failures"
-                )));
-            }
-            Ok(())
+            let report = verify_database(&db);
+            emit_verify_report(ctx, &ctx.config.database.path, &report)
         }
         DbCommand::Stats => {
             let db = open_database(&ctx.config)?;
@@ -1981,7 +2107,22 @@ pub fn run_db(command: DbCommand, ctx: &AppContext) -> CliResult<()> {
                 }),
             )
         }
-        DbCommand::Compact => db_compact(),
+        DbCommand::Compact { output, overwrite } => {
+            let result = db_compact(&ctx.config.database.path, &output, overwrite)?;
+            emit_ok(
+                ctx.json,
+                "database compact complete",
+                serde_json::json!({
+                    "source": result.source,
+                    "output": result.output,
+                    "source_bytes": result.source_bytes,
+                    "output_bytes": result.output_bytes,
+                    "schema_version": result.schema_version,
+                    "verify_passes": result.verify_passes,
+                    "in_place": false
+                }),
+            )
+        }
     }
 }
 
@@ -2009,6 +2150,18 @@ mod tests {
         let mut path = std::env::temp_dir();
         path.push(format!(
             "oxidebbs-phase5-{tag}-{}.json",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system time should be valid")
+                .as_nanos()
+        ));
+        path
+    }
+
+    fn make_temp_db_path(tag: &str) -> std::path::PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "oxidebbs-phase6-{tag}-{}.ddb",
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .expect("system time should be valid")
@@ -2253,9 +2406,97 @@ mod tests {
     }
 
     #[test]
-    fn compact_reports_explicit_unsupported_error() {
-        let err = db_compact().expect_err("compact remains unsupported");
-        assert!(err.to_string().contains("DecentDB does not expose"));
+    fn compact_writes_verified_output_database() {
+        let source_path = make_temp_db_path("source");
+        let output_path = make_temp_db_path("output");
+        let _ = fs::remove_file(&source_path);
+        let _ = fs::remove_file(&output_path);
+
+        {
+            let source =
+                oxidebbs_db::OxideDb::open_or_create(&source_path).expect("open source database");
+            let user = seed_user("00000000-0000-4000-8000-000000000901", "compact", true);
+            insert_user(source.db(), &user).expect("seed source user");
+        }
+
+        let result =
+            db_compact(&source_path, &output_path, false).expect("compact source database");
+
+        assert_eq!(result.source, source_path);
+        assert_eq!(result.output, output_path);
+        assert_eq!(result.schema_version, SCHEMA_VERSION);
+        assert!(result.source_bytes > 0);
+        assert!(result.output_bytes > 0);
+        assert!(result.verify_passes > 0);
+
+        let output =
+            oxidebbs_db::OxideDb::open_or_create(&output_path).expect("open compacted database");
+        let users = list_users(output.db()).expect("list compacted users");
+        assert_eq!(users.len(), 1);
+        assert_eq!(users[0].alias, "compact");
+
+        let _ = fs::remove_file(source_path);
+        let _ = fs::remove_file(output_path);
+    }
+
+    #[test]
+    fn compact_rejects_existing_output_without_overwrite() {
+        let source_path = make_temp_db_path("existing-source");
+        let output_path = make_temp_db_path("existing-output");
+        let _ = fs::remove_file(&source_path);
+        let _ = fs::remove_file(&output_path);
+
+        {
+            let _source =
+                oxidebbs_db::OxideDb::open_or_create(&source_path).expect("open source database");
+        }
+        fs::write(&output_path, b"existing").expect("write existing output");
+
+        let err = db_compact(&source_path, &output_path, false)
+            .expect_err("existing output should require overwrite");
+        assert!(err.to_string().contains("already exists"));
+
+        let _ = fs::remove_file(source_path);
+        let _ = fs::remove_file(output_path);
+    }
+
+    #[test]
+    fn compact_overwrites_when_requested() {
+        let source_path = make_temp_db_path("overwrite-source");
+        let output_path = make_temp_db_path("overwrite-output");
+        let _ = fs::remove_file(&source_path);
+        let _ = fs::remove_file(&output_path);
+
+        {
+            let _source =
+                oxidebbs_db::OxideDb::open_or_create(&source_path).expect("open source database");
+        }
+        fs::write(&output_path, b"existing").expect("write existing output");
+
+        let result =
+            db_compact(&source_path, &output_path, true).expect("overwrite compact output");
+        assert_eq!(result.output, output_path);
+        assert!(result.output_bytes > 0);
+
+        let _ = fs::remove_file(source_path);
+        let _ = fs::remove_file(output_path);
+    }
+
+    #[test]
+    fn compact_rejects_active_database_as_output() {
+        let source_path = make_temp_db_path("same-path");
+        let _ = fs::remove_file(&source_path);
+
+        {
+            let _source =
+                oxidebbs_db::OxideDb::open_or_create(&source_path).expect("open source database");
+        }
+
+        let err = db_compact(&source_path, &source_path, true)
+            .expect_err("active database should not be compact output");
+        assert!(err.to_string().contains("active database path"));
+
+        let _ = fs::remove_file(source_path);
     }
 
     #[test]

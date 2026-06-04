@@ -459,7 +459,7 @@ oxidebbs db backup <output-path>
 ```bash
 oxidebbs db export --format json
 oxidebbs db import --format json <path>
-oxidebbs db compact
+oxidebbs db compact --output <path> [--overwrite]
 oxidebbs db verify
 ```
 
@@ -607,7 +607,7 @@ oxidebbs doors add
 oxidebbs doors edit
 oxidebbs ansi convert
 oxidebbs db import
-oxidebbs db compact
+oxidebbs db compact --output <path>
 oxidebbs config set
 ```
 

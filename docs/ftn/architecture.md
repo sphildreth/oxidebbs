@@ -165,24 +165,27 @@ When network mail fails, identify which boundary failed:
 | Netmail does not route onward | Nodelist, link routing, hold/crash policy, or unknown destination. |
 | Repeated duplicate posts are skipped | Duplicate detector is working; inspect duplicate logs for source details. |
 
-`net status`, `net links list`, `net areas list`, `net logs`, and nodelist
-import/list/lookup commands already expose DecentDB network state. `net queue`,
-`net packets`, toss/scan/poll execution, and AreaFix remain planned.
+`net status`, `net links list/show`, `net areas list/subscribe/unsubscribe`,
+`net queue`, `net packets`, `net logs`, `net poll --dry-run`, and nodelist
+import/list/lookup commands already expose or update DecentDB network state.
+Toss/scan/poll execution and AreaFix remain planned.
 
 ## Current Implementation Status
 
 The v1.2 foundation currently includes shared network configuration, DecentDB
 network tables, protocol-neutral network types, FTN packet/kludge/duplicate
-primitives, BinkP frame I/O, and nodelist import/lookup.
+primitives, pure netmail routing decisions, AreaFix command parsing, BinkP
+frame I/O, BinkP transport-security preflight policy, and nodelist
+import/lookup.
 
 The following pieces are still planned:
 
 - tosser
 - scanner
 - bundle handling
-- differential nodelist updates and routing
-- AreaFix
-- BinkP client and server
+- nodelist-driven runtime routing integration
+- AreaFix authentication, subscription mutation, reply netmail, and logging
+- BinkP client/server loops, TLS sessions, retry scheduling, and poll logging
 - operational toss/scan/poll `net` CLI commands
 
 See `design/MAILER.md` and `design/FTN_PLAN.md` in the repository for the

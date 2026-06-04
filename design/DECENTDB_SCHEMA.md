@@ -64,8 +64,10 @@ Open and startup flow:
   implementation work rather than P2 schema/config foundation.
 - Restores are executed inside one DecentDB transaction; validation is complete before
   any rows are written.
-- `db compact` is intentionally unsupported in this phase because DecentDB does not
-  expose a safe compaction API contract in this release.
+- `db compact --output <path> [--overwrite]` checkpoints the active DecentDB,
+  saves a compacted copy to a separate output file, evicts the output shared WAL,
+  and verifies the compacted database before reporting success. It refuses the
+  active database path so replacement remains an offline operator action.
 
 ## Type Rules
 

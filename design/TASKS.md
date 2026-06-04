@@ -16,11 +16,11 @@ re-opening scope decisions.
 | --- | --- | --- |
 | P0 | Scope freeze and ADR baseline | Complete |
 | P1 | Release hygiene and stale-future sweep | Complete |
-| P2 | Schema, config, and DbWriter foundation | Partial |
-| P3 | Caller authorization and flow polish | Partial |
+| P2 | Schema, config, and DbWriter foundation | Complete |
+| P3 | Caller authorization and flow polish | Complete |
 | P4 | Serial/modem transport and file transfers | Partial |
 | P5 | Door ecosystem expansion | Partial |
-| P6 | Database maintenance operations | Blocked |
+| P6 | Database maintenance operations | Complete |
 | P7 | Sysop CLI completion | Partial |
 | P8 | Sysop TUI completion | Partial |
 | P9 | Shared network foundation | Complete |
@@ -83,15 +83,18 @@ v1.2 tasks; see the phase status map above for current completion state.
 - [x] CLI/TUI door add/edit workflows that mutate door definitions.
 - [x] Additional door drop-file formats such as `CHAIN.TXT`, `DOORFILE.SR`,
   Wildcat variants, and PCBoard variants.
-- [ ] `db compact`, pending a safe DecentDB compaction API contract.
+- [x] `db compact --output <path> [--overwrite]` using DecentDB output-file
+  compaction.
 - [x] Audit retention purge CLI wrapper.
 - [x] Dedicated logoff screen rendering from `terminal.logoff_screen`.
 - [x] DbWriter service for high-contention write scaling.
 - [ ] Physical serial/modem caller transport.
 - [ ] Caller file-area transfers: ZMODEM primary and XMODEM-CRC fallback.
 - [ ] Full FTN implementation, including packet parser/writer, tosser, scanner,
-  bundles, nodelist, duplicate detection, netmail routing, AreaFix, required
-  BinkP transport for FTN/FidoNet mail exchange, and operational CLI.
+  bundles, nodelist, duplicate detection, netmail routing runtime integration,
+  AreaFix, required BinkP transport for FTN/FidoNet mail exchange, and
+  operational CLI. Pure netmail routing decisions, AreaFix command parsing, and
+  safe ZIP packet extraction are complete in `oxidebbs-ftn`.
 - [ ] OxideNet implementation beyond the current foundation/design work.
 - [ ] Remote web admin or status dashboard with a full security model.
 - [ ] Native door API and remote door-provider integrations.

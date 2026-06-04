@@ -44,6 +44,20 @@ impl BinkpServer {
         crate::transfer::send_file(writer, file)
     }
 
+    /// Send a complete BinkP batch and terminate it with `M_EOB`.
+    ///
+    /// # Errors
+    ///
+    /// Returns protocol errors for invalid file metadata or I/O errors from the
+    /// stream.
+    pub fn send_batch<W: Write>(
+        &self,
+        writer: &mut W,
+        files: &[BinkpOutboundFile],
+    ) -> Result<(), BinkpError> {
+        crate::transfer::send_batch(writer, files)
+    }
+
     /// Receive the next BinkP file, or `None` when the peer ends the batch.
     ///
     /// # Errors
@@ -55,6 +69,19 @@ impl BinkpServer {
         stream: &mut S,
     ) -> Result<Option<BinkpInboundFile>, BinkpError> {
         crate::transfer::receive_next_file(stream)
+    }
+
+    /// Receive BinkP files until the peer sends `M_EOB`.
+    ///
+    /// # Errors
+    ///
+    /// Returns protocol errors for malformed file exchange or I/O errors from
+    /// the stream.
+    pub fn receive_batch<S: Read + Write>(
+        &self,
+        stream: &mut S,
+    ) -> Result<Vec<BinkpInboundFile>, BinkpError> {
+        crate::transfer::receive_batch(stream)
     }
 
     /// Send the BinkP end-of-batch marker.

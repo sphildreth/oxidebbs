@@ -36,16 +36,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   parser/composer, duplicate-key policy, and DecentDB-backed duplicate detector.
 - `oxidebbs-ftn` bundle classification boundary for raw `.pkt`, ZIP arcmail,
   and ARJ arcmail inputs with explicit unsupported-extraction errors.
+- Safe ZIP arcmail packet extraction in `oxidebbs-ftn`, limited to top-level
+  `.pkt` entries with typed errors for corrupt, empty, nested, duplicate, and
+  overwrite-risk archives.
 - `oxidebbs-ftn` full-nodelist parser for common Zone/Host/node/point rows.
+- `oxidebbs-ftn` pure `NetmailRouter` and `RoutingDecision` coverage for
+  local, direct, hub-routed, crash, hold, and unknown netmail destinations.
+- `oxidebbs-ftn` AreaFix command parser for `%LIST`, `%QUERY`, `%HELP`,
+  subscribe, unsubscribe, and rescan request command forms.
 - `oxidebbs-server net` read-only status, link, area, poll-log, and nodelist
   import/list/lookup commands backed by DecentDB network tables.
+- `oxidebbs-server net` queue, packet, link-show, poll dry-run, and manual area
+  subscription commands backed by DecentDB network state.
+- `oxidebbs-server net packets summary/show/retry/mark-quarantined` for packet
+  visibility and safe DecentDB-only packet state controls.
 - `oxidebbs-server net nodelist apply-diff`, backed by conservative FTS-style
   `NODEDIFF.xxx` apply support in `oxidebbs-ftn`.
 - `oxidebbs-binkp` command/data frame parser/writer plus client/server
   handshake primitives with address/password validation.
 - `oxidebbs-binkp` `M_FILE` offer parsing/writing, bounded data-frame
   send/receive helpers, `M_GOT` acknowledgement, `M_EOB` end-of-batch handling,
-  and session-level filename validation.
+  batch send/receive helpers, empty-batch handling, and session-level filename
+  validation.
+- `oxidebbs-binkp` transport-security preflight policy for TLS-required,
+  TLS-opportunistic, and plaintext-legacy BinkP links.
+- `oxidebbs-binkp` exponential retry policy helper for future BinkP poll loops.
+- `oxidebbs-binkp` one-active-session-per-link guard primitive for future BinkP
+  poll/listener loops.
 - Read-only Network screen in the local sysop TUI with DecentDB-backed profile,
   link, area, packet, message, poll-log, duplicate, packet-status, and nodelist
   counts.
@@ -60,11 +77,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   added file-transfer storage tables.
 - Menu items and door definitions now carry `min_security_level` (defaults to 0).
 - The caller menu and door dispatch enforce security levels before executing actions.
+- Live caller door validation now accepts every drop-file format rendered by
+  `oxidebbs-door`.
 - Release workflow manual dispatch now defaults to the `v1.2.0` release line and smokes packaged binaries before upload.
 - File-entry removal from the sysop CLI is a safe unapprove operation that
   requires a reason and preserves stored file bytes.
-- `net toss`, `net scan`, and `net poll` now return explicit not-implemented
-  errors until the FTN tosser/scanner/BinkP session engine exists.
+- `messages search` now matches area keys and network metadata in addition to
+  subject, body, and author display text.
+- User, message, message-area, door, file, nodelist, and manual network
+  subscription CLI write commands now audit successful mutations where DecentDB
+  audit storage is available.
+- `net toss`, `net scan`, and non-dry-run `net poll` now return explicit
+  not-implemented errors until the FTN tosser/scanner/BinkP session engine
+  exists.
 - Remote admin remains config-only and disabled; no HTTP listener is started.
 
 ## [1.1.0] - 2026-06-03
@@ -218,8 +243,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `db import --format json <path>` as a full, schema-validated restore into
   schema-only DecentDB targets, with transactional insertion and FK-aware load
   ordering.
-- Documented and enforced `db compact` explicit unsupported behavior in this
-  release because DecentDB exposes no safe production compaction API.
+- Added `db compact --output <path> [--overwrite]` for verified output-file
+  DecentDB compaction that refuses the active database path.
 - Added a documentation-first Oxide Door Check validation flow (`doors check`,
   `doors dropfile`, and `doors test --dry-run`) and live testing guidance via DOSEMU2
   for the caller `Doors` menu path.

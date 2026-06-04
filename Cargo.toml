@@ -40,3 +40,4 @@ nix = { version = "0.31.3", features = ["term", "fs", "user"] }
 crossterm = "0.28"
 fuzzy-matcher = "0.3"
 sha2 = "0.11.0"
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }

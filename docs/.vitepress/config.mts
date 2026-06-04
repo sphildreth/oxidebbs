@@ -65,6 +65,8 @@ export default defineConfig({
           { text: 'Packet Format', link: '/ftn/packet-format' },
           { text: 'Echomail', link: '/ftn/echomail' },
           { text: 'Netmail', link: '/ftn/netmail' },
+          { text: 'Netmail Routing', link: '/ftn/netmail-routing' },
+          { text: 'AreaFix', link: '/ftn/areafix' },
           { text: 'Bundles', link: '/ftn/bundles' },
           { text: 'BinkP', link: '/ftn/binkp' }
         ]

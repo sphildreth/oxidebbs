@@ -1,10 +1,15 @@
+pub mod areafix;
 pub mod bundle;
 pub mod duplicate;
 pub mod error;
 pub mod kludge;
 pub mod nodelist;
 pub mod packet;
+pub mod route;
 
+pub use areafix::{
+    AreaFixCommand, AreaFixParseError, parse_areafix_command, parse_areafix_commands,
+};
 pub use bundle::{
     BundleClassification, BundleError, BundleExtractor, BundleFormat, classify_bundle_path,
 };
@@ -22,3 +27,4 @@ pub use nodelist::{FtnNodelistEntry, NodelistDiffError, apply_nodelist_diff, par
 pub use packet::{
     FtnPacket, MessageAttribute, PacketHeader, PacketMessage, PacketReader, PacketWriter,
 };
+pub use route::{FtnRouteLink, HubRouteScope, NetmailRouter, RoutingDecision};

@@ -140,7 +140,8 @@ door through the server-side bridge. Before launch, verify:
 - the door working directory exists
 - the configured runner executable, usually `dosemu`, exists on `PATH` or at
   the configured path
-- the drop-file format is `DOOR.SYS` or `DORINFO1.DEF`
+- the drop-file format is `DOOR.SYS`, `DORINFO1.DEF`, `CHAIN.TXT`,
+  `DOORFILE.SR`, `PCBOARD.SYS`, or `CALLINFO.BBS`
 - the runtime directory is writable
 - the time limit is greater than zero
 
@@ -224,7 +225,7 @@ Use the DecentDB-aware sysop command boundary:
 oxidebbs-server db backup backups/oxidebbs.ddb
 oxidebbs-server db export --format json > backups/oxidebbs.json
 oxidebbs-server db import --format json backups/oxidebbs.json
-oxidebbs-server db compact
+oxidebbs-server db compact --output backups/oxidebbs-compacted.ddb
 ```
 
 `db import --format json` requires a schema-initialized, schema-only target:
@@ -238,8 +239,10 @@ oxidebbs-server db compact
 `db import --format json` is implemented as a full restore (not merge), preserving
 UUIDs with full foreign-key-aware insertion order and transactionality.
 
-`db compact` is intentionally unsupported in this release because DecentDB does
-not expose a safe compaction API contract.
+`db compact --output <path> [--overwrite]` writes and verifies a separate
+compacted DecentDB file. It refuses to write to the active database path; stop
+the server before manually replacing the active database with the compacted
+output.
 
 Audit retention is configured with `[audit].retention_days` and defaults to
 `365`. Runtime inserts do not auto-delete old audit rows; scheduled maintenance

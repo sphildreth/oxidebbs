@@ -49,9 +49,9 @@ What exists today:
   byte-preserving `PacketReader`/`PacketWriter`, tolerant kludge parsing, strict
   kludge composition, ADR 0023 SHA-256 duplicate-key construction with
   five-minute fallback clock-skew candidates, a DecentDB-backed duplicate
-  detector over `network_duplicate_log`, raw/ZIP/ARJ bundle classification with
-  explicit unsupported-extraction errors, and a common full-nodelist parser for
-  Zone/Host/node/point rows.
+  detector over `network_duplicate_log`, raw/ZIP/ARJ bundle classification, raw
+  packet pass-through, safe ZIP packet extraction, and a common full-nodelist
+  parser for Zone/Host/node/point rows.
 - `oxidebbs-binkp` — tested command/data frame parser/writer, command
   constants, and client/server handshake primitives for `M_ADR`, optional
   `M_PWD`, `M_OK`, and `M_ERR`.
@@ -63,7 +63,7 @@ What does not exist yet:
 
 - Tosser (inbound packet processing)
 - Scanner (outbound message packing)
-- Bundle creation and real ZIP/ARJ extraction
+- Bundle creation and ARJ extraction
 - Differential nodelist updates
 - Seen-by and PATH propagation
 - Netmail routing
@@ -1534,9 +1534,11 @@ fn extract_bundle(
 ```
 
 Classifies input and extracts all `.pkt` files from a compressed bundle. Current
-code handles raw packet pass-through and returns explicit unsupported errors for
-ZIP and ARJ until decompression support is implemented. Full extraction must
-handle:
+code handles raw packet pass-through and ZIP extraction. ZIP extraction accepts
+only top-level `.pkt` entries, rejects non-packet or nested entries, rejects
+duplicate output names case-insensitively, rejects output collisions, and returns
+typed errors for corrupt or empty archives. ARJ remains an explicit unsupported
+format until the ARJ policy is decided. Full extraction must handle:
 
 - `.zip` bundles
 - `.arj` bundles when the ARJ policy is decided
@@ -1559,9 +1561,12 @@ enum BundleCompression {
 - Extract a known-good ZIP bundle — verify .pkt files are recovered
 - Classify raw `.pkt`, `.zip`, and `.arj` inputs
 - Extract a raw `.pkt` file (no compression) — verify pass-through
-- Return explicit unsupported-extraction errors for `.zip` and `.arj` until real
-  extraction exists
+- Return explicit unsupported-extraction errors for `.arj` until real extraction
+  exists
 - Attempt to extract a corrupt bundle — verify error handling
+- Attempt to extract an empty ZIP bundle — verify no-packet error handling
+- Reject ZIP entries with nested paths, traversal-style paths, non-packet
+  extensions, duplicate packet names, and existing output files
 - Verify day-of-week extension is correct for each day
 - Verify bundle filenames for same-zone and cross-zone addresses
 - Verify bundle creation with `None` compression produces the original .pkt file
@@ -1578,7 +1583,7 @@ enum BundleCompression {
 - [ ] `BundleCreator` creates ZIP bundles from packet files
 - [x] `BundleExtractor` handles raw packet pass-through and classifies ZIP/ARJ
   inputs
-- [ ] `BundleExtractor` extracts packets from ZIP bundles
+- [x] `BundleExtractor` extracts packets from ZIP bundles
 - [ ] ARJ extraction policy is implemented or explicitly deferred
 - [ ] Day-of-week extensions are correct
 - [x] Focused bundle tests pass
@@ -1845,15 +1850,15 @@ enum RoutingDecision {
 
 ### Definition of done
 
-- [ ] `NetmailRouter` implements routing rules
-- [ ] `RoutingDecision` covers all routing scenarios
-- [ ] Direct, hub-routed, crash, and hold routing work correctly
-- [ ] Local delivery detection works
-- [ ] Unknown destinations are handled gracefully
-- [ ] All tests pass
-- [ ] Rustdoc complete
-- [ ] ADR written for netmail routing strategy
-- [ ] `dev-check.sh` passes cleanly
+- [x] `NetmailRouter` implements routing rules
+- [x] `RoutingDecision` covers all routing scenarios
+- [x] Direct, hub-routed, crash, and hold routing work correctly
+- [x] Local delivery detection works
+- [x] Unknown destinations are handled gracefully
+- [x] All tests pass
+- [x] Rustdoc complete
+- [x] ADR written for netmail routing strategy
+- [x] `dev-check.sh` passes cleanly
 
 ---
 
@@ -1947,7 +1952,8 @@ Already subscribed: AREA.ALREADY
 
 ### Definition of done
 
-- [ ] `AreaFixProcessor` handles all commands (%LIST, %QUERY, %HELP, +AREA, -AREA, rescan)
+- [x] AreaFix command parser handles all command forms (%LIST, %QUERY, %HELP, +AREA, -AREA, rescan)
+- [ ] `AreaFixProcessor` authenticates and executes all commands
 - [ ] Password authentication works
 - [ ] Subscriptions are created and removed in DecentDB
 - [ ] Rescan sends recent messages
@@ -2059,15 +2065,20 @@ struct PollResult {
 - M_PWD carries the session password. BinkP passwords are case-sensitive at the BinkP layer; legacy packet passwords remain case-insensitive where required by FTN packet convention.
 - M_FILE offers a file. The receiver acknowledges with M_GOT when the file has been received completely, or M_SKIP to refuse it.
 - M_EOB marks end-of-batch. A session completes after both sides have finished sending files and pending M_GOT/M_SKIP acknowledgements have been processed.
+- Stream-level batch helpers send zero or more M_FILE offers, terminate with
+  M_EOB, and receive ordered files until M_EOB. Full network session lifetime,
+  TLS, spool placement, retries, and poll logging remain outside this helper.
 - File transfer within BinkP uses BinkP data frames. After M_FILE, subsequent
   data frames carry bytes for that file until the advertised size is reached;
   there is no separate end-of-file frame. This is not XMODEM, YMODEM, ZMODEM,
   ZedZap, Hydra, or any caller-facing transfer protocol.
 - M_GET supports resume from an offset. Basic v1 may reject resume with a clear error, but the frame parser must understand M_GET.
-- The client should support retry with exponential backoff on connection failure.
+- Retry backoff policy calculation exists. The client still needs to execute
+  retries around real connection failures.
 - The client should log all poll activity to `network_poll_log`.
 - The server should reject connections from unknown addresses with M_ERR.
-- The server should handle concurrent connections (one per link at a time).
+- The one-active-session-per-link guard primitive exists. The server still needs
+  to use it in real concurrent connection handling.
 - BinkP default port is 24554.
 
 ### Tests required

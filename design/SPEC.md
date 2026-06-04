@@ -438,8 +438,9 @@ When a live control socket is unavailable, node disconnect/message/broadcast
 commands preserve the previous audit intent behavior and report that live delivery
 was not available. `db import --format json <path>` is now a full restore into a
 schema-only database with schema checks and transactional insertion.
-`db compact` is explicitly unsupported in this release because DecentDB does not
-expose a safe compaction API; the command returns a clear error.
+`db compact --output <path> [--overwrite]` writes a verified compacted DecentDB
+output file and refuses to write to the active database path. Replacing the
+active database is a manual offline operator step.
 
 The local control socket is Unix-domain only in this phase and lives at
 `runtime/oxidebbs-control.sock`. The protocol uses one newline-delimited JSON
@@ -474,9 +475,10 @@ those types during the v1.2 transition.
 
 Legacy FTN packet and kludge primitives live in `oxidebbs-ftn`; BinkP frame
 primitives live in `oxidebbs-binkp`; OxideNet profile data lives in
-`oxidebbs-oxidenet`. Toss/scan workflows, bundle compression, nodelist
-processing, AreaFix, BinkP sessions, and full OxideNet onboarding remain behind
-those crate boundaries.
+`oxidebbs-oxidenet`. ZIP packet extraction is handled inside `oxidebbs-ftn`
+with a strict top-level `.pkt` policy. Toss/scan workflows, outbound bundle
+compression, ARJ extraction, nodelist processing, AreaFix, BinkP sessions, and
+full OxideNet onboarding remain behind those crate boundaries.
 
 ## 14. Observability
 

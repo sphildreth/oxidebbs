@@ -12,6 +12,7 @@ Current capabilities:
   CLI.
 - Drop-file writers cover `DOOR.SYS`, `DORINFO1.DEF`, `CHAIN.TXT`,
   `DOORFILE.SR`, `PCBOARD.SYS`, and `CALLINFO.BBS` with CRLF byte-output tests.
+- Live caller door validation accepts the same supported drop-file formats.
 - Remote door-provider abstractions, BBSLink-style dry runs, DoorParty-style dry
   runs, and secret redaction primitives exist.
 

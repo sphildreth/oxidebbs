@@ -17,11 +17,31 @@ The `oxidebbs-binkp` crate currently provides tested frame primitives:
 - `M_FILE` offer parsing and writing
 - bounded data-frame send/receive helpers
 - `M_GOT` acknowledgement and `M_EOB` end-of-batch handling
+- batch send/receive helpers for empty and multi-file stream exchanges
 - session-level filename validation that rejects path-like names
+- transport-security preflight policy for `tls_required`,
+  `tls_opportunistic`, and `plaintext_legacy`
+- exponential retry policy calculation for future poll loops
+- in-process one-active-session-per-link guard primitive
 
 Implemented command constants include `M_NUL`, `M_ADR`, `M_PWD`, `M_FILE`,
 `M_OK`, `M_EOB`, `M_GOT`, `M_ERR`, `M_BSY`, `M_GET`, and `M_SKIP`.
 
-Full client/server connection loops, TLS policy, retries, concurrency guards,
-poll logging, and filesystem spool integration are tracked by the BinkP
-transport phase in the v1.2 release plan.
+`net poll --dry-run` uses the transport-security policy helper to report
+whether a link requires TLS, attempts TLS, allows plaintext, or needs an
+operator warning.
+
+Batch helpers remain stream-level primitives: an empty batch writes only
+`M_EOB`, received files are acknowledged with `M_GOT`, and full connection
+lifetime remains outside the helper.
+
+Retry policy support is calculation-only. It decides whether more attempts
+remain and what delay should precede the next attempt; it does not sleep or run
+poll loops.
+
+The link session guard is also a primitive: it can prevent a second active
+session for the same link once poll/listener loops use it.
+
+Full client/server connection loops, TLS socket/session implementation, retry
+execution, poll logging, and filesystem spool integration are tracked by the
+BinkP transport phase in the v1.2 release plan.

@@ -57,4 +57,4 @@ Current limitations:
 - nodediff CRC validation is not implemented yet
 - flags, phone numbers, sysop names, and location fields are preserved only in
   the raw entry text today
-- netmail routing and AreaFix do not consume the nodelist yet
+- runtime netmail routing and AreaFix do not consume the DecentDB nodelist yet

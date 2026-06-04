@@ -32,15 +32,15 @@ Status values:
 | P3 | Caller authorization and flow polish | Complete | Runtime menu security, caller sysop submenu, logoff rendering, starter docs/assets, release notes, and acceptance tests are current. |
 | P4 | Serial/modem transport and file transfers | Partial | Config, file-area schema, repository APIs, XMODEM-CRC fallback, and ZMODEM frame primitives exist; physical serial/modem transport, full ZMODEM send/receive, and caller file-area workflows are not implemented. |
 | P5 | Door ecosystem expansion | Partial | Mutable door CLI, DecentDB door sync, all current drop-file writers/tests, BBSLink/DoorParty dry-run adapters, and provider secret redaction primitives exist; live connectors and CLI/TUI/storage/export credential coverage are incomplete. |
-| P6 | Database maintenance operations | Blocked | Audit purge, db verify, export, and import exist; `db compact` is blocked because DecentDB v2.8.0 exposes no safe public compaction API. |
-| P7 | Sysop CLI completion | Partial | Deferred user, message, ANSI, config, door, file-transfer, and read-only network commands exist; operational network commands and full audit coverage remain incomplete. |
+| P6 | Database maintenance operations | Complete | Audit purge, db verify, export, import, and output-file `db compact --output <path> [--overwrite]` exist; active database replacement remains an explicit offline operator step. |
+| P7 | Sysop CLI completion | Partial | Deferred user, message, ANSI, config, door, file-transfer, network state, subscription metadata, and write-audit CLI coverage exist; toss, scan, real BinkP poll, and AreaFix commands remain incomplete. |
 | P8 | Sysop TUI completion | Partial | Base TUI screens, read-only network status, and several mutations exist; required advanced database/config/ANSI workflows and OxideNet operational screens are missing. |
 | P9 | Shared network foundation | Complete | `oxidebbs-network` provides planned shared types/conversions; shared `network_*` tables and repository APIs exist; docs and tests cover the foundation. |
 | P10 | Legacy FTN packet and message engine | Complete | Type-2 packet I/O, kludge parsing/composition, duplicate-key policy, DecentDB-backed duplicate detection, docs, and tests exist. |
-| P11 | FTN toss, scan, and bundles | Partial | Network tables, packet scaffolding, and raw/ZIP/ARJ bundle classification exist; tosser, scanner, real extraction/creation, and end-to-end cycle are not implemented. |
-| P12 | FTN routing, nodelist, and AreaFix | Partial | Nodelist table, full-list parser, atomic import/apply-diff, and lookup exist; netmail routing, AreaFix, CRC hardening, and activity logging are incomplete. |
-| P13 | BinkP transport | Partial | BinkP crate has frame constants, tested frame I/O, address/password handshake primitives, and file offer/data-frame helpers; full client/server loops, TLS modes, retries, and poll logging are not implemented. |
-| P14 | FTN operations, hardening, and docs | Partial | `net` status/list/log/nodelist import/apply-diff commands read real DecentDB state; toss, scan, poll, queue, packet, AreaFix, quarantine, retention, and stress coverage remain incomplete. |
+| P11 | FTN toss, scan, and bundles | Partial | Network tables, packet scaffolding, raw/ZIP/ARJ bundle classification, raw pass-through, and safe ZIP packet extraction exist; tosser, scanner, ARJ extraction, bundle creation, and end-to-end cycle are not implemented. |
+| P12 | FTN routing, nodelist, and AreaFix | Partial | Nodelist table, full-list parser, atomic import/apply-diff, lookup, pure netmail routing decisions, and AreaFix command parsing exist; AreaFix runtime processing, routing integration, CRC hardening, and activity logging are incomplete. |
+| P13 | BinkP transport | Partial | BinkP crate has frame constants, tested frame I/O, address/password handshake primitives, file offer/data-frame helpers, batch exchange helpers, retry backoff policy, transport-security preflight policy, and one-link-session guard primitives; full client/server loops, TLS sessions, retry execution, and poll logging are not implemented. |
+| P14 | FTN operations, hardening, and docs | Partial | `net` status/list/log/queue/packet/subscription/nodelist commands read or update real DecentDB state, including packet summary/show/retry/quarantine state controls; toss, scan, real poll, AreaFix runtime, retention, and stress coverage remain incomplete. |
 | P15 | OxideNet implementation | Partial | OxideNet crate has constants and data structs; application, admin, token, config-package, hub/member, public-network, and TUI workflows are not implemented. |
 | P16 | Remote admin and status surface | Partial | Security ADR, disabled `[admin_web]` config, validation, and docs exist; HTTP surface, auth, CSRF/replay implementation, and rate-limit runtime are absent. |
 | P17 | Repository and release automation | Complete | Version metadata is aligned through `scripts/bump-version.sh`; Codeberg mirror dry-run automation, optional DOSEMU2 smoke workflow, and release package smoke checks exist. |
@@ -159,7 +159,7 @@ declared complete.
 
 Coverage audit update 2026-06-04:
 
-- Partial/Blocked: P4-P16 and P18 are not release-complete. Some rows have
+- Partial: P4-P8, P11-P16, and P18 are not release-complete. Some rows have
   working foundations, but every row tied to a Partial or Blocked phase must be
   revalidated before v1.2 can be declared complete.
 - Complete: P2 schema/config/DbWriter foundation and P3 caller authorization
@@ -171,9 +171,10 @@ Coverage audit update 2026-06-04:
 - Partial: P5 door administration, drop-file coverage, remote-provider dry-run
   adapters, and provider secret redaction primitives are partly implemented, but
   live connectors and CLI/TUI/storage/export credential coverage are incomplete.
-- Blocked: P6 `db compact` is explicitly unsupported because DecentDB v2.8.0
-  exposes no safe public compaction API. Audit purge, verify, export, and import
-  remain covered by the implemented maintenance commands.
+- Complete: P6 audit purge, verify, JSON export/import, and output-file
+  compaction are implemented and tested. `db compact --output <path>
+  [--overwrite]` uses DecentDB checkpoint/save-as semantics, verifies the
+  compacted output, and refuses the active database path.
 - Partial: P7-P8 sysop CLI/TUI coverage is incomplete for real network
   operations, OxideNet operational workflows, exports, external editors, full
   mutation audit coverage, and several advanced workflows. A read-only TUI
@@ -529,6 +530,8 @@ Audit update 2026-06-04:
   redaction primitives exist.
 - Done: every currently supported drop-file format has exact CRLF byte-output
   coverage in `oxidebbs-door`.
+- Done: live caller door validation now accepts every drop-file format that
+  `oxidebbs-door` can render.
 - Not done: live remote provider connectors, remote provider fake-server tests,
   provider credential secret-reference storage, and credential redaction across
   CLI, TUI, logs, backups, and exports are not implemented.
@@ -613,19 +616,18 @@ oxidebbs-server doors test oxide-check --user sysop --dry-run
 
 ## P6: Database Maintenance Operations
 
-Status: Blocked
+Status: Complete
 
 Audit update 2026-06-04:
 
 - Done: `audit purge-retention`, `audit purge-before`, dry-run/JSON output,
   `db verify`, `db export --format json`, and `db import --format json` exist.
-- Blocked: `db compact` returns a hard unsupported error because DecentDB v2.8.0
-  does not expose a safe public compaction API. Best-practice decision:
-  preserving database safety is higher priority than implementing an unsafe
-  file-copy or internal-storage workaround, so P6 remains Blocked until DecentDB
-  exposes an explicit compaction contract.
-- Not done: docs still contain stale statements saying audit purge needs a future
-  CLI wrapper, and schema docs are stale relative to schema version `7`.
+- Done: `db compact --output <path> [--overwrite]` writes a separate compacted
+  DecentDB file using `checkpoint_wal`, `save_as`, and shared-WAL eviction,
+  verifies the compacted output, and refuses to write to the active database
+  path. Best-practice decision: OxideBBS intentionally does not perform live
+  in-place replacement; operators replace the active database manually while the
+  server is stopped.
 
 Objective: Finish database maintenance behavior that was deferred or kept CLI
 only.
@@ -645,9 +647,8 @@ Implementation tasks:
   repository read paths.
 - Keep `db export --format json` read-only and schema-versioned.
 - Keep `db import --format json` as full restore into schema-only target.
-- Implement `db compact` only when DecentDB exposes a safe compaction API
-  contract. If the API still does not exist, mark P6 blocked for compaction and
-  do not claim v1.2 completion.
+- Implement `db compact --output <path> [--overwrite]` as verified output-file
+  compaction. Do not perform live in-place replacement of the active database.
 - Add packet archive retention tables/settings needed by P14.
 
 Acceptance criteria:
@@ -655,8 +656,8 @@ Acceptance criteria:
 - Audit purge cutoff tests cover dry-run and real delete.
 - Purge action is audited.
 - `db verify` fails clearly on malformed schema markers and broken references.
-- `db compact` either performs safe compaction or P6 is explicitly blocked with
-  the DecentDB API gap named.
+- `db compact --output <path> [--overwrite]` creates a verified compacted
+  DecentDB output file and refuses the active database path.
 - Restore/import/export tests still pass.
 
 Documentation updates:
@@ -677,19 +678,22 @@ Status: Partial
 
 Audit update 2026-06-04:
 
-- Done: `users delete` safe-disable behavior, `messages search`,
-  `ansi convert`, `config set`, and door add/edit commands exist.
+- Done: `users delete` safe-disable behavior, `messages search` across
+  subject, body, author display, area key, and network metadata, `ansi convert`,
+  `config set`, and door add/edit commands exist.
 - Done: file-transfer CLI surfaces (`files areas list/add/edit`,
   `files list/import/remove`, and `files transfers recent`) exist with stable
   JSON list output, safe unapprove-on-remove behavior, and audit events for
   file-area mutations, imports, and removals.
-- Done: read-only network CLI commands for P9-P14 now expose network status,
-  link lists, area lists, poll logs, nodelist import, nodelist listing, and
-  nodelist lookup.
+- Done: network CLI commands for P9-P14 now expose network status, link
+  list/show, area list, queue, packet lists, poll logs, nodelist import,
+  nodelist listing, nodelist lookup, poll dry-run preflight, and manual
+  subscription metadata updates.
+- Done: user, message, message-area, door, file-area, file-entry, nodelist, and
+  manual network subscription write commands now audit successful mutations
+  where DecentDB audit storage is available.
 - Not done: operational network CLI commands still do not perform toss, scan,
-  poll, queue, packet, AreaFix, subscribe, unsubscribe, or link-show operations.
-- Not done: destructive/write command audit coverage has not been proven for all
-  commands named in the phase.
+  real BinkP poll execution, or AreaFix workflows.
 
 Objective: Implement every CLI command previously documented as "can wait" or
 kept out of v1.1.
@@ -993,11 +997,17 @@ Audit update 2026-06-04:
 - Done: lower-level schema and repository scaffolding for network packets,
   messages, duplicate logs, poll logs, seen-by/path, and subscriptions exists.
 - Done: raw `.pkt`, ZIP arcmail, and ARJ arcmail inputs are classified by
-  `oxidebbs-ftn`; raw packets pass through the extraction boundary and ZIP/ARJ
-  return explicit unsupported-extraction errors.
+  `oxidebbs-ftn`; raw packets pass through the extraction boundary and ZIP
+  bundles extract top-level `.pkt` entries into the requested output directory.
+- Done: ZIP extraction rejects nested paths, absolute/traversal-style names,
+  non-packet entries, duplicate output names, corrupt archives, empty archives,
+  and output-file collisions before handing packet paths to a future tosser.
+- Decision: ZIP arcmail extraction accepts only top-level `.pkt` entries. This
+  keeps extraction deterministic and avoids silently ignoring suspicious archive
+  contents or writing outside the controlled temp directory.
 - Not done: inbound tosser, outbound scanner, packet routing into local message
-  areas, packet archive/quarantine behavior, real ZIP/ARJ extraction, outbound
-  bundle creation, arcmail naming, and end-to-end scan/read/toss cycles are not
+  areas, packet archive/quarantine behavior, ARJ extraction, outbound bundle
+  creation, arcmail naming, and end-to-end scan/read/toss cycles are not
   implemented.
 
 Objective: Implement inbound and outbound legacy FTN packet workflows.
@@ -1068,9 +1078,16 @@ Audit update 2026-06-04:
   FTS-style `A<count>`, `C<count>`, and `D<count>` commands, and
   `net nodelist apply-diff <file> --base <full-list-file>` uses the existing
   atomic DecentDB replacement path.
-- Not done: nodediff CRC validation, netmail routing decisions, AreaFix command
-  processing, reply netmail generation, and activity logging are not
-  implemented.
+- Done: pure `NetmailRouter` and `RoutingDecision` coverage exists in
+  `oxidebbs-ftn` for local, direct, hub-routed, crash, hold, and unknown
+  destinations. Best-practice routing decision: crash and hold are explicit
+  direct-link outcomes; hub routes are evaluated only after local and direct
+  link checks fail.
+- Done: pure AreaFix command parsing exists in `oxidebbs-ftn` for `%LIST`,
+  `%QUERY`, `%HELP`, subscribe, unsubscribe, and rescan request command forms.
+- Not done: nodediff CRC validation, AreaFix password authentication, DecentDB
+  subscription mutation, reply netmail generation, routing runtime integration
+  with scanner/tosser queues, and activity logging are not implemented.
 - Not done: the nodelist parser does not yet capture every full row field
   (flags, sysop, location, phone, speed) into structured columns; those remain
   preserved only in `raw_entry`.
@@ -1142,10 +1159,19 @@ Audit update 2026-06-04:
 - Done: `M_FILE` offer parsing/writing, bounded data-frame send/receive
   helpers, `M_GOT` acknowledgement, `M_EOB` end-of-batch handling, and
   session-level filename validation exist.
+- Done: batch send/receive helpers handle empty polls, ordered multi-file
+  exchange, large file data-frame chunking/reassembly, and per-file `M_GOT`
+  acknowledgements at the stream layer.
+- Done: transport-security preflight policy exists for `tls_required`,
+  `tls_opportunistic`, and `plaintext_legacy`, and `net poll --dry-run` reports
+  the resulting TLS/plaintext plan and warnings.
+- Done: exponential retry backoff policy calculation exists with validation,
+  retry eligibility, and capped delays.
+- Done: in-process one-active-session-per-link guard primitive exists and
+  releases permits on drop.
 - Not done: full command session loops, filesystem spool integration,
-  TLS-required/plaintext-legacy/opportunistic policy, retries,
-  one-connection-per-link guard, and `network_poll_log` integration are not
-  implemented.
+  TLS socket/session implementation, retry execution, guard integration into
+  poll/listener loops, and `network_poll_log` integration are not implemented.
 
 Objective: Implement BinkP client/server polling for legacy FTN, private
 networks, and OxideNet transport.
@@ -1217,14 +1243,20 @@ Status: Partial
 Audit update 2026-06-04:
 
 - Done: a top-level `oxidebbs-server net` command group exists, and `status`,
-  `links list`, `areas list`, `logs`, `nodelist import`, `nodelist apply-diff`,
-  `nodelist list`, and `nodelist lookup` use real DecentDB network state.
-- Not done: `toss`, `scan`, and `poll` return explicit not-implemented errors;
-  queue, packet, AreaFix, subscribe/unsubscribe, link-show, and poll-all/dry-run
-  commands are not implemented.
-- Not done: quarantine dashboard data, poll failure dashboard data, packet
-  retention policy, stats collection, stress tests, and operational FTN behavior
-  are not implemented.
+  `links list`, `links show`, `areas list`, `areas subscribe`, `areas
+  unsubscribe`, `queue`, `packets summary/show/retry/mark-quarantined`,
+  `packets inbound/outbound/quarantine`, `logs`, `poll --dry-run`,
+  `nodelist import`, `nodelist apply-diff`, `nodelist list`, and
+  `nodelist lookup` use real DecentDB network state.
+- Done: packet retry/quarantine controls are intentionally DecentDB-state only:
+  retry resets failed or quarantined rows to pending, and mark-quarantined
+  records the reason without moving files until the spool/tosser runtime exists.
+- Not done: `toss`, `scan`, real `poll` execution, and AreaFix return or remain
+  behind explicit not-implemented boundaries because the FTN tosser/scanner and
+  BinkP session engine are not complete.
+- Not done: real tosser quarantine file movement, poll failure dashboard data,
+  packet retention policy, stats collection, stress tests, and operational FTN
+  behavior are not implemented.
 - Not done: required FTN docs pages such as setup, sysop guide, CLI,
   configuration, packet format, tosser, scanner, bundles, nodelist, AreaFix,
   BinkP, troubleshooting, testing, and performance are missing.

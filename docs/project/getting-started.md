@@ -214,13 +214,15 @@ OXIDE_DOOR_INTERACTIVE=1 ./scripts/test-oxide-door-dosemu2.sh
 cargo run -p oxidebbs-server -- db backup backups/oxidebbs.ddb
 cargo run -p oxidebbs-server -- db export --format json > backups/oxidebbs.json
 cargo run -p oxidebbs-server -- db import --format json backups/oxidebbs.json
+cargo run -p oxidebbs-server -- db compact --output backups/oxidebbs-compacted.ddb
 ```
 
 `db import --format json` is a full restore into schema-only targets only. It is
 transactional and validates IDs, relationships, and schema compatibility.
 
-`db compact` is explicitly unsupported in this release because DecentDB has no
-safe compaction API contract.
+`db compact --output <path> [--overwrite]` writes and verifies a compacted
+DecentDB output file. It refuses the active database path; stop the server before
+manually replacing the active database.
 
 ## 8) Local-only boundary
 

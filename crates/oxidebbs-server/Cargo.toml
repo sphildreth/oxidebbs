@@ -13,6 +13,7 @@ oxidebbs-db = { path = "../oxidebbs-db" }
 oxidebbs-door = { path = "../oxidebbs-door" }
 oxidebbs-sysop = { path = "../oxidebbs-sysop" }
 oxidebbs-ftn = { path = "../oxidebbs-ftn" }
+oxidebbs-binkp = { path = "../oxidebbs-binkp" }
 argon2.workspace = true
 clap.workspace = true
 rand_core.workspace = true

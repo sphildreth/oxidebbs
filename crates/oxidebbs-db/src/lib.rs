@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-pub use decentdb::{Db, DbConfig, DbError, QueryResult, QueryRow, Value};
+pub use decentdb::{Db, DbConfig, DbError, QueryResult, QueryRow, Value, evict_shared_wal};
 
 mod audit_repo;
 mod auth_repo;
@@ -47,18 +47,20 @@ pub use message_repo::{
 pub use migrations::migrate_to_current;
 pub use network_repo::{
     NetworkAreaRecord, NetworkDuplicateLogRecord, NetworkLinkRecord, NetworkMessageRecord,
-    NetworkNodelistRecord, NetworkPacketRecord, NetworkPathNode, NetworkPollLogRecord,
-    NetworkProfileRecord, NetworkSeenByNode, NetworkSubscriptionRecord,
+    NetworkNodelistRecord, NetworkPacketRecord, NetworkPacketSummaryRecord, NetworkPathNode,
+    NetworkPollLogRecord, NetworkProfileRecord, NetworkSeenByNode, NetworkSubscriptionRecord,
     find_network_area_by_tag_and_profile, find_network_link_by_key, find_network_nodelist_entry,
-    find_network_profile_by_key, finish_network_packet, finish_network_poll, insert_network_area,
-    insert_network_duplicate_log, insert_network_link, insert_network_message,
-    insert_network_nodelist_entry, insert_network_packet, insert_network_path,
-    insert_network_path_node, insert_network_poll_log, insert_network_profile,
+    find_network_packet_by_id, find_network_profile_by_key, finish_network_packet,
+    finish_network_poll, insert_network_area, insert_network_duplicate_log, insert_network_link,
+    insert_network_message, insert_network_nodelist_entry, insert_network_packet,
+    insert_network_path, insert_network_path_node, insert_network_poll_log, insert_network_profile,
     insert_network_seen_by, insert_network_seen_by_node, insert_network_subscription,
     list_network_areas, list_network_duplicates, list_network_links, list_network_messages,
     list_network_nodelist_entries, list_network_packets, list_network_path, list_network_poll_logs,
     list_network_profiles, list_network_seen_by, list_network_subscriptions,
-    replace_network_nodelist_entries, set_network_profile_enabled,
+    mark_network_packet_quarantined, replace_network_nodelist_entries, requeue_network_packet,
+    set_network_area_subscribed, set_network_profile_enabled, set_network_subscription_status,
+    summarize_network_packets,
 };
 pub use schema::schema_version as read_schema_version;
 pub use session_repo::{

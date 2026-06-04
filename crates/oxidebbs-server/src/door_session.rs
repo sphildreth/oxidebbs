@@ -1244,7 +1244,7 @@ where
 fn supported_drop_file(drop_file: &str) -> bool {
     matches!(
         drop_file.to_ascii_uppercase().as_str(),
-        "DOOR.SYS" | "DORINFO1.DEF"
+        "DOOR.SYS" | "DORINFO1.DEF" | "CHAIN.TXT" | "DOORFILE.SR" | "PCBOARD.SYS" | "CALLINFO.BBS"
     )
 }
 
@@ -1839,10 +1839,23 @@ mod tests {
         door.drop_file = "BAD.TXT".to_string();
         assert!(service.validate_door(&door, 1).is_err());
 
-        door.drop_file = "DOOR.SYS".to_string();
         door.command = "OXIDECHK.EXE".to_string();
-        assert!(service.validate_door(&door, 1).is_ok());
+        for drop_file in [
+            "DOOR.SYS",
+            "DORINFO1.DEF",
+            "CHAIN.TXT",
+            "DOORFILE.SR",
+            "PCBOARD.SYS",
+            "CALLINFO.BBS",
+        ] {
+            door.drop_file = drop_file.to_string();
+            assert!(
+                service.validate_door(&door, 1).is_ok(),
+                "{drop_file} should validate"
+            );
+        }
 
+        door.drop_file = "DOOR.SYS".to_string();
         door.command = "LORD.EXE /N1".to_string();
         assert!(service.validate_door(&door, 1).is_ok());
 

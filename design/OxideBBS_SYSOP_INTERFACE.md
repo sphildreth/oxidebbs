@@ -474,7 +474,7 @@ oxidebbs-server db backup <output-path>
 ```bash
 oxidebbs-server db export --format json
 oxidebbs-server db import --format json <path>
-oxidebbs-server db compact
+oxidebbs-server db compact --output <path> [--overwrite]
 oxidebbs-server db verify
 ```
 
@@ -483,8 +483,9 @@ oxidebbs-server db verify
 Backup/restore should be designed around DecentDB. `db import --format json <path>`
 is the v1 restore boundary; it is safe only for schema-only targets and runs
 transactionally.
-`db compact` is explicit but unsupported in this release because DecentDB does not
-expose a production-safe compaction API.
+`db compact --output <path> [--overwrite]` writes a verified compacted DecentDB
+output file and refuses to write to the active database path. Replacing the
+active database remains an offline operator action.
 
 `db stats --json` is a stable object contract with counts for schema version,
 users, message areas, messages, sessions, live active sessions, open session

@@ -65,6 +65,8 @@ impl Default for PacketHeader {
 pub struct MessageAttribute(pub u16);
 
 impl MessageAttribute {
+    /// No message attributes set.
+    pub const NONE: Self = Self(0x0000);
     /// Private message.
     pub const PRIVATE: Self = Self(0x0001);
     /// Crash message.
@@ -85,6 +87,12 @@ impl MessageAttribute {
     pub const LOCAL: Self = Self(0x0100);
     /// Hold-for-pickup message.
     pub const HOLD: Self = Self(0x0200);
+
+    /// Returns true when all bits from `flag` are present.
+    #[must_use]
+    pub const fn contains(self, flag: Self) -> bool {
+        self.0 & flag.0 == flag.0
+    }
 }
 
 /// FTN packet message with raw body bytes preserved.

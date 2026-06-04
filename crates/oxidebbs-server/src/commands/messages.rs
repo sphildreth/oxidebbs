@@ -1,14 +1,16 @@
+use std::collections::HashMap;
+
 use clap::{Args, Subcommand};
 use serde_json::Value as JsonValue;
 
 use oxidebbs_db::{
-    MessageAreaRecord, list_messages, list_messages_in_area, move_message_to_area,
+    MessageAreaRecord, MessageRecord, list_messages, list_messages_in_area, move_message_to_area,
     update_message_area_enabled, update_message_area_levels, update_message_visibility,
 };
 use serde_json::json;
 
 use crate::sysop_cli::{
-    AppContext, CliError, CliResult, area_json, emit_ok, generated_uuid, message_json,
+    AppContext, CliError, CliResult, area_json, audit, emit_ok, generated_uuid, message_json,
     open_database, print_json, print_message, print_messages, require_message,
     require_message_area,
 };
@@ -109,6 +111,13 @@ pub fn run_messages(command: MessagesCommand, ctx: &AppContext) -> CliResult<()>
         MessagesCommand::Delete { message_id } => {
             let message = require_message(&db, &message_id)?;
             update_message_visibility(db.db(), &message.id, "deleted")?;
+            audit(
+                &db,
+                "message:delete",
+                None,
+                None,
+                &format!("message {} visibility changed to deleted", message.id),
+            )?;
             emit_ok(
                 ctx.json,
                 "message deleted",
@@ -123,6 +132,16 @@ pub fn run_messages(command: MessagesCommand, ctx: &AppContext) -> CliResult<()>
             let message = require_message(&db, &message_id)?;
             let area = require_message_area(&db, &to_area)?;
             move_message_to_area(db.db(), &message.id, &area.id)?;
+            audit(
+                &db,
+                "message:move",
+                None,
+                None,
+                &format!(
+                    "message {} moved from area {} to {} ({})",
+                    message.id, message.area_id, area.key, area.id
+                ),
+            )?;
             emit_ok(
                 ctx.json,
                 "message moved",
@@ -133,6 +152,13 @@ pub fn run_messages(command: MessagesCommand, ctx: &AppContext) -> CliResult<()>
         MessagesCommand::Lock { message_id } => {
             let message = require_message(&db, &message_id)?;
             update_message_visibility(db.db(), &message.id, "hidden")?;
+            audit(
+                &db,
+                "message:lock",
+                None,
+                None,
+                &format!("message {} visibility changed to hidden", message.id),
+            )?;
             emit_ok(
                 ctx.json,
                 "message locked",
@@ -143,6 +169,13 @@ pub fn run_messages(command: MessagesCommand, ctx: &AppContext) -> CliResult<()>
         MessagesCommand::Unlock { message_id } => {
             let message = require_message(&db, &message_id)?;
             update_message_visibility(db.db(), &message.id, "normal")?;
+            audit(
+                &db,
+                "message:unlock",
+                None,
+                None,
+                &format!("message {} visibility changed to normal", message.id),
+            )?;
             emit_ok(
                 ctx.json,
                 "message unlocked",
@@ -159,6 +192,11 @@ pub fn run_messages(command: MessagesCommand, ctx: &AppContext) -> CliResult<()>
         } => {
             let needle = query.to_ascii_lowercase();
             let all_messages = list_messages(db.db())?;
+            let all_areas = oxidebbs_db::list_message_areas(db.db())?;
+            let areas_by_id: HashMap<_, _> = all_areas
+                .iter()
+                .map(|area| (area.id.as_str(), area))
+                .collect();
             let area_record = area
                 .as_ref()
                 .map(|key| require_message_area(&db, key))
@@ -179,12 +217,11 @@ pub fn run_messages(command: MessagesCommand, ctx: &AppContext) -> CliResult<()>
             let matches: Vec<_> = all_messages
                 .into_iter()
                 .filter(|message| {
-                    message.subject.to_ascii_lowercase().contains(&needle)
-                        || message.body.to_ascii_lowercase().contains(&needle)
-                        || message
-                            .author_display_name
-                            .to_ascii_lowercase()
-                            .contains(&needle)
+                    message_matches_search(
+                        message,
+                        areas_by_id.get(message.area_id.as_str()).copied(),
+                        &needle,
+                    )
                 })
                 .filter(|message| {
                     if let Some(ref area) = area_record {
@@ -202,7 +239,11 @@ pub fn run_messages(command: MessagesCommand, ctx: &AppContext) -> CliResult<()>
                 })
                 .filter(|message| {
                     if let Some(ref net_id) = network {
-                        message.network_message_id.as_deref() == Some(net_id.as_str())
+                        message_matches_network(
+                            message,
+                            areas_by_id.get(message.area_id.as_str()).copied(),
+                            net_id,
+                        )
                     } else {
                         true
                     }
@@ -251,6 +292,13 @@ fn run_message_areas(
                 enabled: true,
             };
             oxidebbs_db::insert_message_area(db.db(), &area)?;
+            audit(
+                db,
+                "message-area:add",
+                None,
+                None,
+                &format!("message area {} ({}) added", area.key, area.id),
+            )?;
             emit_ok(ctx.json, "message area added", area_json(&area))?;
         }
         MessageAreasCommand::Show { key } => {
@@ -271,6 +319,13 @@ fn run_message_areas(
         MessageAreasCommand::Enable { key } => {
             let area = require_message_area(db, &key)?;
             update_message_area_enabled(db.db(), &area.id, true)?;
+            audit(
+                db,
+                "message-area:enable",
+                None,
+                None,
+                &format!("message area {} ({}) enabled", area.key, area.id),
+            )?;
             emit_ok(
                 ctx.json,
                 "message area enabled",
@@ -280,6 +335,13 @@ fn run_message_areas(
         MessageAreasCommand::Disable { key } => {
             let area = require_message_area(db, &key)?;
             update_message_area_enabled(db.db(), &area.id, false)?;
+            audit(
+                db,
+                "message-area:disable",
+                None,
+                None,
+                &format!("message area {} ({}) disabled", area.key, area.id),
+            )?;
             emit_ok(
                 ctx.json,
                 "message area disabled",
@@ -289,6 +351,21 @@ fn run_message_areas(
         MessageAreasCommand::SetLevel { key, read, post } => {
             let area = require_message_area(db, &key)?;
             update_message_area_levels(db.db(), &area.id, read, post)?;
+            audit(
+                db,
+                "message-area:set-level",
+                None,
+                None,
+                &format!(
+                    "message area {} ({}) levels changed from read={} post={} to read={} post={}",
+                    area.key,
+                    area.id,
+                    area.read_security_level,
+                    area.post_security_level,
+                    read,
+                    post
+                ),
+            )?;
             emit_ok(
                 ctx.json,
                 "message area levels updated",
@@ -305,9 +382,85 @@ fn message_areas_json_payload(areas: &[MessageAreaRecord]) -> JsonValue {
     })
 }
 
+fn message_matches_search(
+    message: &MessageRecord,
+    area: Option<&MessageAreaRecord>,
+    needle: &str,
+) -> bool {
+    contains_search_text(&message.subject, needle)
+        || contains_search_text(&message.body, needle)
+        || contains_search_text(&message.author_display_name, needle)
+        || message
+            .author_network_address
+            .as_deref()
+            .is_some_and(|value| contains_search_text(value, needle))
+        || message
+            .network_message_id
+            .as_deref()
+            .is_some_and(|value| contains_search_text(value, needle))
+        || area.is_some_and(|area| {
+            contains_search_text(&area.key, needle)
+                || area
+                    .network_id
+                    .as_deref()
+                    .is_some_and(|value| contains_search_text(value, needle))
+        })
+}
+
+fn message_matches_network(
+    message: &MessageRecord,
+    area: Option<&MessageAreaRecord>,
+    network: &str,
+) -> bool {
+    equals_search_text(message.network_message_id.as_deref(), network)
+        || equals_search_text(message.author_network_address.as_deref(), network)
+        || area.is_some_and(|area| equals_search_text(area.network_id.as_deref(), network))
+}
+
+fn contains_search_text(value: &str, needle: &str) -> bool {
+    value.to_ascii_lowercase().contains(needle)
+}
+
+fn equals_search_text(value: Option<&str>, expected: &str) -> bool {
+    value.is_some_and(|value| value.eq_ignore_ascii_case(expected))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn search_area() -> MessageAreaRecord {
+        MessageAreaRecord {
+            id: "00000000-0000-4000-8000-000000000001".to_string(),
+            key: "retro.echo".to_string(),
+            name: "Retro Echo".to_string(),
+            description: "Retro network messages".to_string(),
+            kind: "echomail".to_string(),
+            network_id: Some("fidonet".to_string()),
+            read_security_level: 0,
+            post_security_level: 10,
+            moderated: false,
+            enabled: true,
+        }
+    }
+
+    fn search_message() -> MessageRecord {
+        MessageRecord {
+            id: "00000000-0000-4000-8000-000000000101".to_string(),
+            area_id: "00000000-0000-4000-8000-000000000001".to_string(),
+            author_user_id: "00000000-0000-4000-8000-000000000201".to_string(),
+            author_kind: "network".to_string(),
+            author_display_name: "Remote Sysop".to_string(),
+            author_network_address: Some("1:105/42".to_string()),
+            to_user_id: None,
+            subject: "Packet status".to_string(),
+            body: "Network body".to_string(),
+            created_at: "2026-01-01T00:00:00.000000Z".to_string(),
+            reply_to_id: None,
+            network_message_id: Some("msgid-123".to_string()),
+            visibility: "normal".to_string(),
+        }
+    }
 
     #[test]
     fn message_areas_list_json_shape_matches_contract() {
@@ -337,5 +490,21 @@ mod tests {
         assert_eq!(area.get("key"), Some(&JsonValue::String("general".into())));
         assert_eq!(area.get("read_security_level"), Some(&JsonValue::from(0)));
         assert_eq!(area.get("enabled"), Some(&JsonValue::Bool(true)));
+    }
+
+    #[test]
+    fn message_search_matches_area_key_and_network_metadata() {
+        let area = search_area();
+        let message = search_message();
+
+        assert!(message_matches_search(&message, Some(&area), "retro"));
+        assert!(message_matches_search(&message, Some(&area), "1:105/42"));
+        assert!(message_matches_search(&message, Some(&area), "msgid-123"));
+        assert!(message_matches_search(&message, Some(&area), "fidonet"));
+        assert!(message_matches_network(&message, Some(&area), "fidonet"));
+        assert!(message_matches_network(&message, Some(&area), "1:105/42"));
+        assert!(message_matches_network(&message, Some(&area), "msgid-123"));
+        assert!(!message_matches_search(&message, Some(&area), "missing"));
+        assert!(!message_matches_network(&message, Some(&area), "othernet"));
     }
 }

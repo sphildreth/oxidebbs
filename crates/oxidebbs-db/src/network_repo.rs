@@ -61,6 +61,14 @@ pub struct NetworkPacketRecord {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NetworkPacketSummaryRecord {
+    pub direction: String,
+    pub status: String,
+    pub count: i64,
+    pub total_size_bytes: i64,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct NetworkMessageRecord {
     pub id: String,
@@ -541,6 +549,44 @@ pub fn list_network_packets(db: &Db) -> decentdb::Result<Vec<NetworkPacketRecord
     Ok(result.rows().iter().map(network_packet_from_row).collect())
 }
 
+pub fn find_network_packet_by_id(
+    db: &Db,
+    packet_id: &str,
+) -> decentdb::Result<Option<NetworkPacketRecord>> {
+    let result = db.execute_with_params(
+        "SELECT UUID_TO_STRING(id), UUID_TO_STRING(network_id), direction, UUID_TO_STRING(link_id), filename, sha256, size_bytes, status, error_message, CAST(received_at AS TEXT), CAST(processed_at AS TEXT), CAST(created_at AS TEXT)
+         FROM network_packets WHERE id = UUID_PARSE($1)",
+        &[Value::Text(packet_id.to_string())],
+    )?;
+    Ok(result.rows().first().map(network_packet_from_row))
+}
+
+pub fn summarize_network_packets(
+    db: &Db,
+    network_id: Option<&str>,
+) -> decentdb::Result<Vec<NetworkPacketSummaryRecord>> {
+    let sql = "SELECT direction, status, COUNT(*), COALESCE(SUM(size_bytes), 0)
+         FROM network_packets
+         GROUP BY direction, status
+         ORDER BY direction, status";
+    let result = match network_id {
+        Some(network_id) => db.execute_with_params(
+            "SELECT direction, status, COUNT(*), COALESCE(SUM(size_bytes), 0)
+             FROM network_packets
+             WHERE network_id = UUID_PARSE($1)
+             GROUP BY direction, status
+             ORDER BY direction, status",
+            &[Value::Text(network_id.to_string())],
+        )?,
+        None => db.execute(sql)?,
+    };
+    Ok(result
+        .rows()
+        .iter()
+        .map(network_packet_summary_from_row)
+        .collect())
+}
+
 pub fn list_network_messages(db: &Db) -> decentdb::Result<Vec<NetworkMessageRecord>> {
     let result = db.execute(
         "SELECT UUID_TO_STRING(id), UUID_TO_STRING(network_id), UUID_TO_STRING(local_message_id), message_type, area_tag, origin_address, destination_address, from_name, to_name, subject, raw_text, display_body, msgid, replyid, CAST(created_at AS TEXT), CAST(imported_at AS TEXT), CAST(exported_at AS TEXT), duplicate_hash, UUID_TO_STRING(packet_id), status
@@ -685,6 +731,47 @@ pub fn set_network_profile_enabled(
     Ok(())
 }
 
+pub fn set_network_area_subscribed(
+    db: &Db,
+    area_id: &str,
+    subscribed: bool,
+) -> decentdb::Result<bool> {
+    let result = db.execute_with_params(
+        "UPDATE network_areas SET subscribed = $1, updated_at = CURRENT_TIMESTAMP WHERE id = UUID_PARSE($2)",
+        &[Value::Bool(subscribed), Value::Text(area_id.to_string())],
+    )?;
+    Ok(result.affected_rows() > 0)
+}
+
+pub fn set_network_subscription_status(
+    db: &Db,
+    area_id: &str,
+    link_id: &str,
+    subscribed: bool,
+    timestamp: &str,
+    source: &str,
+) -> decentdb::Result<bool> {
+    let sql = if subscribed {
+        "UPDATE network_area_subscriptions
+         SET subscribed = TRUE, subscribed_at = $1, unsubscribed_at = NULL, source = $2
+         WHERE area_id = UUID_PARSE($3) AND link_id = UUID_PARSE($4)"
+    } else {
+        "UPDATE network_area_subscriptions
+         SET subscribed = FALSE, unsubscribed_at = $1, source = $2
+         WHERE area_id = UUID_PARSE($3) AND link_id = UUID_PARSE($4)"
+    };
+    let result = db.execute_with_params(
+        sql,
+        &[
+            Value::Text(timestamp.to_string()),
+            Value::Text(source.to_string()),
+            Value::Text(area_id.to_string()),
+            Value::Text(link_id.to_string()),
+        ],
+    )?;
+    Ok(result.affected_rows() > 0)
+}
+
 pub fn finish_network_packet(
     db: &Db,
     packet_id: &str,
@@ -702,6 +789,33 @@ pub fn finish_network_packet(
         ],
     )?;
     Ok(())
+}
+
+pub fn requeue_network_packet(db: &Db, packet_id: &str) -> decentdb::Result<bool> {
+    let result = db.execute_with_params(
+        "UPDATE network_packets
+         SET status = 'pending', error_message = NULL, processed_at = NULL
+         WHERE id = UUID_PARSE($1)",
+        &[Value::Text(packet_id.to_string())],
+    )?;
+    Ok(result.affected_rows() > 0)
+}
+
+pub fn mark_network_packet_quarantined(
+    db: &Db,
+    packet_id: &str,
+    reason: &str,
+) -> decentdb::Result<bool> {
+    let result = db.execute_with_params(
+        "UPDATE network_packets
+         SET status = 'quarantined', error_message = $1, processed_at = CURRENT_TIMESTAMP
+         WHERE id = UUID_PARSE($2)",
+        &[
+            Value::Text(reason.to_string()),
+            Value::Text(packet_id.to_string()),
+        ],
+    )?;
+    Ok(result.affected_rows() > 0)
 }
 
 pub fn finish_network_poll(
@@ -789,6 +903,16 @@ fn network_packet_from_row(row: &decentdb::QueryRow) -> NetworkPacketRecord {
         received_at: opt_text_value(&values[9]),
         processed_at: opt_text_value(&values[10]),
         created_at: text_value(&values[11]),
+    }
+}
+
+fn network_packet_summary_from_row(row: &decentdb::QueryRow) -> NetworkPacketSummaryRecord {
+    let values = row.values();
+    NetworkPacketSummaryRecord {
+        direction: text_value(&values[0]),
+        status: text_value(&values[1]),
+        count: int_value(&values[2]),
+        total_size_bytes: int_value(&values[3]),
     }
 }
 
@@ -950,6 +1074,7 @@ mod tests {
     const LOCAL_AREA_ID: &str = "00000000-0000-4000-8000-100000000004";
     const MESSAGE_ID: &str = "00000000-0000-4000-8000-100000000005";
     const PACKET_ID: &str = "00000000-0000-4000-8000-100000000006";
+    const SECOND_PACKET_ID: &str = "00000000-0000-4000-8000-100000000007";
     const DUP_LOG_ID: &str = "00000000-0000-4000-8000-100000000008";
     const POLL_ID: &str = "00000000-0000-4000-8000-100000000009";
     const SUBSCRIPTION_ID: &str = "00000000-0000-4000-8000-100000000010";
@@ -1042,6 +1167,23 @@ mod tests {
             received_at: None,
             processed_at: None,
             created_at: "2026-01-01T00:00:00.000000Z".to_string(),
+        }
+    }
+
+    fn second_packet(profile_id: &str, status: &str) -> NetworkPacketRecord {
+        NetworkPacketRecord {
+            id: SECOND_PACKET_ID.to_string(),
+            network_id: profile_id.to_string(),
+            direction: "inbound".to_string(),
+            link_id: None,
+            filename: "inbound.pkt".to_string(),
+            sha256: "def".to_string(),
+            size_bytes: 100,
+            status: status.to_string(),
+            error_message: (status == "failed").then(|| "bad packet".to_string()),
+            received_at: Some("2026-01-01T00:00:00.000000Z".to_string()),
+            processed_at: (status != "pending").then(|| "2026-01-01T00:00:01.000000Z".to_string()),
+            created_at: "2026-01-01T00:00:01.000000Z".to_string(),
         }
     }
 
@@ -1197,6 +1339,86 @@ mod tests {
     }
 
     #[test]
+    fn packet_lookup_and_summary_are_queryable() {
+        let db = test_db();
+        let profile = profile();
+        insert_network_profile(&db, &profile).expect("insert profile");
+        insert_network_packet(&db, &packet(&profile.id, None)).expect("insert packet");
+        insert_network_packet(&db, &second_packet(&profile.id, "failed"))
+            .expect("insert failed packet");
+
+        let found = find_network_packet_by_id(&db, PACKET_ID).expect("find packet");
+        let missing = find_network_packet_by_id(&db, "00000000-0000-4000-8000-999999999999")
+            .expect("find missing packet");
+        let summary = summarize_network_packets(&db, Some(&profile.id)).expect("summary");
+
+        assert_eq!(
+            found.as_ref().map(|packet| packet.filename.as_str()),
+            Some("pkg.pkt")
+        );
+        assert!(missing.is_none());
+        assert_eq!(
+            summary,
+            vec![
+                NetworkPacketSummaryRecord {
+                    direction: "inbound".to_string(),
+                    status: "failed".to_string(),
+                    count: 1,
+                    total_size_bytes: 100,
+                },
+                NetworkPacketSummaryRecord {
+                    direction: "outbound".to_string(),
+                    status: "pending".to_string(),
+                    count: 1,
+                    total_size_bytes: 42,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn packet_requeue_clears_error_and_processed_timestamp() {
+        let db = test_db();
+        let profile = profile();
+        insert_network_profile(&db, &profile).expect("insert profile");
+        insert_network_packet(&db, &second_packet(&profile.id, "failed"))
+            .expect("insert failed packet");
+
+        assert!(requeue_network_packet(&db, SECOND_PACKET_ID).expect("requeue packet"));
+        assert!(
+            !requeue_network_packet(&db, "00000000-0000-4000-8000-999999999999")
+                .expect("requeue missing packet")
+        );
+
+        let packet = find_network_packet_by_id(&db, SECOND_PACKET_ID)
+            .expect("find packet")
+            .expect("packet exists");
+        assert_eq!(packet.status, "pending");
+        assert_eq!(packet.error_message, None);
+        assert_eq!(packet.processed_at, None);
+    }
+
+    #[test]
+    fn packet_quarantine_sets_status_reason_and_processed_timestamp() {
+        let db = test_db();
+        let profile = profile();
+        insert_network_profile(&db, &profile).expect("insert profile");
+        insert_network_packet(&db, &packet(&profile.id, None)).expect("insert packet");
+
+        assert!(
+            mark_network_packet_quarantined(&db, PACKET_ID, "operator review")
+                .expect("quarantine packet")
+        );
+
+        let packet = find_network_packet_by_id(&db, PACKET_ID)
+            .expect("find packet")
+            .expect("packet exists");
+        assert_eq!(packet.status, "quarantined");
+        assert_eq!(packet.error_message.as_deref(), Some("operator review"));
+        assert!(packet.processed_at.is_some());
+    }
+
+    #[test]
     fn message_records_preserve_raw_text_bytes() {
         let db = test_db();
         let profile = profile();
@@ -1283,6 +1505,44 @@ mod tests {
         assert_eq!(subscriptions.len(), 1);
         assert_eq!(nodes.len(), 1);
         assert_eq!(maybe_profile.as_ref().map(|p| p.enabled), Some(false));
+    }
+
+    #[test]
+    fn updates_area_and_link_subscription_status() {
+        let db = test_db();
+        let profile = profile();
+        insert_network_profile(&db, &profile).expect("insert profile");
+        insert_message_area(&db);
+        let created_link = link(&profile.id);
+        let created_area = area(&profile.id);
+        insert_network_link(&db, &created_link).expect("insert link");
+        insert_network_area(&db, &created_area).expect("insert area");
+        insert_network_subscription(&db, &subscription(&created_area.id, &created_link.id))
+            .expect("insert subscription");
+
+        assert!(
+            set_network_subscription_status(
+                &db,
+                &created_area.id,
+                &created_link.id,
+                false,
+                "2026-01-02T00:00:00.000000Z",
+                "manual",
+            )
+            .expect("unsubscribe")
+        );
+        assert!(
+            set_network_area_subscribed(&db, &created_area.id, false).expect("set area subscribed")
+        );
+
+        let subscriptions = list_network_subscriptions(&db).expect("list subscriptions");
+        let areas = list_network_areas(&db).expect("list areas");
+        assert!(!subscriptions[0].subscribed);
+        assert_eq!(
+            subscriptions[0].unsubscribed_at.as_deref(),
+            Some("2026-01-02T00:00:00.000000Z")
+        );
+        assert!(!areas[0].subscribed);
     }
 
     #[test]

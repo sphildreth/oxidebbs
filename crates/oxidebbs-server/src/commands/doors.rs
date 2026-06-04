@@ -23,7 +23,7 @@ use oxidebbs_door::{
 
 use crate::config::DoorDefConfig;
 use crate::sysop_cli::{
-    AppContext, CliError, CliResult, emit_ok, generated_uuid, open_database, print_json,
+    AppContext, CliError, CliResult, audit, emit_ok, generated_uuid, open_database, print_json,
     require_config_door, require_user,
 };
 
@@ -266,7 +266,14 @@ pub fn run_doors(command: DoorsCommand, ctx: &AppContext) -> CliResult<()> {
         }
         DoorsCommand::Enable { door_key } => {
             let enabled = true;
-            set_door_enabled(&db, &ctx.config, &door_key, enabled)?;
+            let door = set_door_enabled(&db, &ctx.config, &door_key, enabled)?;
+            audit(
+                &db,
+                "door:enable",
+                None,
+                None,
+                &format!("door {} ({}) enabled", door.key, door.id),
+            )?;
             emit_ok(
                 ctx.json,
                 "door enabled",
@@ -275,7 +282,14 @@ pub fn run_doors(command: DoorsCommand, ctx: &AppContext) -> CliResult<()> {
         }
         DoorsCommand::Disable { door_key } => {
             let enabled = false;
-            set_door_enabled(&db, &ctx.config, &door_key, enabled)?;
+            let door = set_door_enabled(&db, &ctx.config, &door_key, enabled)?;
+            audit(
+                &db,
+                "door:disable",
+                None,
+                None,
+                &format!("door {} ({}) disabled", door.key, door.id),
+            )?;
             emit_ok(
                 ctx.json,
                 "door disabled",
@@ -472,6 +486,22 @@ fn run_door_add(args: DoorAddArgs, ctx: &AppContext, db: &oxidebbs_db::OxideDb) 
         min_security_level: i64::from(args.min_security_level),
     };
     insert_door_definition(db.db(), &record)?;
+    audit(
+        db,
+        "door:add",
+        None,
+        None,
+        &format!(
+            "door {} ({}) added runner={} command={} drop_file={} enabled={} min_security_level={}",
+            record.key,
+            record.id,
+            record.runner,
+            record.command,
+            record.drop_file,
+            record.enabled,
+            record.min_security_level
+        ),
+    )?;
     emit_ok(
         ctx.json,
         "door created",
@@ -516,6 +546,22 @@ fn run_door_edit(args: DoorEditArgs, ctx: &AppContext, db: &oxidebbs_db::OxideDb
         min_security_level: i64::from(min_security_level),
     };
     update_door_definition(db.db(), &record)?;
+    audit(
+        db,
+        "door:edit",
+        None,
+        None,
+        &format!(
+            "door {} ({}) updated runner={} command={} drop_file={} enabled={} min_security_level={}",
+            record.key,
+            record.id,
+            record.runner,
+            record.command,
+            record.drop_file,
+            record.enabled,
+            record.min_security_level
+        ),
+    )?;
     emit_ok(
         ctx.json,
         "door updated",
@@ -559,17 +605,21 @@ fn set_door_enabled(
     config: &crate::config::OxideConfig,
     door_key: &str,
     enabled: bool,
-) -> CliResult<()> {
+) -> CliResult<DoorDefinitionRecord> {
     let door = require_config_door(config, door_key)?;
     match find_door_by_key(db.db(), door_key)? {
-        Some(existing) => update_door_enabled(db.db(), &existing.id, enabled)?,
+        Some(mut existing) => {
+            update_door_enabled(db.db(), &existing.id, enabled)?;
+            existing.enabled = enabled;
+            Ok(existing)
+        }
         None => {
             let mut record = door_record_from_config(db, door, true)?;
             record.enabled = enabled;
             insert_door_definition(db.db(), &record)?;
+            Ok(record)
         }
     }
-    Ok(())
 }
 
 pub(crate) fn sync_configured_doors(
