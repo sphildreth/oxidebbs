@@ -8,6 +8,10 @@ use serde::Deserialize;
 use thiserror::Error;
 
 use oxidebbs_core::menu::{Menu, MenuAction, MenuEntry, ScreenAsset};
+pub use oxidebbs_term::TerminalCapabilities;
+use oxidebbs_term::{
+    BackspaceMode, LineEndingMode, OutputPacing, TerminalCharset, TerminalProfile,
+};
 
 pub const DEFAULT_DATABASE_FILE_NAME: &str = "oxidebbs.ddb";
 
@@ -183,12 +187,40 @@ pub struct SysopConfig {
 pub struct TerminalConfig {
     #[serde(default = "default_encoding")]
     pub default_encoding: String,
+    #[serde(default = "default_terminal_profile")]
+    pub default_profile: String,
+    #[serde(default = "default_true")]
+    pub manual_profile_selection: bool,
     #[serde(default = "default_true")]
     pub clear_screen_on_connect: bool,
     #[serde(default = "default_welcome_screen")]
     pub welcome_screen: String,
     #[serde(default = "default_logoff_screen")]
     pub logoff_screen: String,
+    #[serde(default = "default_terminal_profiles")]
+    pub profiles: HashMap<String, TerminalProfileConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TerminalProfileConfig {
+    #[serde(default = "default_terminal_profile_name")]
+    pub name: String,
+    #[serde(default = "default_terminal_profile_width")]
+    pub width: u16,
+    #[serde(default = "default_terminal_profile_height")]
+    pub height: u16,
+    #[serde(default)]
+    pub supports_ansi: bool,
+    #[serde(default)]
+    pub supports_color: bool,
+    #[serde(default = "default_ascii_charset")]
+    pub charset: String,
+    #[serde(default = "default_crlf_line_endings")]
+    pub line_endings: String,
+    #[serde(default = "default_backspace_mode")]
+    pub backspace_mode: String,
+    #[serde(default)]
+    pub output_pacing_bytes_per_second: Option<u32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -207,7 +239,9 @@ pub struct FlowConfig {
 pub struct ScreenConfig {
     pub ansi: Option<String>,
     pub ansi_40: Option<String>,
+    pub ascii_40: Option<String>,
     pub ascii: Option<String>,
+    pub text_40: Option<String>,
     pub text: Option<String>,
     #[serde(default)]
     pub pause: bool,
@@ -229,36 +263,16 @@ impl ScreenConfig {
             }
         }
 
+        if capabilities.width <= 40 {
+            if let Some(asset) = self.ascii_40.as_deref() {
+                return Some(asset);
+            }
+            if let Some(asset) = self.text_40.as_deref() {
+                return Some(asset);
+            }
+        }
+
         self.ascii.as_deref().or(self.text.as_deref())
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TerminalCapabilities {
-    pub supports_ansi: bool,
-    pub width: u16,
-}
-
-impl TerminalCapabilities {
-    pub fn ansi_80() -> Self {
-        Self {
-            supports_ansi: true,
-            width: 80,
-        }
-    }
-
-    pub fn ansi_40() -> Self {
-        Self {
-            supports_ansi: true,
-            width: 40,
-        }
-    }
-
-    pub fn plain_text() -> Self {
-        Self {
-            supports_ansi: false,
-            width: 80,
-        }
     }
 }
 
@@ -527,11 +541,61 @@ impl OxideConfig {
                 )));
             }
         }
+        self.validate_terminal()?;
         self.validate_flow()?;
         self.validate_screens()?;
         self.validate_menus()?;
         self.validate_network()?;
         self.validate_admin_web()?;
+        Ok(())
+    }
+
+    fn validate_terminal(&self) -> Result<(), ConfigError> {
+        if !self
+            .terminal
+            .profiles
+            .contains_key(&self.terminal.default_profile)
+        {
+            return Err(ConfigError::Validation(format!(
+                "terminal.default_profile references missing profile {:?}",
+                self.terminal.default_profile
+            )));
+        }
+
+        for (key, profile) in &self.terminal.profiles {
+            validate_config_key("terminal.profiles", key)?;
+            if profile.name.trim().is_empty() {
+                return Err(ConfigError::Validation(format!(
+                    "terminal.profiles.{key}.name must not be blank"
+                )));
+            }
+            if profile.width == 0 {
+                return Err(ConfigError::Validation(format!(
+                    "terminal.profiles.{key}.width must be greater than 0"
+                )));
+            }
+            if profile.height == 0 {
+                return Err(ConfigError::Validation(format!(
+                    "terminal.profiles.{key}.height must be greater than 0"
+                )));
+            }
+            validate_terminal_charset(&profile.charset).map_err(ConfigError::Validation)?;
+            validate_terminal_line_endings(&profile.line_endings)
+                .map_err(ConfigError::Validation)?;
+            validate_terminal_backspace_mode(&profile.backspace_mode)
+                .map_err(ConfigError::Validation)?;
+            if profile.supports_color && !profile.supports_ansi {
+                return Err(ConfigError::Validation(format!(
+                    "terminal.profiles.{key}.supports_color requires supports_ansi = true"
+                )));
+            }
+            if profile.output_pacing_bytes_per_second == Some(0) {
+                return Err(ConfigError::Validation(format!(
+                    "terminal.profiles.{key}.output_pacing_bytes_per_second must be greater than 0 when set"
+                )));
+            }
+        }
+
         Ok(())
     }
 
@@ -619,7 +683,9 @@ impl OxideConfig {
         for (name, screen) in &self.screens {
             if screen.ansi.is_none()
                 && screen.ansi_40.is_none()
+                && screen.ascii_40.is_none()
                 && screen.ascii.is_none()
+                && screen.text_40.is_none()
                 && screen.text.is_none()
             {
                 return Err(ConfigError::Validation(format!(
@@ -815,6 +881,44 @@ impl OxideConfig {
     }
 }
 
+impl TerminalConfig {
+    pub fn default_capabilities(&self) -> Result<TerminalCapabilities, ConfigError> {
+        self.capabilities_for_profile(&self.default_profile)
+    }
+
+    pub fn capabilities_for_profile(
+        &self,
+        profile_key: &str,
+    ) -> Result<TerminalCapabilities, ConfigError> {
+        let profile = self.profiles.get(profile_key).ok_or_else(|| {
+            ConfigError::Validation(format!(
+                "terminal profile {profile_key:?} is not configured"
+            ))
+        })?;
+        profile.to_capabilities(profile_key)
+    }
+}
+
+impl TerminalProfileConfig {
+    fn to_capabilities(&self, profile_key: &str) -> Result<TerminalCapabilities, ConfigError> {
+        Ok(TerminalCapabilities {
+            profile: terminal_profile_kind(profile_key),
+            supports_ansi: self.supports_ansi,
+            supports_color: self.supports_color,
+            width: self.width,
+            height: self.height,
+            charset: terminal_charset(&self.charset).map_err(ConfigError::Validation)?,
+            line_endings: terminal_line_endings(&self.line_endings)
+                .map_err(ConfigError::Validation)?,
+            backspace_mode: terminal_backspace_mode(&self.backspace_mode)
+                .map_err(ConfigError::Validation)?,
+            output_pacing: self
+                .output_pacing_bytes_per_second
+                .map(|bytes_per_second| OutputPacing { bytes_per_second }),
+        })
+    }
+}
+
 // Defaults
 
 fn default_tagline() -> String {
@@ -903,6 +1007,73 @@ fn default_node_count() -> u16 {
 }
 fn default_encoding() -> String {
     "cp437".into()
+}
+fn default_terminal_profile() -> String {
+    "plain".into()
+}
+fn default_terminal_profile_name() -> String {
+    "Plain ASCII".into()
+}
+fn default_terminal_profile_width() -> u16 {
+    80
+}
+fn default_terminal_profile_height() -> u16 {
+    25
+}
+fn default_ascii_charset() -> String {
+    "ascii".into()
+}
+fn default_crlf_line_endings() -> String {
+    "crlf".into()
+}
+fn default_backspace_mode() -> String {
+    "backspace_or_delete".into()
+}
+fn default_terminal_profiles() -> HashMap<String, TerminalProfileConfig> {
+    let mut profiles = HashMap::new();
+    profiles.insert(
+        "ansi80".to_string(),
+        TerminalProfileConfig {
+            name: "ANSI / CP437 80-column".to_string(),
+            width: 80,
+            height: 25,
+            supports_ansi: true,
+            supports_color: true,
+            charset: "cp437".to_string(),
+            line_endings: "crlf".to_string(),
+            backspace_mode: "backspace_or_delete".to_string(),
+            output_pacing_bytes_per_second: None,
+        },
+    );
+    profiles.insert(
+        "plain".to_string(),
+        TerminalProfileConfig {
+            name: "Plain ASCII".to_string(),
+            width: 80,
+            height: 25,
+            supports_ansi: false,
+            supports_color: false,
+            charset: "ascii".to_string(),
+            line_endings: "crlf".to_string(),
+            backspace_mode: "backspace_or_delete".to_string(),
+            output_pacing_bytes_per_second: None,
+        },
+    );
+    profiles.insert(
+        "c64".to_string(),
+        TerminalProfileConfig {
+            name: "C64 / C64 Ultimate 40-column".to_string(),
+            width: 40,
+            height: 25,
+            supports_ansi: false,
+            supports_color: false,
+            charset: "petscii_ascii_fallback".to_string(),
+            line_endings: "crlf".to_string(),
+            backspace_mode: "backspace_or_delete".to_string(),
+            output_pacing_bytes_per_second: Some(1_200),
+        },
+    );
+    profiles
 }
 fn default_welcome_screen() -> String {
     "welcome.ans".into()
@@ -1022,6 +1193,62 @@ fn validate_transport_security(transport_security: &str) -> Result<&'static str,
             "network link transport_security must be one of tls_required, tls_opportunistic, or plaintext_legacy, got {other:?}"
         )),
     }
+}
+
+fn terminal_profile_kind(profile_key: &str) -> TerminalProfile {
+    match profile_key.trim().to_ascii_lowercase().as_str() {
+        "ansi80" | "ansi-80" | "ansi_80" => TerminalProfile::Ansi80,
+        "ansi40" | "ansi-40" | "ansi_40" => TerminalProfile::Ansi40,
+        "c64" | "c64-40" | "petscii40" | "petscii-40" => TerminalProfile::C64,
+        _ => TerminalProfile::PlainAscii,
+    }
+}
+
+fn validate_terminal_charset(charset: &str) -> Result<&'static str, String> {
+    match charset.trim().to_ascii_lowercase().as_str() {
+        "cp437" => Ok("cp437"),
+        "ascii" => Ok("ascii"),
+        "petscii_ascii_fallback" | "petscii-ascii-fallback" | "petscii40" => {
+            Ok("petscii_ascii_fallback")
+        }
+        other => Err(format!(
+            "terminal charset must be one of cp437, ascii, or petscii_ascii_fallback, got {other:?}"
+        )),
+    }
+}
+
+fn terminal_charset(charset: &str) -> Result<TerminalCharset, String> {
+    Ok(match validate_terminal_charset(charset)? {
+        "cp437" => TerminalCharset::Cp437,
+        "petscii_ascii_fallback" => TerminalCharset::PetsciiAsciiFallback,
+        _ => TerminalCharset::Ascii,
+    })
+}
+
+fn validate_terminal_line_endings(line_endings: &str) -> Result<&'static str, String> {
+    match line_endings.trim().to_ascii_lowercase().as_str() {
+        "crlf" => Ok("crlf"),
+        other => Err(format!("terminal line_endings must be crlf, got {other:?}")),
+    }
+}
+
+fn terminal_line_endings(line_endings: &str) -> Result<LineEndingMode, String> {
+    validate_terminal_line_endings(line_endings)?;
+    Ok(LineEndingMode::Crlf)
+}
+
+fn validate_terminal_backspace_mode(backspace_mode: &str) -> Result<&'static str, String> {
+    match backspace_mode.trim().to_ascii_lowercase().as_str() {
+        "backspace_or_delete" | "backspace-or-delete" | "both" => Ok("backspace_or_delete"),
+        other => Err(format!(
+            "terminal backspace_mode must be backspace_or_delete, got {other:?}"
+        )),
+    }
+}
+
+fn terminal_backspace_mode(backspace_mode: &str) -> Result<BackspaceMode, String> {
+    validate_terminal_backspace_mode(backspace_mode)?;
+    Ok(BackspaceMode::BackspaceOrDelete)
 }
 
 pub(crate) fn validate_logging_level(level: &str) -> Result<(), String> {
@@ -1211,9 +1438,12 @@ impl Default for TerminalConfig {
     fn default() -> Self {
         Self {
             default_encoding: default_encoding(),
+            default_profile: default_terminal_profile(),
+            manual_profile_selection: default_true(),
             clear_screen_on_connect: default_true(),
             welcome_screen: default_welcome_screen(),
             logoff_screen: default_logoff_screen(),
+            profiles: default_terminal_profiles(),
         }
     }
 }
@@ -1369,6 +1599,18 @@ name = "Minimal"
         assert_eq!(config.database.path, PathBuf::from("./data/oxidebbs.ddb"));
         assert_eq!(config.nodes.count, 4);
         assert_eq!(config.terminal.default_encoding, "cp437");
+        assert_eq!(config.terminal.default_profile, "plain");
+        assert!(config.terminal.manual_profile_selection);
+        assert!(config.terminal.profiles.contains_key("ansi80"));
+        assert!(config.terminal.profiles.contains_key("plain"));
+        assert!(config.terminal.profiles.contains_key("c64"));
+        assert_eq!(
+            config
+                .terminal
+                .capabilities_for_profile("c64")
+                .expect("c64 profile"),
+            TerminalCapabilities::c64()
+        );
         assert!(!config.network.enabled);
         assert!(config.network.profiles.is_empty());
         assert!(config.network.links.is_empty());
@@ -1897,6 +2139,66 @@ action = "shell"
     }
 
     #[test]
+    fn rejects_unknown_default_terminal_profile() {
+        let toml = r#"
+[board]
+name = "Test"
+
+[terminal]
+default_profile = "missing"
+"#;
+        let config: OxideConfig = toml::from_str(toml).expect("parse");
+        let error = config
+            .validate_terminal()
+            .expect_err("unknown terminal profile rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("terminal.default_profile references missing profile")
+        );
+    }
+
+    #[test]
+    fn parses_custom_c64_terminal_profile_contract() {
+        let toml = r#"
+[board]
+name = "Test"
+
+[terminal]
+default_profile = "c64"
+
+[terminal.profiles.c64]
+name = "C64 / C64 Ultimate 40-column"
+width = 40
+height = 25
+supports_ansi = false
+supports_color = false
+charset = "petscii_ascii_fallback"
+line_endings = "crlf"
+backspace_mode = "backspace_or_delete"
+output_pacing_bytes_per_second = 600
+"#;
+        let config: OxideConfig = toml::from_str(toml).expect("parse");
+        config.validate_terminal().expect("validate terminal");
+
+        let capabilities = config
+            .terminal
+            .default_capabilities()
+            .expect("default capabilities");
+        assert_eq!(capabilities.profile, TerminalProfile::C64);
+        assert_eq!(capabilities.width, 40);
+        assert_eq!(capabilities.height, 25);
+        assert!(!capabilities.supports_ansi);
+        assert_eq!(
+            capabilities.output_pacing,
+            Some(OutputPacing {
+                bytes_per_second: 600
+            })
+        );
+    }
+
+    #[test]
     fn rejects_non_ascii_menu_key() {
         let toml = r#"
 [board]
@@ -1942,6 +2244,10 @@ action = "messages"
         );
         assert_eq!(
             screen.asset_for(TerminalCapabilities::plain_text()),
+            Some("login/login.asc")
+        );
+        assert_eq!(
+            screen.asset_for(TerminalCapabilities::c64()),
             Some("login/login.asc")
         );
     }

@@ -1,0 +1,5 @@
+Welcome to OxideBBS.
+
+This starter screen is C64-safe.
+Menus and prompts fit 40 columns.
+

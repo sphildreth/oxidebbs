@@ -80,6 +80,11 @@ const DEFAULT_ASSETS: &[DefaultAsset] = &[
         bytes: include_bytes!("../../../assets/ansi/welcome.asc"),
     },
     DefaultAsset {
+        root: DefaultAssetRoot::Ansi,
+        path: "welcome-40.asc",
+        bytes: include_bytes!("../../../assets/ansi/welcome-40.asc"),
+    },
+    DefaultAsset {
         root: DefaultAssetRoot::Screens,
         path: "info/screen1.ans",
         bytes: include_bytes!("../../../assets/screens/info/screen1.ans"),
@@ -91,8 +96,18 @@ const DEFAULT_ASSETS: &[DefaultAsset] = &[
     },
     DefaultAsset {
         root: DefaultAssetRoot::Screens,
+        path: "info/screen1-40.asc",
+        bytes: include_bytes!("../../../assets/screens/info/screen1-40.asc"),
+    },
+    DefaultAsset {
+        root: DefaultAssetRoot::Screens,
         path: "info/screen1.txt",
         bytes: include_bytes!("../../../assets/screens/info/screen1.txt"),
+    },
+    DefaultAsset {
+        root: DefaultAssetRoot::Screens,
+        path: "info/screen1-40.txt",
+        bytes: include_bytes!("../../../assets/screens/info/screen1-40.txt"),
     },
     DefaultAsset {
         root: DefaultAssetRoot::Screens,
@@ -106,8 +121,18 @@ const DEFAULT_ASSETS: &[DefaultAsset] = &[
     },
     DefaultAsset {
         root: DefaultAssetRoot::Screens,
+        path: "info/screen2-40.asc",
+        bytes: include_bytes!("../../../assets/screens/info/screen2-40.asc"),
+    },
+    DefaultAsset {
+        root: DefaultAssetRoot::Screens,
         path: "info/screen2.txt",
         bytes: include_bytes!("../../../assets/screens/info/screen2.txt"),
+    },
+    DefaultAsset {
+        root: DefaultAssetRoot::Screens,
+        path: "info/screen2-40.txt",
+        bytes: include_bytes!("../../../assets/screens/info/screen2-40.txt"),
     },
     DefaultAsset {
         root: DefaultAssetRoot::Screens,
@@ -288,9 +313,26 @@ struct GeneratedSysopConfig {
 #[derive(Serialize)]
 struct GeneratedTerminalConfig {
     default_encoding: String,
+    default_profile: String,
+    manual_profile_selection: bool,
     clear_screen_on_connect: bool,
     welcome_screen: String,
     logoff_screen: String,
+    profiles: BTreeMap<String, GeneratedTerminalProfileConfig>,
+}
+
+#[derive(Serialize)]
+struct GeneratedTerminalProfileConfig {
+    name: String,
+    width: u16,
+    height: u16,
+    supports_ansi: bool,
+    supports_color: bool,
+    charset: String,
+    line_endings: String,
+    backspace_mode: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output_pacing_bytes_per_second: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -305,7 +347,9 @@ struct GeneratedFlowConfig {
 struct GeneratedScreenConfig {
     ansi: String,
     ansi_40: Option<String>,
+    ascii_40: Option<String>,
     ascii: String,
+    text_40: Option<String>,
     text: String,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pause: bool,
@@ -358,7 +402,9 @@ pub fn build_setup_toml(answers: &SetupAnswers) -> io::Result<String> {
         GeneratedScreenConfig {
             ansi: "login/login.ans".to_string(),
             ansi_40: Some("login/login-40.ans".to_string()),
+            ascii_40: Some("login/login.asc".to_string()),
             ascii: "login/login.asc".to_string(),
+            text_40: Some("login/login.asc".to_string()),
             text: "login/login.txt".to_string(),
             pause: false,
         },
@@ -368,7 +414,9 @@ pub fn build_setup_toml(answers: &SetupAnswers) -> io::Result<String> {
         GeneratedScreenConfig {
             ansi: "info/screen1.ans".to_string(),
             ansi_40: None,
+            ascii_40: Some("info/screen1-40.asc".to_string()),
             ascii: "info/screen1.asc".to_string(),
+            text_40: Some("info/screen1-40.txt".to_string()),
             text: "info/screen1.txt".to_string(),
             pause: true,
         },
@@ -378,7 +426,9 @@ pub fn build_setup_toml(answers: &SetupAnswers) -> io::Result<String> {
         GeneratedScreenConfig {
             ansi: "info/screen2.ans".to_string(),
             ansi_40: None,
+            ascii_40: Some("info/screen2-40.asc".to_string()),
             ascii: "info/screen2.asc".to_string(),
+            text_40: Some("info/screen2-40.txt".to_string()),
             text: "info/screen2.txt".to_string(),
             pause: true,
         },
@@ -388,7 +438,9 @@ pub fn build_setup_toml(answers: &SetupAnswers) -> io::Result<String> {
         GeneratedScreenConfig {
             ansi: "menus/main/main.ans".to_string(),
             ansi_40: Some("menus/main/main-40.ans".to_string()),
+            ascii_40: Some("menus/main/main.asc".to_string()),
             ascii: "menus/main/main.asc".to_string(),
+            text_40: Some("menus/main/main.txt".to_string()),
             text: "menus/main/main.txt".to_string(),
             pause: false,
         },
@@ -527,9 +579,12 @@ pub fn build_setup_toml(answers: &SetupAnswers) -> io::Result<String> {
         sysop: GeneratedSysopConfig { confirm_quit: true },
         terminal: GeneratedTerminalConfig {
             default_encoding: "cp437".to_string(),
+            default_profile: "plain".to_string(),
+            manual_profile_selection: true,
             clear_screen_on_connect: true,
             welcome_screen: "welcome.ans".to_string(),
             logoff_screen: "logoff.ans".to_string(),
+            profiles: generated_terminal_profiles(),
         },
         flow: GeneratedFlowConfig {
             login_screen: "login".to_string(),
@@ -545,6 +600,53 @@ pub fn build_setup_toml(answers: &SetupAnswers) -> io::Result<String> {
 
     toml::to_string_pretty(&config)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+}
+
+fn generated_terminal_profiles() -> BTreeMap<String, GeneratedTerminalProfileConfig> {
+    let mut profiles = BTreeMap::new();
+    profiles.insert(
+        "ansi80".to_string(),
+        GeneratedTerminalProfileConfig {
+            name: "ANSI / CP437 80-column".to_string(),
+            width: 80,
+            height: 25,
+            supports_ansi: true,
+            supports_color: true,
+            charset: "cp437".to_string(),
+            line_endings: "crlf".to_string(),
+            backspace_mode: "backspace_or_delete".to_string(),
+            output_pacing_bytes_per_second: None,
+        },
+    );
+    profiles.insert(
+        "plain".to_string(),
+        GeneratedTerminalProfileConfig {
+            name: "Plain ASCII".to_string(),
+            width: 80,
+            height: 25,
+            supports_ansi: false,
+            supports_color: false,
+            charset: "ascii".to_string(),
+            line_endings: "crlf".to_string(),
+            backspace_mode: "backspace_or_delete".to_string(),
+            output_pacing_bytes_per_second: None,
+        },
+    );
+    profiles.insert(
+        "c64".to_string(),
+        GeneratedTerminalProfileConfig {
+            name: "C64 / C64 Ultimate 40-column".to_string(),
+            width: 40,
+            height: 25,
+            supports_ansi: false,
+            supports_color: false,
+            charset: "petscii_ascii_fallback".to_string(),
+            line_endings: "crlf".to_string(),
+            backspace_mode: "backspace_or_delete".to_string(),
+            output_pacing_bytes_per_second: Some(1_200),
+        },
+    );
+    profiles
 }
 
 pub fn setup_required_directories(output_path: &Path, answers: &SetupAnswers) -> Vec<PathBuf> {
@@ -816,6 +918,19 @@ mod tests {
         assert_eq!(
             parsed.doors.allowed_runners,
             vec!["dosemu".to_string(), "dosemu2".to_string()]
+        );
+        assert_eq!(parsed.terminal.default_profile, "plain");
+        assert!(parsed.terminal.manual_profile_selection);
+        assert_eq!(
+            parsed
+                .terminal
+                .capabilities_for_profile("c64")
+                .expect("c64 profile"),
+            oxidebbs_term::TerminalCapabilities::c64()
+        );
+        assert_eq!(
+            parsed.screens["screen1"].ascii_40.as_deref(),
+            Some("info/screen1-40.asc")
         );
     }
 

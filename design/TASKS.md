@@ -34,6 +34,21 @@ re-opening scope decisions.
 | P17 | Repository and release automation | Complete |
 | P18 | Final integration and release readiness | Partial |
 
+## Caller Terminal Compatibility
+
+- [x] Add named `c64` terminal profile for C64, C64 Ultimate, and
+  PETSCII-friendly 40-column callers.
+- [x] Document that C64 support is caller compatibility, not a C64-native
+  OxideBBS server port.
+- [x] Add config contract for terminal profile width, height, ANSI/color flags,
+  charset, line endings, backspace mode, and optional output pacing.
+- [x] Add 40-column plain fallback asset slots and starter fallback assets for
+  C64/plain narrow callers.
+- [x] Cover CR/LF and `0x08`/`0x7f` input behavior in tests.
+- [ ] Implement full PETSCII encode/decode rendering beyond ASCII fallback.
+- [ ] Persist manual terminal profile selection in user/account settings once
+  the user schema has a terminal preference field.
+
 ## v1.1.0 Release Readiness
 
 - [x] Bump all OxideBBS Rust workspace crate versions to `1.1.0`.

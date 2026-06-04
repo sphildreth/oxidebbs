@@ -31,6 +31,17 @@ They value:
 A developer interested in Rust, terminal systems, DecentDB, telnet, CP437, protocol
 work, and BBS internals.
 
+### Secondary user: C64/C64 Ultimate caller
+
+A caller using a native C64, C64 Ultimate, or C64 terminal application to reach
+OxideBBS over normal BBS-style network access. This user expects a 40-column,
+ASCII/PETSCII-friendly experience that works without modern 80-column ANSI
+assumptions.
+
+User story: As a C64 or C64 Ultimate user, I want to connect to OxideBBS using
+a native C64 terminal application so that I can use the BBS without needing a
+modern ANSI/80-column terminal.
+
 ### Future user: message-network sysop
 
 A sysop who wants FTN/FidoNet-style shared echomail and netmail using OxideBBS and
@@ -70,6 +81,22 @@ possibly OxideNet.
 - Paging for long text
 - Status bar support
 - Supported 40-column and 80-column caller layouts
+- Named C64/C64 Ultimate caller compatibility profile (`c64`) for remote
+  callers. OxideBBS does not run on C64 hardware; it remains a Rust server
+  accessed by C64 clients.
+- C64-friendly navigation through 40-column menus, prompts, message lists,
+  message reader output, file lists, and plain fallbacks for ANSI art.
+- ASCII fallback is required for basic navigation. PETSCII-aware rendering is a
+  terminal-profile concern; until full PETSCII translation exists, C64 callers
+  must receive usable ASCII/PETSCII-friendly plain output.
+- Minimal control sequence assumptions for C64/plain callers: no advanced ANSI
+  escape sequences unless explicitly configured for an ANSI-capable profile.
+- CR, LF, and CRLF input handling plus `0x08` and `0x7f` backspace/delete
+  normalization for login, password, and prompt editing.
+- Optional output pacing per terminal profile or connection for slower clients.
+- Manual profile selection path during onboarding or account settings when
+  terminal detection is unreliable: ANSI / 80-column, plain ASCII, and C64 /
+  40-column / PETSCII-friendly.
 
 ### User system
 

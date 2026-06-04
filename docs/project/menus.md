@@ -29,8 +29,14 @@ Screen asset selection prefers the best available variant:
 
 1. 40-column ANSI when the caller supports ANSI and width is 40 or less
 2. regular ANSI when the caller supports ANSI
-3. ASCII
-4. plain text
+3. 40-column ASCII/text when the caller is plain or C64 width is 40 or less
+4. ASCII
+5. plain text
+
+C64 and C64 Ultimate callers use the `c64` terminal profile. They should be
+able to navigate without ANSI art or 80-column assumptions. Login, main menu,
+message list, message reader, file list, help text, and logoff paths should
+have a 40-column-safe rendering path or a plain fallback.
 
 ## Config Shape
 
@@ -44,7 +50,9 @@ main_menu = "main"
 [screens.login]
 ansi = "login/login.ans"
 ansi_40 = "login/login-40.ans"
+ascii_40 = "login/login.asc"
 ascii = "login/login.asc"
+text_40 = "login/login.asc"
 text = "login/login.txt"
 
 [menus.login]

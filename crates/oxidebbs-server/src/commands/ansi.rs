@@ -255,7 +255,13 @@ fn screen_assets(screen: &crate::config::ScreenConfig) -> Vec<&str> {
     if let Some(asset) = screen.ansi_40.as_deref() {
         assets.push(asset);
     }
+    if let Some(asset) = screen.ascii_40.as_deref() {
+        assets.push(asset);
+    }
     if let Some(asset) = screen.ascii.as_deref() {
+        assets.push(asset);
+    }
+    if let Some(asset) = screen.text_40.as_deref() {
         assets.push(asset);
     }
     if let Some(asset) = screen.text.as_deref() {

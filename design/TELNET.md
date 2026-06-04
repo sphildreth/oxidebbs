@@ -19,7 +19,13 @@ Telnet is the only remote transport for v1. Serial/modem support is available si
 - Detect caller window width when the client reports NAWS.
 - Select ANSI, 40-column ANSI, ASCII, or text screen assets from the detected
   terminal capability.
+- Support the named `c64` terminal profile for C64, C64 Ultimate, and
+  PETSCII-friendly 40-column terminal clients.
 - Normalize CR/LF input for menu commands and line prompts.
+- Normalize common backspace/delete bytes, including `0x08` and `0x7f`.
+- Continue basic caller access over ordinary telnet/raw TCP style clients
+  without requiring SSH, TLS-only access, a web client, or modern terminal
+  negotiation.
 - Detect disconnect and idle timeout.
 - Clean up node/session state on disconnect.
 
@@ -100,6 +106,39 @@ Terminal type negotiation sequence:
 3. If the client replies `SB TERMINAL-TYPE IS <name> SE`, the server evaluates
    `<name>` with the ANSI marker list above.
 
+## C64/C64 Ultimate Profile
+
+The `c64` profile represents callers using C64, C64 Ultimate, or C64 terminal
+applications. This is not a C64 port of OxideBBS; the server still runs as a
+modern Rust process and exposes caller access over the normal transport.
+
+Default profile capabilities:
+
+- Width: 40 columns
+- Height: 25 rows
+- ANSI: disabled by default
+- Color/control sequences: not required for basic navigation
+- Charset: PETSCII-friendly ASCII fallback until full PETSCII translation is
+  implemented
+- Line endings: CRLF-normalized caller output; CR, LF, CRLF, and telnet CR-NUL
+  accepted as input endings
+- Backspace/delete: `0x08` and `0x7f`
+- Optional output pacing: configurable as bytes per second
+
+Terminal type markers such as `C64`, `C64 Ultimate`, `Ultimate 64`, `PETSCII`,
+and `CGTerm` should select the C64 profile. If detection is absent or
+unreliable, the configured `terminal.default_profile` and future manual profile
+selection path are the fallback.
+
+Manual selection should offer:
+
+- ANSI / 80-column
+- Plain ASCII
+- C64 / 40-column / PETSCII-friendly
+
+Persisting a per-user preference is future work until the user profile schema
+has a terminal preference field.
+
 ## Width Detection
 
 NAWS (`Negotiate About Window Size`) updates the caller width when present.
@@ -108,11 +147,13 @@ Rows are parsed but not used for v1 screen selection.
 Width rules:
 
 - Default width is 80 columns.
+- The C64 profile default width is 40 columns.
 - A NAWS column value greater than zero updates the caller width.
 - ANSI callers at 40 columns or narrower select configured `ansi_40` assets.
 - ANSI callers wider than 40 columns select configured `ansi` assets.
-- Plain text callers, including plain 40-column callers, select `ascii` or
-  `text` assets rather than ANSI assets.
+- Plain text callers, including C64 and other plain 40-column callers, select
+  `ascii_40` or `text_40` when configured, then `ascii` or `text` assets rather
+  than ANSI assets.
 
 If no NAWS reply is received, the caller remains at the default width.
 
@@ -128,15 +169,18 @@ For ANSI callers:
 
 For plain text callers:
 
-1. Use `ascii` when configured.
-2. Otherwise use `text` when configured.
-3. If only ANSI assets exist, strip ANSI escape sequences and render a plain
+1. Use `ascii_40` or `text_40` for callers at 40 columns or narrower when
+   configured.
+2. Use `ascii` when configured.
+3. Otherwise use `text` when configured.
+4. If only ANSI assets exist, strip ANSI escape sequences and render a plain
    CP437 text fallback.
 
 Terminal-level `welcome_screen` and `logoff_screen` assets use the configured
 asset name for ANSI callers. Plain text callers replace that asset extension
-with `.asc` and then `.txt` under `paths.ansi`; if neither file exists, the
-configured ANSI file is stripped as a compatibility fallback.
+with `-40.asc` and `-40.txt` first for 40-column callers, then `.asc` and
+`.txt` under `paths.ansi`; if none exists, the configured ANSI file is stripped
+as a compatibility fallback.
 
 Missing screen assets produce a visible fallback payload that names the missing
 screen and error details rather than silently dropping output.
@@ -164,7 +208,7 @@ into the next prompt.
 Line prompts:
 
 - Accept printable ASCII and spaces.
-- Support backspace/delete.
+- Support backspace/delete with both `0x08` and `0x7f`.
 - Normalize CR, LF, and CRLF endings.
 - Optionally hide typed input for passwords.
 - Ignore telnet negotiation events while reading a line.

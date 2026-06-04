@@ -104,3 +104,7 @@ sysop  -> core/db
 ## Important design principle
 
 The caller-facing terminal pipeline must stay byte-oriented and CP437-aware.
+Terminal compatibility is profile-based. C64 and C64 Ultimate support means
+remote callers using C64 terminal applications can select or be detected as a
+40-column, ASCII/PETSCII-friendly profile; OxideBBS itself remains the same
+modern Rust server.

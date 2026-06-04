@@ -40,7 +40,8 @@ use oxidebbs_telnet::{
     Transport, TransportError,
 };
 use oxidebbs_term::{
-    LoadedScreen, ScreenAsset as TermScreenAsset, TerminalCapabilities, encode_cp437,
+    LoadedScreen, ScreenAsset as TermScreenAsset, TerminalCapabilities, TerminalProfile,
+    encode_cp437,
 };
 
 use crate::config::{Argon2Config, AuthConfig, OxideConfig};
@@ -446,6 +447,10 @@ async fn handle_caller(
         &mut transport,
         &mut input,
         TERMINAL_CAPABILITY_NEGOTIATION_TIMEOUT,
+        config
+            .terminal
+            .default_capabilities()
+            .map_err(|error| ServeError::Config(error.to_string()))?,
     )
     .await?;
     debug!(
@@ -800,9 +805,17 @@ async fn handle_caller(
                     }
                 }
             }
-            TelnetEvent::WindowSize { columns, .. } => {
+            TelnetEvent::WindowSize { columns, rows } => {
                 if columns > 0 {
                     capabilities.width = columns;
+                    if capabilities.supports_ansi && columns <= 40 {
+                        capabilities.profile = TerminalProfile::Ansi40;
+                    } else if capabilities.supports_ansi {
+                        capabilities.profile = TerminalProfile::Ansi80;
+                    }
+                }
+                if rows > 0 {
+                    capabilities.height = rows;
                 }
             }
             TelnetEvent::Negotiation { .. }
@@ -886,8 +899,9 @@ async fn negotiate_terminal_capabilities<T: Transport>(
     transport: &mut T,
     input: &mut InputSession,
     negotiation_timeout: Duration,
+    fallback_capabilities: TerminalCapabilities,
 ) -> ServeResult<TerminalCapabilities> {
-    let mut capabilities = TerminalCapabilities::plain_text();
+    let mut capabilities = fallback_capabilities;
     let mut terminal_type_evaluated = false;
     let mut naws_seen = false;
     transport.write_all(&terminal_capability_requests()).await?;
@@ -969,11 +983,19 @@ async fn apply_capability_event<T: Transport>(
                 .await?;
         }
         TelnetEvent::TerminalType(terminal_type) => {
-            capabilities.supports_ansi = terminal_type_supports_ansi(&terminal_type);
+            apply_terminal_type(capabilities, &terminal_type, *naws_seen);
             *terminal_type_evaluated = true;
         }
-        TelnetEvent::WindowSize { columns, .. } if columns > 0 => {
+        TelnetEvent::WindowSize { columns, rows } if columns > 0 => {
             capabilities.width = columns;
+            if rows > 0 {
+                capabilities.height = rows;
+            }
+            if capabilities.supports_ansi && columns <= 40 {
+                capabilities.profile = TerminalProfile::Ansi40;
+            } else if capabilities.supports_ansi {
+                capabilities.profile = TerminalProfile::Ansi80;
+            }
             *naws_seen = true;
         }
         TelnetEvent::Data(_) => return Ok(true),
@@ -986,17 +1008,50 @@ async fn apply_capability_event<T: Transport>(
     Ok(*terminal_type_evaluated && *naws_seen)
 }
 
-fn terminal_type_supports_ansi(terminal_type: &[u8]) -> bool {
+fn terminal_type_capabilities(terminal_type: &[u8]) -> TerminalCapabilities {
     let terminal_type = String::from_utf8_lossy(terminal_type);
     let normalized = terminal_type.trim().to_ascii_lowercase();
 
-    normalized.contains("syncterm")
+    if normalized.contains("c64")
+        || normalized.contains("commodore 64")
+        || normalized.contains("c64 ultimate")
+        || normalized.contains("ultimate 64")
+        || normalized.contains("petscii")
+        || normalized.contains("cgterm")
+    {
+        return TerminalCapabilities::c64();
+    }
+
+    if normalized.contains("syncterm")
         || normalized == "ansi"
         || normalized.contains("ansi.sys")
         || normalized.contains("ansi-bbs")
         || normalized.contains("bbs-ansi")
         || normalized == "pc-ansi"
         || normalized.contains("pcansi")
+    {
+        TerminalCapabilities::ansi_80()
+    } else {
+        TerminalCapabilities::plain_text()
+    }
+}
+
+fn apply_terminal_type(
+    capabilities: &mut TerminalCapabilities,
+    terminal_type: &[u8],
+    naws_seen: bool,
+) {
+    let detected = terminal_type_capabilities(terminal_type);
+    let reported_width = capabilities.width;
+    let reported_height = capabilities.height;
+    *capabilities = detected;
+    if naws_seen {
+        capabilities.width = reported_width;
+        capabilities.height = reported_height;
+        if capabilities.profile == TerminalProfile::Ansi80 && reported_width <= 40 {
+            capabilities.profile = TerminalProfile::Ansi40;
+        }
+    }
 }
 
 struct AuthFlowState<'a> {
@@ -2568,7 +2623,7 @@ fn load_terminal_asset_payload(
     capabilities: TerminalCapabilities,
 ) -> Result<Vec<u8>, String> {
     if !capabilities.supports_ansi
-        && let Some(payload) = load_plain_terminal_asset_payload(config, asset_name)?
+        && let Some(payload) = load_plain_terminal_asset_payload(config, asset_name, capabilities)?
     {
         return Ok(normalize_caller_line_endings(&payload));
     }
@@ -2593,8 +2648,9 @@ fn load_terminal_asset_payload(
 fn load_plain_terminal_asset_payload(
     config: &OxideConfig,
     asset_name: &str,
+    capabilities: TerminalCapabilities,
 ) -> Result<Option<Vec<u8>>, String> {
-    for candidate in plain_terminal_asset_candidates(asset_name) {
+    for candidate in plain_terminal_asset_candidates(asset_name, capabilities) {
         let asset_path = config.paths.ansi.join(&candidate);
         match std::fs::read(&asset_path) {
             Ok(bytes) => {
@@ -2614,9 +2670,31 @@ fn load_plain_terminal_asset_payload(
     Ok(None)
 }
 
-fn plain_terminal_asset_candidates(asset_name: &str) -> [String; 2] {
+fn plain_terminal_asset_candidates(
+    asset_name: &str,
+    capabilities: TerminalCapabilities,
+) -> Vec<String> {
     let asset_path = Path::new(asset_name);
-    [
+    let mut candidates = Vec::new();
+    if capabilities.width <= 40 {
+        candidates.push(
+            asset_path
+                .with_extension("")
+                .to_string_lossy()
+                .trim_end_matches('.')
+                .to_string()
+                + "-40.asc",
+        );
+        candidates.push(
+            asset_path
+                .with_extension("")
+                .to_string_lossy()
+                .trim_end_matches('.')
+                .to_string()
+                + "-40.txt",
+        );
+    }
+    candidates.extend([
         asset_path
             .with_extension("asc")
             .to_string_lossy()
@@ -2625,7 +2703,8 @@ fn plain_terminal_asset_candidates(asset_name: &str) -> [String; 2] {
             .with_extension("txt")
             .to_string_lossy()
             .into_owned(),
-    ]
+    ]);
+    candidates
 }
 
 async fn send_screen(
@@ -2673,7 +2752,9 @@ fn load_screen_payload(
     let term_screen = TermScreenAsset {
         ansi: screen_config.ansi.clone(),
         ansi_40: screen_config.ansi_40.clone(),
+        ascii_40: screen_config.ascii_40.clone(),
         ascii: screen_config.ascii.clone(),
+        text_40: screen_config.text_40.clone(),
         text: screen_config.text.clone(),
         pause: screen_config.pause,
     };
@@ -2714,6 +2795,7 @@ async fn send_text_buffered<T: Transport>(
     output: &mut Vec<u8>,
 ) -> ServeResult<()> {
     encode_text_into(message, output);
+    *output = normalize_caller_line_endings(output);
     transport.write_all(output).await?;
     output.clear();
     Ok(())
@@ -3140,15 +3222,29 @@ mod tests {
 
     #[test]
     fn terminal_type_supports_only_explicit_ansi_clients() {
-        assert!(terminal_type_supports_ansi(b"SyncTERM"));
-        assert!(terminal_type_supports_ansi(b"ANSI"));
-        assert!(terminal_type_supports_ansi(b"ANSI-BBS"));
-        assert!(terminal_type_supports_ansi(b"BBS-ANSI"));
-        assert!(terminal_type_supports_ansi(b"ANSI.SYS"));
-        assert!(terminal_type_supports_ansi(b"PC-ANSI"));
-        assert!(terminal_type_supports_ansi(b"pcansi"));
-        assert!(!terminal_type_supports_ansi(b"xterm-256color"));
-        assert!(!terminal_type_supports_ansi(b"vt100"));
+        assert!(terminal_type_capabilities(b"SyncTERM").supports_ansi);
+        assert!(terminal_type_capabilities(b"ANSI").supports_ansi);
+        assert!(terminal_type_capabilities(b"ANSI-BBS").supports_ansi);
+        assert!(terminal_type_capabilities(b"BBS-ANSI").supports_ansi);
+        assert!(terminal_type_capabilities(b"ANSI.SYS").supports_ansi);
+        assert!(terminal_type_capabilities(b"PC-ANSI").supports_ansi);
+        assert!(terminal_type_capabilities(b"pcansi").supports_ansi);
+        assert!(!terminal_type_capabilities(b"xterm-256color").supports_ansi);
+        assert!(!terminal_type_capabilities(b"vt100").supports_ansi);
+        assert!(!terminal_type_capabilities(b"C64 Ultimate").supports_ansi);
+    }
+
+    #[test]
+    fn terminal_type_detects_c64_profile_without_ansi() {
+        for terminal_type in [b"C64".as_slice(), b"C64 Ultimate", b"PETSCII", b"CGTerm"] {
+            let capabilities = terminal_type_capabilities(terminal_type);
+
+            assert_eq!(capabilities.profile, TerminalProfile::C64);
+            assert_eq!(capabilities.width, 40);
+            assert_eq!(capabilities.height, 25);
+            assert!(!capabilities.supports_ansi);
+            assert!(!capabilities.supports_color);
+        }
     }
 
     #[tokio::test]
@@ -3156,10 +3252,14 @@ mod tests {
         let (mut transport, mut client) = LoopbackTransport::new();
         let mut input = InputSession::default();
 
-        let capabilities =
-            negotiate_terminal_capabilities(&mut transport, &mut input, Duration::from_millis(5))
-                .await
-                .expect("negotiate capabilities");
+        let capabilities = negotiate_terminal_capabilities(
+            &mut transport,
+            &mut input,
+            Duration::from_millis(5),
+            TerminalCapabilities::plain_text(),
+        )
+        .await
+        .expect("negotiate capabilities");
         let request = client.read_output_bytes();
 
         assert_eq!(
@@ -3223,10 +3323,14 @@ mod tests {
             ])
             .expect("write negotiation frames");
 
-        let capabilities =
-            negotiate_terminal_capabilities(&mut transport, &mut input, Duration::from_millis(20))
-                .await
-                .expect("negotiate capabilities");
+        let capabilities = negotiate_terminal_capabilities(
+            &mut transport,
+            &mut input,
+            Duration::from_millis(20),
+            TerminalCapabilities::plain_text(),
+        )
+        .await
+        .expect("negotiate capabilities");
 
         assert!(capabilities.supports_ansi);
         assert_eq!(capabilities.width, 40);
@@ -3276,10 +3380,14 @@ mod tests {
             ])
             .expect("write negotiation frames");
 
-        let capabilities =
-            negotiate_terminal_capabilities(&mut transport, &mut input, Duration::from_millis(20))
-                .await
-                .expect("negotiate capabilities");
+        let capabilities = negotiate_terminal_capabilities(
+            &mut transport,
+            &mut input,
+            Duration::from_millis(20),
+            TerminalCapabilities::plain_text(),
+        )
+        .await
+        .expect("negotiate capabilities");
         let payload = load_screen_payload(&config, &config.flow.login_screen, capabilities)
             .expect("load login screen");
 
@@ -3315,18 +3423,85 @@ mod tests {
             ])
             .expect("write negotiation frames");
 
-        let capabilities =
-            negotiate_terminal_capabilities(&mut transport, &mut input, Duration::from_millis(20))
-                .await
-                .expect("negotiate capabilities");
+        let capabilities = negotiate_terminal_capabilities(
+            &mut transport,
+            &mut input,
+            Duration::from_millis(20),
+            TerminalCapabilities::plain_text(),
+        )
+        .await
+        .expect("negotiate capabilities");
         let payload = load_screen_payload(&config, &config.flow.login_screen, capabilities)
             .expect("load login screen");
 
         assert!(!capabilities.supports_ansi);
         assert_eq!(capabilities.width, 40);
-        assert_eq!(payload, b"ASCII\r\n");
+        assert_eq!(payload, b"ASCII40\r\n");
 
         let _ = std::fs::remove_dir_all(base_dir);
+    }
+
+    #[tokio::test]
+    async fn capability_negotiation_detects_c64_terminal_type() {
+        let (mut transport, client) = LoopbackTransport::new();
+        let mut input = InputSession::default();
+        client
+            .write_bytes(&[
+                IAC,
+                WILL,
+                TELOPT_TERMINAL_TYPE,
+                IAC,
+                SB,
+                TELOPT_TERMINAL_TYPE,
+                TELOPT_TTYPE_IS,
+                b'C',
+                b'6',
+                b'4',
+                b' ',
+                b'U',
+                b'l',
+                b't',
+                b'i',
+                b'm',
+                b'a',
+                b't',
+                b'e',
+                IAC,
+                SE,
+            ])
+            .expect("write C64 terminal type");
+
+        let capabilities = negotiate_terminal_capabilities(
+            &mut transport,
+            &mut input,
+            Duration::from_millis(20),
+            TerminalCapabilities::plain_text(),
+        )
+        .await
+        .expect("negotiate capabilities");
+
+        assert_eq!(capabilities.profile, TerminalProfile::C64);
+        assert_eq!(capabilities.width, 40);
+        assert!(!capabilities.supports_ansi);
+    }
+
+    #[tokio::test]
+    async fn capability_negotiation_can_default_to_c64_profile() {
+        let (mut transport, _client) = LoopbackTransport::new();
+        let mut input = InputSession::default();
+
+        let capabilities = negotiate_terminal_capabilities(
+            &mut transport,
+            &mut input,
+            Duration::from_millis(5),
+            TerminalCapabilities::c64(),
+        )
+        .await
+        .expect("negotiate capabilities");
+
+        assert_eq!(capabilities.profile, TerminalProfile::C64);
+        assert_eq!(capabilities.width, 40);
+        assert!(!capabilities.supports_ansi);
     }
 
     #[tokio::test]
@@ -3372,6 +3547,7 @@ mod tests {
             &mut transport,
             &mut input,
             TestDuration::from_millis(120),
+            TerminalCapabilities::plain_text(),
         )
         .await
         .expect("negotiate capabilities");
@@ -3394,6 +3570,7 @@ mod tests {
             &mut transport,
             &mut input,
             TestDuration::from_millis(60),
+            TerminalCapabilities::plain_text(),
         )
         .await
         .expect("negotiate capabilities");
@@ -3605,6 +3782,36 @@ mod tests {
     }
 
     #[test]
+    fn c64_terminal_asset_payload_prefers_40_column_plain_asset() {
+        let base_dir = temp_dir("terminal-asset-c64");
+        let db_path = base_dir.join("oxidebbs.ddb");
+        let bind_addr = free_loopback_addr();
+        let config = smoke_config(bind_addr, &base_dir, &db_path);
+        std::fs::create_dir_all(&config.paths.ansi).expect("create ANSI dir");
+        std::fs::write(
+            config.paths.ansi.join("welcome.ans"),
+            b"\x1b[1mANSI welcome\r\n",
+        )
+        .expect("write ANSI welcome");
+        std::fs::write(
+            config.paths.ansi.join("welcome.asc"),
+            b"Wide plain welcome\r\n",
+        )
+        .expect("write wide plain welcome");
+        std::fs::write(config.paths.ansi.join("welcome-40.asc"), b"C64 welcome\r\n")
+            .expect("write C64 welcome");
+
+        let payload =
+            load_terminal_asset_payload(&config, "welcome.ans", TerminalCapabilities::c64())
+                .expect("load C64 welcome");
+
+        assert_eq!(payload, b"C64 welcome\r\n");
+        assert!(!payload.windows(2).any(|window| window == b"\x1b["));
+
+        let _ = std::fs::remove_dir_all(base_dir);
+    }
+
+    #[test]
     fn terminal_asset_payload_normalizes_bare_lf_for_telnet_callers() {
         let base_dir = temp_dir("terminal-asset-line-endings");
         let db_path = base_dir.join("oxidebbs.ddb");
@@ -3702,7 +3909,9 @@ mod tests {
             crate::config::ScreenConfig {
                 ansi: Some("line-endings/screen.ans".to_string()),
                 ansi_40: None,
+                ascii_40: None,
                 ascii: Some("line-endings/screen.asc".to_string()),
+                text_40: None,
                 text: None,
                 pause: false,
             },
@@ -3783,6 +3992,17 @@ mod tests {
     #[test]
     fn generated_output_replaces_unencodable_text_with_question_mark() {
         assert_eq!(encode_text("Diagnostic 🚀"), b"Diagnostic ?");
+    }
+
+    #[tokio::test]
+    async fn send_text_normalizes_bare_lf_to_crlf() {
+        let (mut transport, mut client) = LoopbackTransport::new();
+
+        send_text(&mut transport, "One\nTwo\n")
+            .await
+            .expect("send text");
+
+        assert_eq!(client.read_output_bytes(), b"One\r\nTwo\r\n");
     }
 
     #[test]
@@ -4070,6 +4290,52 @@ mod tests {
 
         match value {
             PromptLineResult::Value(value) => assert_eq!(value, "secret 🚀"),
+            other => panic!("expected value, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn read_line_input_treats_backspace_byte_as_delete() {
+        let (mut transport, client) = LoopbackTransport::new();
+        let mut input = InputSession::default();
+
+        client.write_bytes(b"AB\x08C\r").expect("write value");
+
+        let value = read_line_input(
+            &mut transport,
+            &mut input,
+            Duration::from_secs(1),
+            false,
+            false,
+        )
+        .await
+        .expect("read");
+
+        match value {
+            PromptLineResult::Value(value) => assert_eq!(value, "AC"),
+            other => panic!("expected value, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn read_line_input_treats_delete_byte_as_delete() {
+        let (mut transport, client) = LoopbackTransport::new();
+        let mut input = InputSession::default();
+
+        client.write_bytes(b"AB\x7fC\r").expect("write value");
+
+        let value = read_line_input(
+            &mut transport,
+            &mut input,
+            Duration::from_secs(1),
+            false,
+            false,
+        )
+        .await
+        .expect("read");
+
+        match value {
+            PromptLineResult::Value(value) => assert_eq!(value, "AC"),
             other => panic!("expected value, got {other:?}"),
         }
     }
@@ -4728,7 +4994,9 @@ mod tests {
             crate::config::ScreenConfig {
                 ansi: Some("login/login.ans".to_string()),
                 ansi_40: Some("login/login-40.ans".to_string()),
+                ascii_40: Some("login/login-40.asc".to_string()),
                 ascii: Some("login/login.asc".to_string()),
+                text_40: Some("login/login-40.txt".to_string()),
                 text: Some("login/login.txt".to_string()),
                 pause: false,
             },
@@ -4738,6 +5006,8 @@ mod tests {
         std::fs::create_dir_all(&login_dir).expect("create login screen dir");
         std::fs::write(login_dir.join("login.ans"), b"ANSI80\r\n").expect("write 80-col ANSI");
         std::fs::write(login_dir.join("login-40.ans"), b"ANSI40\r\n").expect("write 40-col ANSI");
+        std::fs::write(login_dir.join("login-40.asc"), b"ASCII40\r\n").expect("write 40-col ASCII");
+        std::fs::write(login_dir.join("login-40.txt"), b"TEXT40\r\n").expect("write 40-col text");
         std::fs::write(login_dir.join("login.asc"), b"ASCII\r\n").expect("write ASCII");
         std::fs::write(login_dir.join("login.txt"), b"TEXT\r\n").expect("write text");
     }

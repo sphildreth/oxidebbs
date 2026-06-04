@@ -53,9 +53,42 @@ confirm_quit = true
 
 [terminal]
 default_encoding = "cp437"
+default_profile = "plain"
+manual_profile_selection = true
 clear_screen_on_connect = true
 welcome_screen = "welcome.ans"
 logoff_screen = "logoff.ans"
+
+[terminal.profiles.ansi80]
+name = "ANSI / CP437 80-column"
+width = 80
+height = 25
+supports_ansi = true
+supports_color = true
+charset = "cp437"
+line_endings = "crlf"
+backspace_mode = "backspace_or_delete"
+
+[terminal.profiles.plain]
+name = "Plain ASCII"
+width = 80
+height = 25
+supports_ansi = false
+supports_color = false
+charset = "ascii"
+line_endings = "crlf"
+backspace_mode = "backspace_or_delete"
+
+[terminal.profiles.c64]
+name = "C64 / C64 Ultimate 40-column"
+width = 40
+height = 25
+supports_ansi = false
+supports_color = false
+charset = "petscii_ascii_fallback"
+line_endings = "crlf"
+backspace_mode = "backspace_or_delete"
+output_pacing_bytes_per_second = 1200
 
 [flow]
 login_screen = "login"
@@ -66,32 +99,42 @@ main_menu = "main"
 [screens.login]
 ansi = "login/login.ans"
 ansi_40 = "login/login-40.ans"
+ascii_40 = "login/login.asc"
 ascii = "login/login.asc"
+text_40 = "login/login.asc"
 text = "login/login.txt"
 
 [screens.screen1]
 ansi = "info/screen1.ans"
+ascii_40 = "info/screen1-40.asc"
 ascii = "info/screen1.asc"
+text_40 = "info/screen1-40.txt"
 text = "info/screen1.txt"
 pause = true
 
 [screens.screen2]
 ansi = "info/screen2.ans"
+ascii_40 = "info/screen2-40.asc"
 ascii = "info/screen2.asc"
+text_40 = "info/screen2-40.txt"
 text = "info/screen2.txt"
 pause = true
 
 [screens.main_menu]
 ansi = "menus/main/main.ans"
 ansi_40 = "menus/main/main-40.ans"
+ascii_40 = "menus/main/main.asc"
 ascii = "menus/main/main.asc"
+text_40 = "menus/main/main.txt"
 text = "menus/main/main.txt"
 pause = false
 
 [screens.sysop_menu]
 ansi = "menus/sysop/sysop.ans"
 ansi_40 = "menus/sysop/sysop-40.ans"
+ascii_40 = "menus/sysop/sysop.asc"
 ascii = "menus/sysop/sysop.asc"
+text_40 = "menus/sysop/sysop.txt"
 text = "menus/sysop/sysop.txt"
 pause = false
 

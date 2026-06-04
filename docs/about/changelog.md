@@ -70,6 +70,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   status, and OxideNet status, with navigation entries.
 - Disabled-by-default `[admin_web]` configuration model with validation for
   loopback/TLS, read-only mode, CSRF/replay timing, and rate-limit settings.
+- C64/C64 Ultimate caller compatibility requirement with a named `c64`
+  terminal profile, 40-column plain fallback assets, C64 terminal-type
+  detection, CR/LF and backspace/delete coverage, and terminal profile config
+  contract.
 
 ### Changed
 - Schema version bumped to 7; schema `5` added shared network and message-author

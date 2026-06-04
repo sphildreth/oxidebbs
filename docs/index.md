@@ -17,7 +17,7 @@ features:
   - title: Telnet-first
     details: Classic telnet callers are supported now. Serial, modem, and caller file-transfer work is tracked in the v1.2 release plan.
   - title: ANSI/CP437-native
-    details: Caller output stays byte-oriented, with 40-column and 80-column profiles as first-class layouts.
+    details: Caller output stays byte-oriented, with 80-column ANSI, plain ASCII, and C64/C64 Ultimate 40-column profiles as first-class layouts.
   - title: DecentDB-backed
     details: OxideBBS uses DecentDB as its only system database through native Rust bindings.
   - title: Door-ready

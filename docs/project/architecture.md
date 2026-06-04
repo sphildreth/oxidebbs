@@ -53,6 +53,15 @@ profiles. Menus, prompts, status bars, wrapping, paging, and ANSI assets should
 fit the active terminal width without corrupting CP437 art or truncating
 commands.
 
+| Profile | Caller target | Width | ANSI | Charset behavior |
+| --- | --- | --- | --- | --- |
+| `ansi80` | BBS/ANSI clients such as SyncTERM | 80 | Yes | CP437 |
+| `plain` | Generic telnet clients | 80 | No | ASCII |
+| `c64` | C64, C64 Ultimate, and C64 terminal apps | 40 | No by default | PETSCII-friendly ASCII fallback |
+
+The `c64` profile is for callers connecting from Commodore-compatible terminal
+software. OxideBBS is not ported to run on C64 hardware.
+
 ## Menus
 
 Menus are configured as safe key-to-action mappings. Screen assets draw the visual

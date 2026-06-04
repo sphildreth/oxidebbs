@@ -29,6 +29,10 @@ It keeps the caller experience byte-oriented and classic while giving sysops a
 clean Rust codebase, a real database layer, auditable runtime operations, Docker
 deployment, and a GitHub-native release workflow.
 
+OxideBBS remains a modern Rust server. C64, C64 Ultimate, and C64 terminal
+application users are supported as remote callers through a C64-friendly
+terminal profile; this is not a C64-native server port.
+
 > **Built for sysops. Driven by code.**
 
 ## Features
@@ -36,9 +40,9 @@ deployment, and a GitHub-native release workflow.
 - 📡 **Telnet Caller Runtime** - Multi-node telnet serving with session
   lifecycle tracking, idle timeout handling, graceful shutdown, and live node
   state.
-- 🎨 **ANSI/CP437-First UI** - Raw ANSI assets, CP437 conversion, 40-column and
-  80-column screen profiles, paging, caller-safe prompts, and CRLF-normalized
-  telnet output.
+- 🎨 **ANSI/CP437-First UI** - Raw ANSI assets, CP437 conversion, C64-friendly
+  40-column plain/PETSCII-fallback caller profile, 80-column ANSI profile,
+  paging, caller-safe prompts, and CRLF-normalized telnet output.
 - 🧭 **Configurable Menus** - Login, main, info, message, door, logoff, and
   nested submenu routing with hotkey-driven caller commands.
 - 👤 **Accounts And Auth** - New-user creation, Argon2id password hashing,
@@ -86,7 +90,7 @@ DOSEMU2 and the bundled Oxide-owned test door fixture.
 OXIDEBBS_SYSOP_PASSWORD='choose-a-real-password' docker compose up -d --build
 ```
 
-Connect with SyncTERM or telnet:
+Connect with SyncTERM, telnet, or a C64/C64 Ultimate terminal client:
 
 ```bash
 telnet localhost 2323

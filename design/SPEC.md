@@ -125,6 +125,45 @@ The terminal layer should support:
 - Safe line editor for caller input
 - Output paging
 
+The named caller terminal profiles are:
+
+| Profile | Purpose | Width x height | Charset | ANSI/control policy |
+| --- | --- | --- | --- | --- |
+| `ansi80` | Modern BBS/ANSI callers such as SyncTERM | 80 x 25 | CP437 | ANSI and color allowed |
+| `plain` | Generic telnet clients and unknown callers | 80 x 25 | ASCII | No ANSI required |
+| `c64` | C64, C64 Ultimate, and C64 terminal application callers | 40 x 25 | PETSCII-friendly ASCII fallback | No ANSI unless explicitly overridden |
+
+The `c64` profile is a caller compatibility profile. OxideBBS remains a modern
+Rust BBS server; it is not a Commodore 64 executable, does not require a
+`mos-c64-none` build target, and does not introduce a C64 thin-client
+architecture.
+
+The C64 profile must keep the login flow, main menu, message list, message
+reader, file list, prompts, help text, and status lines usable at 40 columns.
+Menus and generated caller text should wrap or truncate at the active profile
+width instead of assuming 80 columns. ANSI/CP437 art must have an ASCII,
+40-column, or C64-safe fallback path for basic navigation.
+
+PETSCII translation is not complete yet. The terminal abstraction must keep the
+charset field explicit and route C64 callers through ASCII/PETSCII-friendly
+fallback assets until full PETSCII encode/decode support is implemented.
+
+Plain and C64 profiles must avoid advanced ANSI escape sequences for screen
+clear, cursor movement, color, and box drawing unless a sysop deliberately
+configures an ANSI-capable profile. Output line endings are normalized to CRLF
+for caller output. Caller input must normalize CR, LF, CRLF, telnet CR-NUL, and
+common backspace/delete bytes (`0x08` and `0x7f`).
+
+Terminal profiles may define optional output pacing, expressed in bytes per
+second. Pacing exists for slower clients and may be disabled for the default
+plain/ANSI profiles.
+
+When terminal detection is unreliable, onboarding or account settings should
+offer manual terminal profile selection: ANSI / 80-column, plain ASCII, and C64
+/ 40-column / PETSCII-friendly. Persisted user preference requires a user
+profile/schema field and is future work unless that storage exists in the
+active release.
+
 The default caller profile may be 80x25, but 40-column callers are a supported
 target, not an edge case. Screen assets should either have width-specific
 variants or render through layouts that can fit within 40 columns without
