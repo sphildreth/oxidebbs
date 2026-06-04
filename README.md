@@ -31,12 +31,6 @@ deployment, and a GitHub-native release workflow.
 
 > **Built for sysops. Driven by code.**
 
-The canonical repository is:
-
-```text
-https://github.com/sphildreth/oxidebbs
-```
-
 ## Features
 
 - 📡 **Telnet Caller Runtime** - Multi-node telnet serving with session
