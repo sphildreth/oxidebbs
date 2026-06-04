@@ -17,6 +17,7 @@ pub fn migrate_to_current(db: &Db) -> decentdb::Result<()> {
             2 => migrate_2_to_3(db)?,
             3 => migrate_3_to_4(db)?,
             4 => migrate_4_to_5(db)?,
+            5 => migrate_5_to_6(db)?,
             unknown => {
                 return Err(DbError::sql(format!(
                     "Unsupported migration source schema version {unknown}; expected {SCHEMA_VERSION} or older known versions"
@@ -74,7 +75,7 @@ fn migrate_4_to_5(db: &Db) -> decentdb::Result<()> {
             run_migration_transaction(db, || {
                 recreate_messages_for_author_fields(db)?;
                 create_network_tables(db)?;
-                rebuild_doors_for_security_level(db)?;
+                rebuild_doors_for_security_level(db, 4)?;
                 create_file_tables(db)?;
                 create_oxidenet_registry_tables(db)?;
                 set_schema_version(db, 5)
@@ -88,6 +89,39 @@ fn migrate_4_to_5(db: &Db) -> decentdb::Result<()> {
             "Cannot apply migration 4 -> 5 because schema_version marker is missing",
         )),
     }
+}
+
+fn migrate_5_to_6(db: &Db) -> decentdb::Result<()> {
+    match existing_schema_version(db)? {
+        Some(5) => {
+            if doors_needs_security_level_rebuild(db)? {
+                rebuild_doors_for_security_level(db, 5)?;
+            }
+            set_schema_version(db, 6)
+        }
+        Some(other) => Err(DbError::sql(format!(
+            "Cannot apply migration 5 -> 6 from schema version {other}"
+        ))),
+        None => Err(DbError::sql(
+            "Cannot apply migration 5 -> 6 because schema_version marker is missing",
+        )),
+    }
+}
+
+fn doors_needs_security_level_rebuild(db: &Db) -> decentdb::Result<bool> {
+    let result = db.execute(
+        "SELECT COUNT(*) FROM information_schema.columns WHERE table_name = 'doors' AND column_name = 'min_security_level'",
+    )?;
+    let count = result
+        .rows()
+        .first()
+        .and_then(|row| row.values().first())
+        .and_then(|value| match value {
+            decentdb::Value::Int64(n) => Some(*n),
+            _ => None,
+        })
+        .unwrap_or(0);
+    Ok(count == 0)
 }
 
 fn rebuild_message_area_tables_for_v3(db: &Db) -> decentdb::Result<()> {
@@ -623,16 +657,18 @@ fn create_network_tables(db: &Db) -> decentdb::Result<()> {
     Ok(())
 }
 
-fn rebuild_doors_for_security_level(db: &Db) -> decentdb::Result<()> {
-    db.execute_batch(
-        "ALTER TABLE doors RENAME TO oxidebbs_schema4_doors;
-         ALTER TABLE door_runs RENAME TO oxidebbs_schema4_door_runs;
+fn rebuild_doors_for_security_level(db: &Db, source_schema: i64) -> decentdb::Result<()> {
+    let archive_doors = format!("oxidebbs_schema{}_doors", source_schema);
+    let archive_door_runs = format!("oxidebbs_schema{}_door_runs", source_schema);
+    db.execute_batch(&format!(
+        "ALTER TABLE doors RENAME TO {archive_doors};
+         ALTER TABLE door_runs RENAME TO {archive_door_runs};
 
          DROP INDEX IF EXISTS idx_door_runs_door_id;
          DROP INDEX IF EXISTS idx_door_runs_user_id;
          DROP INDEX IF EXISTS idx_door_runs_started_at;
 
-         CREATE TABLE doors_v5 (
+         CREATE TABLE doors_new (
              id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
              key TEXT NOT NULL UNIQUE CHECK (LENGTH(TRIM(key)) > 0),
              name TEXT NOT NULL CHECK (LENGTH(TRIM(name)) > 0),
@@ -646,13 +682,13 @@ fn rebuild_doors_for_security_level(db: &Db) -> decentdb::Result<()> {
              min_security_level INT NOT NULL DEFAULT 0 CHECK (min_security_level >= 0 AND min_security_level <= 255)
          );
 
-         INSERT INTO doors_v5 (id, key, name, runner, working_dir, command, drop_file, exclusive, time_limit_minutes, enabled, min_security_level)
+         INSERT INTO doors_new (id, key, name, runner, working_dir, command, drop_file, exclusive, time_limit_minutes, enabled, min_security_level)
          SELECT id, key, name, runner, working_dir, command, drop_file, exclusive, time_limit_minutes, enabled, 0
-         FROM oxidebbs_schema4_doors;
+         FROM {archive_doors};
 
-         ALTER TABLE doors_v5 RENAME TO doors;
+         ALTER TABLE doors_new RENAME TO doors;
 
-         CREATE TABLE door_runs_v5 (
+         CREATE TABLE door_runs_new (
              id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
              door_id UUID NOT NULL REFERENCES doors(id) ON DELETE RESTRICT,
              user_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
@@ -666,16 +702,16 @@ fn rebuild_doors_for_security_level(db: &Db) -> decentdb::Result<()> {
              bytes_out INT NOT NULL DEFAULT 0 CHECK (bytes_out >= 0)
          );
 
-         INSERT INTO door_runs_v5 (id, door_id, user_id, node_number, started_at, ended_at, exit_code, timed_out, disconnect_forced, bytes_in, bytes_out)
+         INSERT INTO door_runs_new (id, door_id, user_id, node_number, started_at, ended_at, exit_code, timed_out, disconnect_forced, bytes_in, bytes_out)
          SELECT id, door_id, user_id, node_number, started_at, ended_at, exit_code, timed_out, disconnect_forced, bytes_in, bytes_out
-         FROM oxidebbs_schema4_door_runs;
+         FROM {archive_door_runs};
 
-         ALTER TABLE door_runs_v5 RENAME TO door_runs;
+         ALTER TABLE door_runs_new RENAME TO door_runs;
 
          CREATE INDEX IF NOT EXISTS idx_door_runs_door_id ON door_runs (door_id);
          CREATE INDEX IF NOT EXISTS idx_door_runs_user_id ON door_runs (user_id);
          CREATE INDEX IF NOT EXISTS idx_door_runs_started_at ON door_runs (started_at);",
-    )?;
+    ))?;
     Ok(())
 }
 
@@ -1088,6 +1124,9 @@ mod tests {
         migrate_4_to_5(&db).expect("apply migration 4->5");
         assert_eq!(schema::schema_version(&db).expect("schema after 4->5"), 5);
 
+        migrate_5_to_6(&db).expect("apply migration 5->6");
+        assert_eq!(schema::schema_version(&db).expect("schema after 5->6"), 6);
+
         assert_eq!(
             schema::schema_version(&db).expect("schema version"),
             SCHEMA_VERSION
@@ -1242,6 +1281,66 @@ mod tests {
     }
 
     #[test]
+    fn migration_5_to_6_is_noop_when_doors_already_has_security_level() {
+        let db = Db::open_or_create(":memory:", DbConfig::default()).expect("open DecentDB");
+
+        seed_schema_2_database(&db);
+        migrate_2_to_3(&db).expect("apply migration 2->3");
+        migrate_3_to_4(&db).expect("apply migration 3->4");
+        migrate_4_to_5(&db).expect("apply migration 4->5");
+
+        db.execute_batch(
+            "INSERT INTO doors (
+                id, key, name, runner, working_dir, command, drop_file, exclusive,
+                time_limit_minutes, enabled, min_security_level
+            ) VALUES (
+                UUID_PARSE('00000000-0000-4000-8000-000000000401'), 'test-door',
+                'Test Door', 'dosemu', './doors/test', 'TEST.EXE', 'DORINFO1.DEF',
+                FALSE, 5, TRUE, 50
+            );",
+        )
+        .expect("seed door with security level");
+
+        migrate_5_to_6(&db).expect("apply migration 5->6");
+        assert_eq!(schema::schema_version(&db).expect("schema after 5->6"), 6);
+
+        assert_eq!(
+            scalar_int(
+                &db,
+                "SELECT min_security_level FROM doors WHERE key = 'test-door'"
+            ),
+            50
+        );
+    }
+
+    #[test]
+    fn migration_5_to_6_rebuilds_doors_when_min_security_level_missing() {
+        let db = Db::open_or_create(":memory:", DbConfig::default()).expect("open DecentDB");
+
+        init_schema_at_version_5_without_doors_rebuild(&db);
+
+        db.execute_batch(
+            "INSERT INTO doors (id, key, name, runner, working_dir, command, drop_file, exclusive, time_limit_minutes, enabled)
+             VALUES (UUID_PARSE('00000000-0000-4000-8000-000000000401'), 'test-door',
+             'Test Door', 'dosemu', './doors/test', 'TEST.EXE', 'DORINFO1.DEF',
+             FALSE, 5, TRUE);",
+        )
+        .expect("insert test door");
+
+        assert_eq!(
+            scalar_int(&db, "SELECT COUNT(*) FROM doors"),
+            1,
+            "should have one door before migration"
+        );
+
+        migrate_5_to_6(&db).expect("apply migration 5->6");
+        assert_eq!(schema::schema_version(&db).expect("schema after 5->6"), 6);
+
+        assert_eq!(scalar_int(&db, "SELECT min_security_level FROM doors"), 0);
+        assert_eq!(scalar_int(&db, "SELECT COUNT(*) FROM doors"), 1);
+    }
+
+    #[test]
     fn migration_runner_rejects_future_versions() {
         let db = Db::open_or_create(":memory:", DbConfig::default()).expect("open DecentDB");
         db.execute_batch(
@@ -1330,6 +1429,56 @@ mod tests {
             })
             .count();
         assert_eq!(archive_count, 2);
+    }
+
+    fn init_schema_at_version_5_without_doors_rebuild(db: &Db) {
+        crate::schema::init_schema(db).expect("init schema");
+        assert_eq!(
+            crate::schema::schema_version(db).expect("schema version"),
+            SCHEMA_VERSION
+        );
+
+        db.execute_batch(
+            "DELETE FROM door_runs;
+             DELETE FROM doors;
+
+             DROP TABLE door_runs;
+             DROP TABLE doors;
+
+             CREATE TABLE doors (
+                 id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+                 key TEXT NOT NULL UNIQUE CHECK (LENGTH(TRIM(key)) > 0),
+                 name TEXT NOT NULL CHECK (LENGTH(TRIM(name)) > 0),
+                 runner TEXT NOT NULL CHECK (LENGTH(TRIM(runner)) > 0),
+                 working_dir TEXT NOT NULL CHECK (LENGTH(TRIM(working_dir)) > 0),
+                 command TEXT NOT NULL CHECK (LENGTH(TRIM(command)) > 0),
+                 drop_file TEXT NOT NULL CHECK (LENGTH(TRIM(drop_file)) > 0),
+                 exclusive BOOL NOT NULL DEFAULT FALSE,
+                 time_limit_minutes INT NOT NULL DEFAULT 30 CHECK (time_limit_minutes > 0),
+                 enabled BOOL NOT NULL DEFAULT TRUE
+             );
+
+             CREATE TABLE door_runs (
+                 id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+                 door_id UUID NOT NULL REFERENCES doors(id) ON DELETE RESTRICT,
+                 user_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+                 node_number INT NOT NULL CHECK (node_number > 0),
+                 started_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                 ended_at TIMESTAMPTZ,
+                 exit_code INT,
+                 timed_out BOOL NOT NULL DEFAULT FALSE,
+                 disconnect_forced BOOL NOT NULL DEFAULT FALSE,
+                 bytes_in INT NOT NULL DEFAULT 0 CHECK (bytes_in >= 0),
+                 bytes_out INT NOT NULL DEFAULT 0 CHECK (bytes_out >= 0)
+             );
+
+             CREATE INDEX IF NOT EXISTS idx_door_runs_door_id ON door_runs (door_id);
+             CREATE INDEX IF NOT EXISTS idx_door_runs_user_id ON door_runs (user_id);
+             CREATE INDEX IF NOT EXISTS idx_door_runs_started_at ON door_runs (started_at);
+
+             UPDATE system_config SET value = '5' WHERE key = 'schema_version';",
+        )
+        .expect("rebuild doors without min_security_level");
     }
 
     fn count_rows(db: &Db, table: &str) -> i64 {

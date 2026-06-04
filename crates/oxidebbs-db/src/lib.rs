@@ -17,7 +17,7 @@ mod schema;
 mod session_repo;
 mod user_repo;
 
-pub const SCHEMA_VERSION: i64 = 5;
+pub const SCHEMA_VERSION: i64 = 6;
 
 pub use audit_repo::{
     AuditEventRecord, insert_audit_event, insert_audit_event_preserving_record, list_audit_events,
