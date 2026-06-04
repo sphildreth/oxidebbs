@@ -389,6 +389,17 @@ fn create_full_schema(db: &Db) -> decentdb::Result<()> {
                 CHECK (status = 'active' OR status = 'revoked' OR status = 'expired')
         );
 
+        CREATE TABLE IF NOT EXISTS network_rescan_queue (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            network_id UUID NOT NULL REFERENCES network_profiles(id) ON DELETE CASCADE,
+            link_id UUID NOT NULL REFERENCES network_links(id) ON DELETE CASCADE,
+            area_tag TEXT NOT NULL CHECK (LENGTH(TRIM(area_tag)) > 0),
+            status TEXT NOT NULL DEFAULT 'pending'
+                CHECK (status = 'pending' OR status = 'processing' OR status = 'completed' OR status = 'failed'),
+            requested_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            processed_at TIMESTAMPTZ
+        );
+
         CREATE TABLE IF NOT EXISTS sessions (
             id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
             node_number INT NOT NULL CHECK (node_number > 0),

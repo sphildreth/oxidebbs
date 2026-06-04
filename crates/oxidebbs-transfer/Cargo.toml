@@ -7,6 +7,5 @@ authors.workspace = true
 
 [dependencies]
 thiserror.workspace = true
-
-[dev-dependencies]
 tokio.workspace = true
+oxidebbs-telnet = { path = "../oxidebbs-telnet" }

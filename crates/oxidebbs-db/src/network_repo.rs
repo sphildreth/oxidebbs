@@ -694,6 +694,18 @@ pub fn find_network_profile_by_key(
     Ok(result.rows().first().map(network_profile_from_row))
 }
 
+pub fn find_network_profile_by_id(
+    db: &Db,
+    id: &str,
+) -> decentdb::Result<Option<NetworkProfileRecord>> {
+    let result = db.execute_with_params(
+        "SELECT UUID_TO_STRING(id), key, name, adapter, local_zone, local_net, local_node, local_point, enabled, CAST(created_at AS TEXT), CAST(updated_at AS TEXT)
+         FROM network_profiles WHERE id = UUID_PARSE($1)",
+        &[Value::Text(id.to_string())],
+    )?;
+    Ok(result.rows().first().map(network_profile_from_row))
+}
+
 pub fn find_network_link_by_key(db: &Db, key: &str) -> decentdb::Result<Option<NetworkLinkRecord>> {
     let result = db.execute_with_params(
         "SELECT UUID_TO_STRING(id), key, UUID_TO_STRING(network_id), address, host, binkp_port, password, poll_schedule_minutes, compression, transport_security, enabled, CAST(created_at AS TEXT), CAST(updated_at AS TEXT)
@@ -1059,6 +1071,240 @@ fn blob_value(value: &Value) -> Vec<u8> {
         Value::Blob(blob) => blob.clone(),
         _ => Vec::new(),
     }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct NetworkRescanQueueRecord {
+    pub id: String,
+    pub network_id: String,
+    pub link_id: String,
+    pub area_tag: String,
+    pub status: String,
+    pub requested_at: String,
+    pub processed_at: Option<String>,
+}
+
+pub fn insert_network_rescan_queue(
+    db: &Db,
+    record: &NetworkRescanQueueRecord,
+) -> decentdb::Result<()> {
+    db.execute_with_params(
+        "INSERT INTO network_rescan_queue (id, network_id, link_id, area_tag, status, requested_at, processed_at)
+         VALUES (UUID_PARSE($1), UUID_PARSE($2), UUID_PARSE($3), $4, $5, $6, $7)",
+        &[
+            Value::Text(record.id.clone()),
+            Value::Text(record.network_id.clone()),
+            Value::Text(record.link_id.clone()),
+            Value::Text(record.area_tag.clone()),
+            Value::Text(record.status.clone()),
+            Value::Text(record.requested_at.clone()),
+            record
+                .processed_at
+                .as_ref()
+                .map(|s| Value::Text(s.clone()))
+                .unwrap_or(Value::Null),
+        ],
+    )?;
+    Ok(())
+}
+
+/// List all rescan queue entries, optionally filtered by network and status.
+pub fn list_network_rescan_queue(
+    db: &Db,
+    network_id: Option<&str>,
+    status: Option<&str>,
+) -> decentdb::Result<Vec<NetworkRescanQueueRecord>> {
+    let (sql, params) = match (network_id, status) {
+        (Some(nid), Some(st)) => (
+            "SELECT UUID_TO_STRING(id), UUID_TO_STRING(network_id), UUID_TO_STRING(link_id),
+                    area_tag, status, CAST(requested_at AS TEXT), CAST(processed_at AS TEXT)
+             FROM network_rescan_queue
+             WHERE network_id = UUID_PARSE($1) AND status = $2
+             ORDER BY requested_at ASC",
+            vec![Value::Text(nid.to_string()), Value::Text(st.to_string())],
+        ),
+        (Some(nid), None) => (
+            "SELECT UUID_TO_STRING(id), UUID_TO_STRING(network_id), UUID_TO_STRING(link_id),
+                    area_tag, status, CAST(requested_at AS TEXT), CAST(processed_at AS TEXT)
+             FROM network_rescan_queue
+             WHERE network_id = UUID_PARSE($1)
+             ORDER BY requested_at ASC",
+            vec![Value::Text(nid.to_string())],
+        ),
+        (None, Some(st)) => (
+            "SELECT UUID_TO_STRING(id), UUID_TO_STRING(network_id), UUID_TO_STRING(link_id),
+                    area_tag, status, CAST(requested_at AS TEXT), CAST(processed_at AS TEXT)
+             FROM network_rescan_queue
+             WHERE status = $1
+             ORDER BY requested_at ASC",
+            vec![Value::Text(st.to_string())],
+        ),
+        (None, None) => (
+            "SELECT UUID_TO_STRING(id), UUID_TO_STRING(network_id), UUID_TO_STRING(link_id),
+                    area_tag, status, CAST(requested_at AS TEXT), CAST(processed_at AS TEXT)
+             FROM network_rescan_queue
+             ORDER BY requested_at ASC",
+            vec![],
+        ),
+    };
+
+    let result = db.execute_with_params(sql, &params)?;
+    Ok(result.rows().iter().map(rescan_queue_from_row).collect())
+}
+
+fn rescan_queue_from_row(row: &decentdb::QueryRow) -> NetworkRescanQueueRecord {
+    let values = row.values();
+    NetworkRescanQueueRecord {
+        id: text_value(&values[0]),
+        network_id: text_value(&values[1]),
+        link_id: text_value(&values[2]),
+        area_tag: text_value(&values[3]),
+        status: text_value(&values[4]),
+        requested_at: text_value(&values[5]),
+        processed_at: opt_text_value(&values[6]),
+    }
+}
+
+/// Update the status of a rescan queue entry.
+pub fn update_network_rescan_status(
+    db: &Db,
+    rescan_id: &str,
+    status: &str,
+    processed_at: Option<&str>,
+) -> decentdb::Result<bool> {
+    let result = db.execute_with_params(
+        "UPDATE network_rescan_queue
+         SET status = $1, processed_at = $2
+         WHERE id = UUID_PARSE($3)",
+        &[
+            Value::Text(status.to_string()),
+            processed_at
+                .map(|s| Value::Text(s.to_string()))
+                .unwrap_or(Value::Null),
+            Value::Text(rescan_id.to_string()),
+        ],
+    )?;
+    Ok(result.affected_rows() > 0)
+}
+
+/// Find a rescan queue entry by ID.
+pub fn find_network_rescan_by_id(
+    db: &Db,
+    rescan_id: &str,
+) -> decentdb::Result<Option<NetworkRescanQueueRecord>> {
+    let result = db.execute_with_params(
+        "SELECT UUID_TO_STRING(id), UUID_TO_STRING(network_id), UUID_TO_STRING(link_id),
+                area_tag, status, CAST(requested_at AS TEXT), CAST(processed_at AS TEXT)
+         FROM network_rescan_queue
+         WHERE id = UUID_PARSE($1)",
+        &[Value::Text(rescan_id.to_string())],
+    )?;
+    Ok(result.rows().first().map(rescan_queue_from_row))
+}
+
+/// Count network packets created before the cutoff timestamp.
+///
+/// Only counts packets with terminal status (processed, failed) to avoid
+/// affecting active or quarantined packets that need manual review.
+pub fn count_network_packets_before(db: &Db, cutoff_timestamp: &str) -> decentdb::Result<i64> {
+    let result = db.execute_with_params(
+        "SELECT COUNT(*) FROM network_packets
+         WHERE created_at < CAST($1 AS TIMESTAMPTZ)
+         AND status IN ('processed', 'failed')",
+        &[Value::Text(cutoff_timestamp.to_string())],
+    )?;
+    Ok(result
+        .rows()
+        .first()
+        .and_then(|row| row.values().first())
+        .and_then(|value| match value {
+            Value::Int64(count) => Some(*count),
+            _ => None,
+        })
+        .unwrap_or(0))
+}
+
+/// Delete network packets and associated records older than the cutoff timestamp.
+///
+/// Only deletes packets with terminal status (processed, failed) to avoid
+/// affecting active or quarantined packets that need manual review.
+/// Returns the number of packets deleted.
+pub fn delete_network_packets_older_than(db: &Db, cutoff_timestamp: &str) -> decentdb::Result<i64> {
+    let before = count_network_packets_before(db, cutoff_timestamp)?;
+
+    // Delete associated records first (foreign key constraints)
+    db.execute_with_params(
+        "DELETE FROM network_messages
+         WHERE packet_id IN (
+             SELECT id FROM network_packets
+             WHERE created_at < CAST($1 AS TIMESTAMPTZ)
+             AND status IN ('processed', 'failed')
+         )",
+        &[Value::Text(cutoff_timestamp.to_string())],
+    )?;
+
+    db.execute_with_params(
+        "DELETE FROM network_seen_by
+         WHERE message_id IN (
+             SELECT id FROM network_messages
+             WHERE packet_id IN (
+                 SELECT id FROM network_packets
+                 WHERE created_at < CAST($1 AS TIMESTAMPTZ)
+                 AND status IN ('processed', 'failed')
+             )
+         )",
+        &[Value::Text(cutoff_timestamp.to_string())],
+    )?;
+
+    db.execute_with_params(
+        "DELETE FROM network_path
+         WHERE message_id IN (
+             SELECT id FROM network_messages
+             WHERE packet_id IN (
+                 SELECT id FROM network_packets
+                 WHERE created_at < CAST($1 AS TIMESTAMPTZ)
+                 AND status IN ('processed', 'failed')
+             )
+         )",
+        &[Value::Text(cutoff_timestamp.to_string())],
+    )?;
+
+    // Delete the packets themselves
+    db.execute_with_params(
+        "DELETE FROM network_packets
+         WHERE created_at < CAST($1 AS TIMESTAMPTZ)
+         AND status IN ('processed', 'failed')",
+        &[Value::Text(cutoff_timestamp.to_string())],
+    )?;
+
+    let after = count_network_packets_before(db, cutoff_timestamp)?;
+    Ok(before.saturating_sub(after))
+}
+
+/// List network packets eligible for retention cleanup.
+///
+/// Returns packets with terminal status (processed, failed) created before
+/// the cutoff timestamp, ordered by creation date (oldest first).
+pub fn list_network_packets_for_retention(
+    db: &Db,
+    cutoff_timestamp: &str,
+    limit: i64,
+) -> decentdb::Result<Vec<NetworkPacketRecord>> {
+    let result = db.execute_with_params(
+        "SELECT UUID_TO_STRING(id), UUID_TO_STRING(network_id), direction, UUID_TO_STRING(link_id),
+                filename, sha256, size_bytes, status, error_message,
+                CAST(received_at AS TEXT), CAST(processed_at AS TEXT), CAST(created_at AS TEXT)
+         FROM network_packets
+         WHERE created_at < CAST($1 AS TIMESTAMPTZ)
+         AND status IN ('processed', 'failed')
+         ORDER BY created_at ASC
+         LIMIT $2",
+        &[
+            Value::Text(cutoff_timestamp.to_string()),
+            Value::Int64(limit),
+        ],
+    )?;
+    Ok(result.rows().iter().map(network_packet_from_row).collect())
 }
 
 #[cfg(test)]
@@ -1592,5 +1838,49 @@ mod tests {
 
         assert_eq!(seen_by.len(), 1);
         assert_eq!(messages.len(), 1);
+    }
+
+    #[test]
+    fn stress_test_50000_entry_nodelist() {
+        let db = test_db();
+        let profile = profile();
+        insert_network_profile(&db, &profile).expect("insert profile");
+
+        // Generate 50,000 nodelist entries
+        let entries: Vec<NetworkNodelistRecord> = (0..50000)
+            .map(|i| {
+                let zone = 1;
+                let net = (i / 1000) as i64 + 1;
+                let node = (i % 1000) as i64 + 1;
+                NetworkNodelistRecord {
+                    id: format!("00000000-0000-4000-8000-{:012}", i),
+                    network_id: profile.id.clone(),
+                    zone,
+                    net,
+                    node,
+                    point: 0,
+                    parsed_name: Some(format!("Node_{}", i)),
+                    raw_entry: format!("{},{},{},Node_{}", zone, net, node, i),
+                    updated_at: "2026-06-04T00:00:00.000000Z".to_string(),
+                }
+            })
+            .collect();
+
+        let start = std::time::Instant::now();
+        replace_network_nodelist_entries(&db, &profile.id, &entries).expect("replace nodelist");
+        let insert_elapsed = start.elapsed();
+
+        let start = std::time::Instant::now();
+        let found = find_network_nodelist_entry(&db, &profile.id, 1, 25, 500, 0).expect("find");
+        let query_elapsed = start.elapsed();
+
+        assert!(found.is_some());
+        let nodes = list_network_nodelist_entries(&db).expect("list nodelist");
+        assert_eq!(nodes.len(), 50000);
+
+        println!(
+            "50k nodelist insert: {:?}, query: {:?}",
+            insert_elapsed, query_elapsed
+        );
     }
 }

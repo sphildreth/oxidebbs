@@ -10,7 +10,9 @@ use oxidebbs_db::{
 use oxidebbs_network::FtnAddress;
 use sha2::{Digest, Sha256};
 
-use crate::{FtnError, FtnPacket, MessageAttribute, PacketHeader, PacketMessage, PacketWriter};
+use crate::{
+    BundleCreator, FtnError, FtnPacket, MessageAttribute, PacketHeader, PacketMessage, PacketWriter,
+};
 
 /// Filesystem paths used by the FTN outbound scanner.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,6 +36,10 @@ impl ScannerPaths {
 
     fn ready_dir(&self, link_key: &str) -> PathBuf {
         self.outbound_root.join(link_key).join("ready")
+    }
+
+    fn bundled_dir(&self, link_key: &str) -> PathBuf {
+        self.outbound_root.join(link_key).join("bundled")
     }
 }
 
@@ -125,6 +131,68 @@ impl<'db> Scanner<'db> {
         }
 
         Ok(result)
+    }
+
+    /// Bundle ready packets for a link into a ZIP archive with FTN-standard naming.
+    ///
+    /// This method finds all `.pkt` files in the ready directory for the specified
+    /// link, creates a ZIP bundle with a name based on the link's net/node address,
+    /// and moves the bundled packets to a `bundled` directory.
+    ///
+    /// Returns the path to the created bundle, or `None` if no packets were found.
+    ///
+    /// # Errors
+    ///
+    /// Returns I/O or bundle creation errors if the operation fails.
+    pub fn bundle_ready_packets(
+        &self,
+        link: &NetworkLinkRecord,
+    ) -> Result<Option<PathBuf>, FtnError> {
+        let ready_dir = self.paths.ready_dir(&link.key);
+        if !ready_dir.exists() {
+            return Ok(None);
+        }
+
+        let packet_paths: Vec<PathBuf> = fs::read_dir(&ready_dir)?
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| {
+                entry
+                    .path()
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .map(|ext| ext == "pkt")
+                    .unwrap_or(false)
+            })
+            .map(|entry| entry.path())
+            .collect();
+
+        if packet_paths.is_empty() {
+            return Ok(None);
+        }
+
+        let bundled_dir = self.paths.bundled_dir(&link.key);
+        fs::create_dir_all(&bundled_dir)?;
+
+        let bundle_name = format!(
+            "{:04x}{:04x}.zip",
+            link.address
+                .parse::<FtnAddress>()
+                .map(|addr| addr.net)
+                .unwrap_or(0),
+            link.address
+                .parse::<FtnAddress>()
+                .map(|addr| addr.node)
+                .unwrap_or(0)
+        );
+        let bundle_path = bundled_dir.join(&bundle_name);
+
+        BundleCreator::create_zip_bundle(&packet_paths, &bundle_path)?;
+
+        for packet_path in &packet_paths {
+            fs::remove_file(packet_path)?;
+        }
+
+        Ok(Some(bundle_path))
     }
 
     fn write_packet_for_link(

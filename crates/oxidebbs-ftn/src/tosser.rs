@@ -12,9 +12,10 @@ use oxidebbs_db::{
 use oxidebbs_network::FtnAddress;
 use sha2::{Digest, Sha256};
 
+use crate::route::{FtnRouteLink, NetmailRouter};
 use crate::{
     BundleExtractor, EchomailKludge, FtnError, PacketHeader, PacketMessage, PacketReader,
-    duplicate_key, parse_message_body,
+    RoutingDecision, duplicate_key, parse_message_body,
 };
 
 /// Filesystem paths used by the FTN tosser.
@@ -80,13 +81,46 @@ pub struct Tosser<'db> {
     db: &'db Db,
     profile: NetworkProfileRecord,
     paths: TosserPaths,
+    router: NetmailRouter,
 }
 
 impl<'db> Tosser<'db> {
     /// Create a tosser for an already-open database and network profile.
     #[must_use]
     pub fn new(db: &'db Db, profile: NetworkProfileRecord, paths: TosserPaths) -> Self {
-        Self { db, profile, paths }
+        let router = Self::build_router(db, &profile);
+        Self {
+            db,
+            profile,
+            paths,
+            router,
+        }
+    }
+
+    fn build_router(db: &Db, profile: &NetworkProfileRecord) -> NetmailRouter {
+        let local_address = FtnAddress {
+            zone: profile.local_zone as u16,
+            net: profile.local_net as u16,
+            node: profile.local_node as u16,
+            point: if profile.local_point == 0 {
+                None
+            } else {
+                Some(profile.local_point as u16)
+            },
+        };
+        let local_addresses = vec![local_address];
+
+        let links = list_network_links(db)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|link| link.network_id == profile.id)
+            .filter_map(|link| {
+                let address = link.address.parse::<FtnAddress>().ok()?;
+                Some(FtnRouteLink::direct(link.key, address))
+            })
+            .collect();
+
+        NetmailRouter::new(local_addresses, links)
     }
 
     /// Scan the inbound drop directory and process supported packet/bundle files.
@@ -249,17 +283,51 @@ impl<'db> Tosser<'db> {
         header: &PacketHeader,
         message: &PacketMessage,
     ) -> Result<TossResult, FtnError> {
-        let origin = origin_address(header);
         let destination = destination_address(header);
-        let local_address = profile_address(&self.profile)?;
-        if destination != local_address {
-            return self.record_quarantined_network_message(
+        let attributes = message.attributes;
+        let decision = self.router.route(&destination, attributes);
+
+        match decision {
+            RoutingDecision::LocalDelivery { .. } => {
+                self.deliver_local_netmail(packet_id, header, message)
+            }
+            RoutingDecision::Direct { link }
+            | RoutingDecision::Crash { link }
+            | RoutingDecision::Hold { link } => {
+                self.queue_forwarded_netmail(packet_id, header, message, &link, None)
+            }
+            RoutingDecision::RoutedViaHub {
+                hub,
+                final_destination,
+            } => self.queue_forwarded_netmail(
                 packet_id,
                 header,
                 message,
-                "non-local netmail forwarding is not wired to the outbound route queue yet",
-            );
+                &hub,
+                Some(final_destination),
+            ),
+            RoutingDecision::UnknownDestination { .. } => self.record_quarantined_network_message(
+                packet_id,
+                header,
+                message,
+                "no configured route for netmail destination",
+            ),
         }
+    }
+
+    fn deliver_local_netmail(
+        &self,
+        packet_id: &str,
+        header: &PacketHeader,
+        message: &PacketMessage,
+    ) -> Result<TossResult, FtnError> {
+        let to_user_lower = message.to_user.to_ascii_lowercase();
+        if to_user_lower == "areafix" || to_user_lower == "areamgr" {
+            return self.process_areafix_netmail(packet_id, header, message);
+        }
+
+        let origin = origin_address(header);
+        let destination = destination_address(header);
 
         let Some(area) = list_message_areas(self.db)?.into_iter().find(|area| {
             area.enabled
@@ -382,6 +450,219 @@ impl<'db> Tosser<'db> {
                 duplicate_hash: Some(duplicate.message_id),
                 packet_id: Some(packet_id.to_string()),
                 status: "imported".to_string(),
+            },
+        )?;
+
+        Ok(TossResult {
+            messages_imported: 1,
+            ..TossResult::default()
+        })
+    }
+
+    fn process_areafix_netmail(
+        &self,
+        packet_id: &str,
+        header: &PacketHeader,
+        message: &PacketMessage,
+    ) -> Result<TossResult, FtnError> {
+        use crate::areafix::AreaFixProcessor;
+
+        let origin = origin_address(header);
+        let destination = destination_address(header);
+
+        let Some(link) = list_network_links(self.db)?.into_iter().find(|link| {
+            link.network_id == self.profile.id
+                && link.address.parse::<FtnAddress>().ok() == Some(origin.clone())
+        }) else {
+            return self.record_quarantined_network_message(
+                packet_id,
+                header,
+                message,
+                "AreaFix request from unknown or unconfigured link",
+            );
+        };
+
+        let body_text = String::from_utf8_lossy(&message.body);
+        let mut lines = body_text.lines();
+        let first_line = lines.next().unwrap_or("");
+
+        let (password, command_body) = if !message.subject.is_empty() {
+            (message.subject.clone(), body_text.to_string())
+        } else if let Some(stripped) = first_line.strip_prefix("- ") {
+            (
+                stripped.trim().to_string(),
+                lines.collect::<Vec<_>>().join("\n"),
+            )
+        } else {
+            (String::new(), body_text.to_string())
+        };
+
+        let processor = AreaFixProcessor::new(self.db, self.profile.clone(), link.clone());
+        let result = processor.process_request(&password, &command_body);
+
+        let created_at = current_timestamp(self.db)?;
+        let network_message_id = generated_uuid(self.db)?;
+
+        match result {
+            Ok(areafix_result) => {
+                let reply_body = areafix_result.reply.into_bytes();
+                let reply_packet_id = generated_uuid(self.db)?;
+                let reply_filename = format!("{}.pkt", generated_uuid(self.db)?.replace('-', ""));
+                let reply_sha256_bytes = Sha256::digest(&reply_body);
+                let reply_sha256: String = reply_sha256_bytes
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect();
+
+                insert_network_packet(
+                    self.db,
+                    &NetworkPacketRecord {
+                        id: reply_packet_id.clone(),
+                        network_id: self.profile.id.clone(),
+                        direction: "outbound".to_string(),
+                        link_id: Some(link.id.clone()),
+                        filename: reply_filename,
+                        sha256: reply_sha256,
+                        size_bytes: reply_body.len() as i64,
+                        status: "pending".to_string(),
+                        error_message: None,
+                        received_at: None,
+                        processed_at: None,
+                        created_at: created_at.clone(),
+                    },
+                )?;
+
+                insert_network_message(
+                    self.db,
+                    &NetworkMessageRecord {
+                        id: network_message_id,
+                        network_id: self.profile.id.clone(),
+                        local_message_id: None,
+                        message_type: "netmail".to_string(),
+                        area_tag: None,
+                        origin_address: destination.to_string(),
+                        destination_address: Some(origin.to_string()),
+                        from_name: "AreaFix".to_string(),
+                        to_name: Some(message.from_user.clone()),
+                        subject: "AreaFix Response".to_string(),
+                        raw_text: reply_body.clone(),
+                        display_body: String::from_utf8_lossy(&reply_body).to_string(),
+                        msgid: None,
+                        replyid: None,
+                        created_at: created_at.clone(),
+                        imported_at: Some(created_at.clone()),
+                        exported_at: None,
+                        duplicate_hash: None,
+                        packet_id: Some(reply_packet_id),
+                        status: "pending".to_string(),
+                    },
+                )?;
+
+                for rescan_area_tag in areafix_result.rescan_requests {
+                    self.queue_rescan_request(&link, &rescan_area_tag, &created_at)?;
+                }
+
+                Ok(TossResult {
+                    messages_imported: 1,
+                    ..TossResult::default()
+                })
+            }
+            Err(error) => {
+                let error_body = format!("AreaFix error: {error}").into_bytes();
+                insert_network_message(
+                    self.db,
+                    &NetworkMessageRecord {
+                        id: network_message_id,
+                        network_id: self.profile.id.clone(),
+                        local_message_id: None,
+                        message_type: "netmail".to_string(),
+                        area_tag: None,
+                        origin_address: destination.to_string(),
+                        destination_address: Some(origin.to_string()),
+                        from_name: "AreaFix".to_string(),
+                        to_name: Some(message.from_user.clone()),
+                        subject: "AreaFix Error".to_string(),
+                        raw_text: error_body.clone(),
+                        display_body: String::from_utf8_lossy(&error_body).to_string(),
+                        msgid: None,
+                        replyid: None,
+                        created_at: created_at.clone(),
+                        imported_at: Some(created_at),
+                        exported_at: None,
+                        duplicate_hash: None,
+                        packet_id: Some(packet_id.to_string()),
+                        status: "quarantined".to_string(),
+                    },
+                )?;
+
+                Ok(TossResult {
+                    messages_quarantined: 1,
+                    errors: vec![error.to_string()],
+                    ..TossResult::default()
+                })
+            }
+        }
+    }
+
+    fn queue_forwarded_netmail(
+        &self,
+        _packet_id: &str,
+        header: &PacketHeader,
+        message: &PacketMessage,
+        link: &FtnRouteLink,
+        final_destination: Option<FtnAddress>,
+    ) -> Result<TossResult, FtnError> {
+        let origin = origin_address(header);
+        let destination = final_destination.unwrap_or_else(|| destination_address(header));
+        let created_at = current_timestamp(self.db)?;
+
+        let outbound_packet_id = generated_uuid(self.db)?;
+        let filename = format!("{}.pkt", generated_uuid(self.db)?.replace('-', ""));
+        let sha256_bytes = Sha256::digest(&message.body);
+        let sha256: String = sha256_bytes.iter().map(|b| format!("{b:02x}")).collect();
+
+        insert_network_packet(
+            self.db,
+            &NetworkPacketRecord {
+                id: outbound_packet_id.clone(),
+                network_id: self.profile.id.clone(),
+                direction: "outbound".to_string(),
+                link_id: Some(link.key.clone()),
+                filename,
+                sha256,
+                size_bytes: message.body.len() as i64,
+                status: "pending".to_string(),
+                error_message: None,
+                received_at: None,
+                processed_at: None,
+                created_at: created_at.clone(),
+            },
+        )?;
+
+        let network_message_id = generated_uuid(self.db)?;
+        insert_network_message(
+            self.db,
+            &NetworkMessageRecord {
+                id: network_message_id,
+                network_id: self.profile.id.clone(),
+                local_message_id: None,
+                message_type: "netmail".to_string(),
+                area_tag: None,
+                origin_address: origin.to_string(),
+                destination_address: Some(destination.to_string()),
+                from_name: nonblank(&message.from_user, "Unknown"),
+                to_name: Some(nonblank(&message.to_user, "Sysop")),
+                subject: nonblank(&message.subject, "(no subject)"),
+                raw_text: message.body.clone(),
+                display_body: String::from_utf8_lossy(&message.body).to_string(),
+                msgid: None,
+                replyid: None,
+                created_at: created_at.clone(),
+                imported_at: Some(created_at),
+                exported_at: None,
+                duplicate_hash: None,
+                packet_id: Some(outbound_packet_id),
+                status: "pending".to_string(),
             },
         )?;
 
@@ -717,6 +998,26 @@ impl<'db> Tosser<'db> {
         fs::create_dir_all(&self.paths.quarantine)?;
         Ok(())
     }
+
+    fn queue_rescan_request(
+        &self,
+        link: &NetworkLinkRecord,
+        area_tag: &str,
+        created_at: &str,
+    ) -> Result<(), FtnError> {
+        let rescan_id = generated_uuid(self.db)?;
+        let rescan_record = oxidebbs_db::NetworkRescanQueueRecord {
+            id: rescan_id,
+            network_id: self.profile.id.clone(),
+            link_id: link.id.clone(),
+            area_tag: area_tag.to_string(),
+            status: "pending".to_string(),
+            requested_at: created_at.to_string(),
+            processed_at: None,
+        };
+        oxidebbs_db::insert_network_rescan_queue(self.db, &rescan_record)?;
+        Ok(())
+    }
 }
 
 fn origin_address(header: &PacketHeader) -> FtnAddress {
@@ -983,6 +1284,15 @@ mod tests {
     }
 
     fn packet_path(root: &Path, name: &str, password: &str, body: &[u8]) -> PathBuf {
+        packet_path_with_messages(root, name, password, vec![body.to_vec()])
+    }
+
+    fn packet_path_with_messages(
+        root: &Path,
+        name: &str,
+        password: &str,
+        bodies: Vec<Vec<u8>>,
+    ) -> PathBuf {
         let path = root
             .join("network")
             .join("fidonet")
@@ -990,16 +1300,21 @@ mod tests {
             .join("drop")
             .join(name);
         fs::create_dir_all(path.parent().expect("packet parent")).expect("create inbound");
-        let packet = FtnPacket {
-            header: header(password),
-            messages: vec![PacketMessage {
+        let messages: Vec<PacketMessage> = bodies
+            .into_iter()
+            .enumerate()
+            .map(|(i, body)| PacketMessage {
                 to_user: "All".to_string(),
-                from_user: "Remote Sysop".to_string(),
-                subject: "Hello".to_string(),
-                body: body.to_vec(),
+                from_user: format!("User{}", i),
+                subject: format!("Subject {}", i),
+                body,
                 area_tag: "OXIDE.GENERAL".to_string(),
                 attributes: MessageAttribute::NONE,
-            }],
+            })
+            .collect();
+        let packet = FtnPacket {
+            header: header(password),
+            messages,
         };
         let mut bytes = Vec::new();
         PacketWriter::write(&mut bytes, &packet).expect("write packet");
@@ -1112,6 +1427,79 @@ mod tests {
         assert_eq!(second.messages_imported, 0);
         assert_eq!(second.messages_duplicate, 1);
         assert_eq!(list_messages(db.db()).expect("list messages").len(), 1);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn stress_test_1000_message_packet() {
+        let db = test_db();
+        let root = temp_root("stress-1000-msg");
+
+        // Create packet with 1000 messages
+        let bodies: Vec<Vec<u8>> = (0..1000)
+            .map(|i| {
+                format!(
+                    "AREA:OXIDE.GENERAL\r\x01MSGID: 1:105/1 msg{}\rBody {}\rSEEN-BY: 105/1\rPATH: 105/1\r",
+                    i, i
+                )
+                .into_bytes()
+            })
+            .collect();
+
+        let _packet = packet_path_with_messages(&root, "large.pkt", "SECRET", bodies);
+        let tosser = Tosser::new(
+            db.db(),
+            profile(),
+            TosserPaths::under_runtime(&root, "fidonet"),
+        );
+
+        let start = std::time::Instant::now();
+        let result = tosser.toss().expect("toss");
+        let elapsed = start.elapsed();
+
+        assert_eq!(result.messages_imported, 1000);
+        assert_eq!(result.packets_processed, 1);
+        assert_eq!(result.packets_quarantined, 0);
+
+        let messages = list_messages(db.db()).expect("list messages");
+        assert_eq!(messages.len(), 1000);
+
+        println!("1000-message packet toss: {:?}", elapsed);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn stress_test_100_packets_one_toss() {
+        let db = test_db();
+        let root = temp_root("stress-100-pkt");
+
+        // Create 100 packet files
+        for i in 0..100 {
+            let body = format!(
+                "AREA:OXIDE.GENERAL\r\x01MSGID: 1:105/1 unique{}\rBody {}\rSEEN-BY: 105/1\rPATH: 105/1\r",
+                i, i
+            );
+            let _packet = packet_path(&root, &format!("{:08}.pkt", i), "SECRET", body.as_bytes());
+        }
+
+        let tosser = Tosser::new(
+            db.db(),
+            profile(),
+            TosserPaths::under_runtime(&root, "fidonet"),
+        );
+
+        let start = std::time::Instant::now();
+        let result = tosser.toss().expect("toss");
+        let elapsed = start.elapsed();
+
+        assert_eq!(result.packets_processed, 100);
+        assert_eq!(result.messages_imported, 100);
+        assert_eq!(result.packets_quarantined, 0);
+
+        let messages = list_messages(db.db()).expect("list messages");
+        assert_eq!(messages.len(), 100);
+
+        println!("100 packets toss: {:?}", elapsed);
         let _ = fs::remove_dir_all(root);
     }
 }

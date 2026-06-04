@@ -1,6 +1,8 @@
 //! File transfer protocols for BBS callers (XMODEM-CRC and ZMODEM).
 
+pub mod adapter;
 pub mod crc;
+pub mod path;
 pub mod xmodem;
 pub mod zmodem;
 
@@ -56,10 +58,10 @@ pub trait ByteTransport {
         timeout_secs: u64,
     ) -> Pin<Box<dyn Future<Output = Result<TransferRead, TransferError>> + Send + '_>>;
 
-    fn write_all(
-        &mut self,
-        buf: &[u8],
-    ) -> Pin<Box<dyn Future<Output = Result<(), TransferError>> + Send + '_>>;
+    fn write_all<'a>(
+        &'a mut self,
+        buf: &'a [u8],
+    ) -> Pin<Box<dyn Future<Output = Result<(), TransferError>> + Send + 'a>>;
 
     fn flush(&mut self) -> Pin<Box<dyn Future<Output = Result<(), TransferError>> + Send + '_>>;
 }
@@ -76,3 +78,6 @@ pub enum TransferEvent {
     Completed,
     Error(TransferError),
 }
+
+pub use adapter::TransportAdapter;
+pub use path::{safe_upload_path, sanitize_filename, validate_path_within_base};

@@ -8,6 +8,11 @@ use crate::error::FtnError;
 pub struct FtnNodelistEntry {
     pub address: FtnAddress,
     pub name: Option<String>,
+    pub location: Option<String>,
+    pub sysop_name: Option<String>,
+    pub phone: Option<String>,
+    pub speed: Option<String>,
+    pub flags: Vec<String>,
     pub raw_entry: String,
 }
 
@@ -46,6 +51,15 @@ pub enum NodelistDiffError {
         "nodediff header does not match base nodelist header: expected {expected:?}, got {actual:?}"
     )]
     HeaderMismatch { expected: String, actual: String },
+
+    #[error("nodediff header CRC {expected} does not match base nodelist CRC {actual}")]
+    CrcMismatch { expected: u16, actual: u16 },
+
+    #[error("nodediff header is missing CRC value")]
+    MissingCrc,
+
+    #[error("nodediff header has invalid CRC format: {value:?}")]
+    InvalidCrcFormat { value: String },
 
     #[error("nodediff command on line {line_number} is empty")]
     EmptyCommand { line_number: usize },
@@ -101,6 +115,20 @@ pub enum NodelistDiffError {
 /// counts, add-data underflow, copy/delete underflow, or a diff that leaves base
 /// lines unapplied.
 pub fn apply_nodelist_diff(base: &str, diff: &str) -> Result<String, NodelistDiffError> {
+    apply_nodelist_diff_with_options(base, diff, false)
+}
+
+/// Apply a conservative FTS-style `NODEDIFF.xxx` to a full nodelist text with options.
+///
+/// When `validate_crc` is true, the CRC value in the diff header (if present) will
+/// be validated against the calculated CRC of the base content.
+///
+/// See [`apply_nodelist_diff`] for full documentation.
+pub fn apply_nodelist_diff_with_options(
+    base: &str,
+    diff: &str,
+    validate_crc: bool,
+) -> Result<String, NodelistDiffError> {
     let base_lines = normalized_lines(base);
     if base_lines.is_empty() {
         return Err(NodelistDiffError::EmptyBase);
@@ -116,6 +144,17 @@ pub fn apply_nodelist_diff(base: &str, diff: &str) -> Result<String, NodelistDif
             expected: base_lines[0].clone(),
             actual: diff_lines[0].clone(),
         });
+    }
+
+    // Validate CRC if requested and present in header
+    if validate_crc && let Some(expected_crc) = parse_header_crc(&diff_lines[0])? {
+        let actual_crc = calculate_nodelist_crc(&base_lines);
+        if expected_crc != actual_crc {
+            return Err(NodelistDiffError::CrcMismatch {
+                expected: expected_crc,
+                actual: actual_crc,
+            });
+        }
     }
 
     let mut output = Vec::new();
@@ -170,6 +209,61 @@ pub fn apply_nodelist_diff(base: &str, diff: &str) -> Result<String, NodelistDif
     }
 
     Ok(output.join("\n"))
+}
+
+/// Parse the CRC value from a nodelist header line.
+///
+/// The header format is: `;A <date> -- Day number <day> : <crc>`
+/// Returns `Ok(None)` if no CRC is present, `Ok(Some(crc))` if valid,
+/// or an error if the CRC format is invalid.
+fn parse_header_crc(header: &str) -> Result<Option<u16>, NodelistDiffError> {
+    let Some(crc_part) = header.rsplit(':').next() else {
+        return Ok(None);
+    };
+
+    let crc_str = crc_part.trim();
+    if crc_str.is_empty() {
+        return Ok(None);
+    }
+
+    crc_str
+        .parse::<u16>()
+        .map(Some)
+        .map_err(|_| NodelistDiffError::InvalidCrcFormat {
+            value: crc_str.to_string(),
+        })
+}
+
+/// Calculate the CRC-16 checksum for nodelist content.
+///
+/// Uses the same CRC-16/ARC algorithm as traditional FTN nodelists.
+fn calculate_nodelist_crc(lines: &[String]) -> u16 {
+    let mut crc: u16 = 0;
+
+    for line in lines.iter().skip(1) {
+        // Skip header line
+        for byte in line.bytes() {
+            crc ^= u16::from(byte);
+            for _ in 0..8 {
+                if crc & 1 != 0 {
+                    crc = (crc >> 1) ^ 0xA001;
+                } else {
+                    crc >>= 1;
+                }
+            }
+        }
+        // Include line terminator
+        crc ^= 0x0A; // newline
+        for _ in 0..8 {
+            if crc & 1 != 0 {
+                crc = (crc >> 1) ^ 0xA001;
+            } else {
+                crc >>= 1;
+            }
+        }
+    }
+
+    crc
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -307,6 +401,11 @@ impl NodelistParser {
                         point: Some(point),
                     },
                     name: normalized_name(&fields, 2),
+                    location: normalized_name(&fields, 3),
+                    sysop_name: normalized_name(&fields, 4),
+                    phone: optional_field(&fields, 5),
+                    speed: optional_field(&fields, 6),
+                    flags: parse_flags(&fields, 7),
                     raw_entry: raw_entry.to_string(),
                 }))
             }
@@ -356,6 +455,11 @@ impl NodelistParser {
                 point: None,
             },
             name: normalized_name(fields, name_index),
+            location: normalized_name(fields, name_index + 1),
+            sysop_name: normalized_name(fields, name_index + 2),
+            phone: optional_field(fields, name_index + 3),
+            speed: optional_field(fields, name_index + 4),
+            flags: parse_flags(fields, name_index + 5),
             raw_entry: raw_entry.to_string(),
         }))
     }
@@ -390,6 +494,22 @@ fn normalized_name(fields: &[&str], field_index: usize) -> Option<String> {
         let trimmed = name.trim();
         (!trimmed.is_empty()).then(|| trimmed.to_string())
     })
+}
+
+fn optional_field(fields: &[&str], field_index: usize) -> Option<String> {
+    fields.get(field_index).and_then(|raw| {
+        let trimmed = raw.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    })
+}
+
+fn parse_flags(fields: &[&str], start_index: usize) -> Vec<String> {
+    fields
+        .iter()
+        .skip(start_index)
+        .filter(|field| !field.trim().is_empty())
+        .map(|field| field.trim().to_string())
+        .collect()
 }
 
 #[cfg(test)]

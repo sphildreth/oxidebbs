@@ -63,6 +63,22 @@ pub enum BundleError {
     #[error("ZIP archive could not be read: {path}: {message}")]
     ZipArchive { path: PathBuf, message: String },
 
+    #[error("ARJ archive could not be read: {path}: {message}")]
+    ArjArchive { path: PathBuf, message: String },
+
+    #[error("unsupported ARJ entry {entry:?} in {path}: {reason}")]
+    UnsupportedArjEntry {
+        path: PathBuf,
+        entry: String,
+        reason: &'static str,
+    },
+
+    #[error("duplicate ARJ packet entry {entry:?} in {path}")]
+    DuplicateArjPacketEntry { path: PathBuf, entry: String },
+
+    #[error("ARJ archive contains no packet entries: {path}")]
+    NoArjPacketEntries { path: PathBuf },
+
     #[error("ZIP archive contains no packet entries: {path}")]
     NoPacketEntries { path: PathBuf },
 
@@ -166,10 +182,9 @@ impl BundleExtractor {
             BundleFormat::ZipArcmail => {
                 extract_zip_packets(&classification.path, output_dir.as_ref())
             }
-            BundleFormat::ArjArcmail => Err(BundleError::UnsupportedExtraction {
-                path: classification.path,
-                format: classification.format,
-            }),
+            BundleFormat::ArjArcmail => {
+                extract_arj_packets(&classification.path, output_dir.as_ref())
+            }
         }
     }
 }
@@ -473,6 +488,175 @@ fn zip_error(path: &Path, error: zip::result::ZipError) -> BundleError {
     }
 }
 
+fn extract_arj_packets(input_path: &Path, output_dir: &Path) -> Result<Vec<PathBuf>, BundleError> {
+    let arj_entries = collect_arj_packet_entries(input_path)?;
+
+    fs::create_dir_all(output_dir)
+        .map_err(|error| bundle_io_error(output_dir, "create extraction directory", error))?;
+
+    let mut archive = unarc_rs::unified::ArchiveFormat::open_path(input_path)
+        .map_err(|error| arj_error(input_path, error))?;
+
+    let mut extracted_paths = Vec::with_capacity(arj_entries.len());
+    for entry in &arj_entries {
+        let output_path = output_dir.join(&entry.name);
+        let extract_result =
+            extract_arj_packet_entry(input_path, &mut archive, entry, &output_path);
+
+        if let Err(error) = extract_result {
+            for extracted_path in &extracted_paths {
+                let _ = fs::remove_file(extracted_path);
+            }
+            return Err(error);
+        }
+
+        extracted_paths.push(output_path);
+    }
+
+    Ok(extracted_paths)
+}
+
+fn collect_arj_packet_entries(input_path: &Path) -> Result<Vec<ArjPacketEntry>, BundleError> {
+    let mut archive = unarc_rs::unified::ArchiveFormat::open_path(input_path)
+        .map_err(|error| arj_error(input_path, error))?;
+
+    let mut packet_entries = Vec::new();
+    let mut output_names = HashSet::new();
+
+    let entries = archive
+        .entries()
+        .map_err(|error| arj_error(input_path, error))?;
+    for entry in &entries {
+        let name = entry.name().to_string();
+        validate_arj_packet_entry(input_path, &name)?;
+
+        let output_key = name.to_ascii_lowercase();
+        if !output_names.insert(output_key) {
+            return Err(BundleError::DuplicateArjPacketEntry {
+                path: input_path.to_path_buf(),
+                entry: name,
+            });
+        }
+
+        packet_entries.push(ArjPacketEntry { name });
+    }
+
+    if packet_entries.is_empty() {
+        return Err(BundleError::NoArjPacketEntries {
+            path: input_path.to_path_buf(),
+        });
+    }
+
+    packet_entries.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(packet_entries)
+}
+
+fn validate_arj_packet_entry(input_path: &Path, entry_name: &str) -> Result<(), BundleError> {
+    if entry_name.is_empty() {
+        return Err(unsupported_arj_entry(
+            input_path,
+            entry_name,
+            "entry name is empty",
+        ));
+    }
+
+    if entry_name.contains('\0') {
+        return Err(unsupported_arj_entry(
+            input_path,
+            entry_name,
+            "entry name contains a null byte",
+        ));
+    }
+
+    if entry_name.contains('/') || entry_name.contains('\\') {
+        return Err(unsupported_arj_entry(
+            input_path,
+            entry_name,
+            "only top-level packet entries are supported",
+        ));
+    }
+
+    let extension = Path::new(entry_name)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if extension != "pkt" {
+        return Err(unsupported_arj_entry(
+            input_path,
+            entry_name,
+            "only .pkt entries are supported",
+        ));
+    }
+
+    Ok(())
+}
+
+fn extract_arj_packet_entry(
+    input_path: &Path,
+    archive: &mut unarc_rs::unified::UnifiedArchive<std::io::BufReader<File>>,
+    entry: &ArjPacketEntry,
+    output_path: &Path,
+) -> Result<(), BundleError> {
+    let entries = archive
+        .entries()
+        .map_err(|error| arj_error(input_path, error))?;
+    let archive_entry = entries
+        .iter()
+        .find(|e| e.name() == entry.name)
+        .ok_or_else(|| BundleError::UnsupportedArjEntry {
+            path: input_path.to_path_buf(),
+            entry: entry.name.clone(),
+            reason: "entry not found in archive",
+        })?;
+
+    let data = archive
+        .read(archive_entry)
+        .map_err(|error| arj_error(input_path, error))?;
+
+    let mut output = File::options()
+        .write(true)
+        .create_new(true)
+        .open(output_path)
+        .map_err(|error| {
+            if error.kind() == io::ErrorKind::AlreadyExists {
+                BundleError::ExtractedPacketExists {
+                    path: input_path.to_path_buf(),
+                    output_path: output_path.to_path_buf(),
+                }
+            } else {
+                bundle_io_error(output_path, "create extracted packet", error)
+            }
+        })?;
+
+    use std::io::Write;
+    output.write_all(&data).map_err(|error| {
+        let _ = fs::remove_file(output_path);
+        bundle_io_error(output_path, "write extracted packet", error)
+    })?;
+
+    Ok(())
+}
+
+fn unsupported_arj_entry(input_path: &Path, entry: &str, reason: &'static str) -> BundleError {
+    BundleError::UnsupportedArjEntry {
+        path: input_path.to_path_buf(),
+        entry: entry.to_string(),
+        reason,
+    }
+}
+
+fn arj_error(path: &Path, error: impl std::fmt::Display) -> BundleError {
+    BundleError::ArjArchive {
+        path: path.to_path_buf(),
+        message: error.to_string(),
+    }
+}
+
+struct ArjPacketEntry {
+    name: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -726,17 +910,16 @@ mod tests {
     }
 
     #[test]
-    fn extraction_boundary_rejects_arj_with_explicit_error() {
+    fn extraction_boundary_attempts_arj_and_reports_missing_file() {
         let error = BundleExtractor::extract_packets("inbound/00112233.arj", "temp")
-            .expect_err("arj extraction unsupported");
+            .expect_err("arj file does not exist");
 
-        assert_eq!(
-            error,
-            BundleError::UnsupportedExtraction {
-                path: PathBuf::from("inbound/00112233.arj"),
-                format: BundleFormat::ArjArcmail,
+        match error {
+            BundleError::ArjArchive { path, .. } => {
+                assert_eq!(path, PathBuf::from("inbound/00112233.arj"));
             }
-        );
+            other => panic!("expected ArjArchive error, got: {other:?}"),
+        }
     }
 
     #[test]

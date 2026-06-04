@@ -8,3 +8,4 @@ authors.workspace = true
 [dependencies]
 tokio.workspace = true
 thiserror.workspace = true
+native-tls = "0.2.18"

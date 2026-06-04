@@ -10,4 +10,13 @@ pub enum BinkpError {
 
     #[error("connection refused")]
     ConnectionRefused,
+
+    #[error("TLS error: {0}")]
+    Tls(String),
+
+    #[error("TLS required but not available")]
+    TlsRequired,
+
+    #[error("TLS handshake failed: {0}")]
+    TlsHandshake(String),
 }

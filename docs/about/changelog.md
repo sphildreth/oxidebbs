@@ -97,6 +97,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   terminal profile, 40-column plain fallback assets, C64 terminal-type
   detection, CR/LF and backspace/delete coverage, and terminal profile config
   contract.
+- ARJ arcmail extraction support in `oxidebbs-ftn` bundle processing, enabling
+  inbound ARJ bundle decompression alongside existing ZIP support.
+- Netmail forwarding in `oxidebbs-ftn` tosser using `NetmailRouter` for routing
+  decisions, queuing outbound packets for direct, crash, hold, and hub-routed
+  destinations.
+- Bundle creation integration in `oxidebbs-ftn` scanner with `bundle_ready_packets()`
+  method to create ZIP bundles with FTN-standard hex naming from ready packets.
+- Complete nodelist parser field extraction in `oxidebbs-ftn` including location,
+  sysop name, phone number, speed, and flags for all node and point entries.
+- Optional CRC validation for nodediff application via `apply_nodelist_diff_with_options()`
+  with configurable CRC checking against base nodelist content.
+- Inbound AreaFix netmail processing in `oxidebbs-ftn` tosser, automatically detecting
+  AreaFix requests addressed to "AreaFix" or "AreaMgr" and routing them through the
+  AreaFixProcessor for authentication and command execution.
+- AreaFix reply netmail generation with outbound packet creation, queuing response
+  messages for delivery to requesting links with proper packet tracking.
+- AreaFix rescan queueing with `network_rescan_queue` table and `insert_network_rescan_queue()`
+  function to track pending rescan requests for subscribed areas.
+- BinkP retry execution in `net poll` command using `BinkpRetryPolicy` with exponential backoff,
+  automatically retrying failed connection attempts up to the configured maximum.
+- Inbound BinkP listener loop in `oxidebbs-server` with TCP listener, accept loop, session
+  management via `LinkSessionRegistry`, and file reception to inbound spool directory. Configurable
+  via `[network.binkp_listener]` section with `enabled`, `bind`, and `max_connections` options.
+- TLS support for BinkP transport via `native-tls` with `BinkpTlsClientConfig` and
+  `BinkpTlsServerConfig` for client/server TLS configuration, `connect_tls()` and `accept_tls()`
+  functions for TLS handshake, and `BinkpStream` enum for unified plain/TLS stream handling.
+  Enforces TLS 1.2 minimum for security.
+- ByteTransport-Transport bridge in `oxidebbs-transfer` with `TransportAdapter` that wraps
+  telnet `Transport` implementations to provide the `ByteTransport` interface, enabling file
+  transfer protocols (XMODEM-CRC, ZMODEM) to work over any transport layer with timeout support.
+- Path sanitization utilities in `oxidebbs-transfer` with `sanitize_filename()`,
+  `validate_path_within_base()`, and `safe_upload_path()` functions to prevent directory traversal
+  attacks and ensure secure file upload operations.
+- Packet retention policy in `net packets cleanup` command with configurable archive and delete
+  thresholds, dry-run preview mode, and automatic cleanup of processed/failed packets older than
+  the specified retention period. Configurable via `[network.retention]` section with
+  `archive_days` and `delete_days` options.
+- FTN stress tests validating performance under load: 1000-message packet processing (39.6s),
+  100-packet batch toss (2.0s), and 50,000-entry nodelist import (41.3s) with sub-second queries.
 
 ### Changed
 - Schema version bumped to 8; schema `5` added shared network and message-author

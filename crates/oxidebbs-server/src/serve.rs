@@ -223,6 +223,24 @@ where
         None
     };
 
+    let binkp_listener_handle = if config.network.enabled && config.network.binkp_listener.is_some()
+    {
+        match crate::binkp_listener::start_binkp_listener(
+            Arc::clone(&shared_config),
+            Arc::clone(&db),
+        )
+        .await
+        {
+            Ok(handle) => Some(handle),
+            Err(error) => {
+                warn!(%error, "BinkP listener failed to start");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     insert_required_startup_audit_event(
         db.as_ref(),
         "server_start",
@@ -352,6 +370,9 @@ where
         handle.abort();
     }
     if let Some(handle) = admin_web_handle {
+        handle.abort();
+    }
+    if let Some(handle) = binkp_listener_handle {
         handle.abort();
     }
 

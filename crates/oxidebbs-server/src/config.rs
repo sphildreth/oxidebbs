@@ -336,6 +336,32 @@ pub struct NetworkConfig {
     pub profiles: HashMap<String, NetworkProfileConfig>,
     #[serde(default)]
     pub links: HashMap<String, NetworkLinkConfig>,
+    #[serde(default)]
+    pub binkp_listener: Option<BinkpListenerConfig>,
+    #[serde(default)]
+    pub retention: Option<NetworkRetentionConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BinkpListenerConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_binkp_bind")]
+    pub bind: String,
+    #[serde(default = "default_binkp_max_connections")]
+    pub max_connections: u32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NetworkRetentionConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_retention_archive_days")]
+    pub archive_days: u32,
+    #[serde(default = "default_retention_delete_days")]
+    pub delete_days: u32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1130,6 +1156,18 @@ fn default_network_adapter() -> String {
 }
 fn default_binkp_port() -> u16 {
     24_554
+}
+fn default_binkp_bind() -> String {
+    "0.0.0.0:24554".into()
+}
+fn default_binkp_max_connections() -> u32 {
+    10
+}
+fn default_retention_archive_days() -> u32 {
+    30
+}
+fn default_retention_delete_days() -> u32 {
+    90
 }
 fn default_poll_schedule_minutes() -> u32 {
     60

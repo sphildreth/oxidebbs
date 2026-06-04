@@ -6,6 +6,7 @@ pub mod retry;
 pub mod security;
 pub mod server;
 pub mod session_guard;
+pub mod tls;
 pub mod transfer;
 
 pub use client::BinkpClient;
@@ -19,6 +20,7 @@ pub use retry::BinkpRetryPolicy;
 pub use security::{BinkpTransportSecurity, TransportSecurityPlan, transport_security_plan};
 pub use server::BinkpServer;
 pub use session_guard::{LinkSessionPermit, LinkSessionRegistry};
+pub use tls::{BinkpStream, BinkpTlsClientConfig, BinkpTlsServerConfig, accept_tls, connect_tls};
 pub use transfer::{
     BinkpInboundFile, BinkpOutboundFile, receive_batch, receive_next_file, send_batch,
     send_batch_with_acknowledgements, send_end_of_batch, send_file,

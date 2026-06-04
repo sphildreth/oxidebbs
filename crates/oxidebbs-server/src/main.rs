@@ -1,5 +1,6 @@
 mod admin_status;
 mod admin_web;
+mod binkp_listener;
 mod commands;
 mod config;
 mod control;

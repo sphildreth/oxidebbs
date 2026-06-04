@@ -12,3 +12,4 @@ oxidebbs-network = { path = "../oxidebbs-network" }
 oxidebbs-db = { path = "../oxidebbs-db" }
 sha2.workspace = true
 zip.workspace = true
+unarc-rs = "0.6.1"
