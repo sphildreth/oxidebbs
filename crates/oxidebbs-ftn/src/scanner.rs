@@ -133,6 +133,66 @@ impl<'db> Scanner<'db> {
         Ok(result)
     }
 
+    /// Rescan a specific area for a specific link.
+    ///
+    /// This method exports all messages from the specified area to the specified link,
+    /// ignoring the "already exported" check. This is used for rescan requests where
+    /// a link needs to receive all messages in an area again.
+    ///
+    /// # Errors
+    ///
+    /// Returns I/O, packet, or database errors that prevent the rescan from completing.
+    pub fn rescan_for_link(
+        &self,
+        link: &NetworkLinkRecord,
+        area_tag: &str,
+    ) -> Result<ScanResult, FtnError> {
+        let mut result = ScanResult::default();
+
+        // Find the network area matching the area_tag
+        let areas = list_network_areas(self.db)?;
+        let area = areas
+            .iter()
+            .find(|a| a.network_id == self.profile.id && a.area_tag == area_tag)
+            .ok_or_else(|| FtnError::Protocol(format!("area {} not found", area_tag)))?;
+
+        if !area.subscribed || area.read_only {
+            return Err(FtnError::Protocol(format!(
+                "area {} is not subscribed or is read-only",
+                area_tag
+            )));
+        }
+
+        // Find all local messages in this area
+        let messages = list_messages_in_area(self.db, &area.local_area_id)?;
+        let mut packet_messages = Vec::new();
+
+        for message in messages {
+            if !is_exportable_local_message(&message) {
+                result.messages_skipped += 1;
+                continue;
+            }
+            packet_messages.push(scanned_message(area, &message));
+        }
+
+        if packet_messages.is_empty() {
+            return Ok(result);
+        }
+
+        // Create packet for this specific link
+        result.links_scanned = 1;
+        let packet_path = self.write_packet_for_link(link, &packet_messages)?;
+        let packet_record = self.record_packet(link, &packet_path)?;
+
+        for scanned in packet_messages {
+            self.record_network_message(link, &packet_record.id, &scanned)?;
+            result.messages_scanned += 1;
+        }
+        result.packets_created = 1;
+
+        Ok(result)
+    }
+
     /// Bundle ready packets for a link into a ZIP archive with FTN-standard naming.
     ///
     /// This method finds all `.pkt` files in the ready directory for the specified
@@ -193,6 +253,88 @@ impl<'db> Scanner<'db> {
         }
 
         Ok(Some(bundle_path))
+    }
+
+    /// Materialize pending outbound netmail packets into .pkt files.
+    ///
+    /// This method finds pending outbound netmail (AreaFix replies and forwarded
+    /// netmail) in the database, groups them by link, and writes .pkt files to
+    /// the ready directory for BinkP delivery.
+    ///
+    /// Returns the number of packets materialized.
+    ///
+    /// # Errors
+    ///
+    /// Returns I/O, packet, or database errors that prevent materialization.
+    pub fn materialize_outbound_netmail(&self) -> Result<usize, FtnError> {
+        use oxidebbs_db::{finish_network_packet, list_network_messages, list_network_packets};
+
+        let packets = list_network_packets(self.db)?
+            .into_iter()
+            .filter(|p| p.direction == "outbound" && p.status == "pending" && p.link_id.is_some())
+            .collect::<Vec<_>>();
+
+        if packets.is_empty() {
+            return Ok(0);
+        }
+
+        let all_messages = list_network_messages(self.db)?;
+        let links = list_network_links(self.db)?;
+        let mut materialized = 0;
+
+        for packet in packets {
+            let link_id = match packet.link_id.as_ref() {
+                Some(id) => id,
+                None => continue,
+            };
+
+            let link = match links.iter().find(|l| l.id == *link_id) {
+                Some(l) => l,
+                None => continue,
+            };
+
+            let netmail_messages: Vec<PacketMessage> = all_messages
+                .iter()
+                .filter(|m| {
+                    m.packet_id.as_deref() == Some(&packet.id)
+                        && m.message_type == "netmail"
+                        && m.status == "pending"
+                })
+                .map(|m| PacketMessage {
+                    to_user: m.to_name.clone().unwrap_or_else(|| "Sysop".to_string()),
+                    from_user: m.from_name.clone(),
+                    subject: m.subject.clone(),
+                    body: m.raw_text.clone(),
+                    area_tag: String::new(),
+                    attributes: MessageAttribute::PRIVATE,
+                })
+                .collect();
+
+            if netmail_messages.is_empty() {
+                continue;
+            }
+
+            let ready_dir = self.paths.ready_dir(&link.key);
+            fs::create_dir_all(&ready_dir)?;
+            let packet_path =
+                ready_dir.join(format!("{}.pkt", generated_uuid(self.db)?.replace('-', "")));
+
+            let ftn_packet = FtnPacket {
+                header: packet_header(&self.profile, link)?,
+                messages: netmail_messages,
+            };
+
+            let mut file = File::options()
+                .write(true)
+                .create_new(true)
+                .open(&packet_path)?;
+            PacketWriter::write(&mut file, &ftn_packet)?;
+
+            finish_network_packet(self.db, &packet.id, "ready", None)?;
+            materialized += 1;
+        }
+
+        Ok(materialized)
     }
 
     fn write_packet_for_link(
@@ -645,6 +787,103 @@ mod tests {
                 .len(),
             1
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn materialize_outbound_netmail_creates_pkt_file() {
+        use oxidebbs_db::{
+            NetworkMessageRecord, NetworkPacketRecord, insert_network_message,
+            insert_network_packet, list_network_packets,
+        };
+
+        let db = test_db();
+        let root = temp_root("netmail");
+
+        let packet_id = "00000000-0000-4000-8000-000000003001";
+        let message_id = "00000000-0000-4000-8000-000000003002";
+
+        insert_network_packet(
+            db.db(),
+            &NetworkPacketRecord {
+                id: packet_id.to_string(),
+                network_id: PROFILE_ID.to_string(),
+                direction: "outbound".to_string(),
+                link_id: Some(LINK_ID.to_string()),
+                filename: "areafix-reply.pkt".to_string(),
+                sha256: "abc123".to_string(),
+                size_bytes: 100,
+                status: "pending".to_string(),
+                error_message: None,
+                received_at: None,
+                processed_at: None,
+                created_at: "2026-06-04T00:00:00Z".to_string(),
+            },
+        )
+        .expect("insert packet");
+
+        insert_network_message(
+            db.db(),
+            &NetworkMessageRecord {
+                id: message_id.to_string(),
+                network_id: PROFILE_ID.to_string(),
+                local_message_id: None,
+                message_type: "netmail".to_string(),
+                area_tag: None,
+                origin_address: "1:105/42".to_string(),
+                destination_address: Some("1:105/1".to_string()),
+                from_name: "AreaFix".to_string(),
+                to_name: Some("Sysop".to_string()),
+                subject: "AreaFix Response".to_string(),
+                raw_text: b"AreaFix reply body".to_vec(),
+                display_body: "AreaFix reply body".to_string(),
+                msgid: None,
+                replyid: None,
+                created_at: "2026-06-04T00:00:00Z".to_string(),
+                imported_at: None,
+                exported_at: None,
+                duplicate_hash: None,
+                packet_id: Some(packet_id.to_string()),
+                status: "pending".to_string(),
+            },
+        )
+        .expect("insert message");
+
+        let scanner = Scanner::new(
+            db.db(),
+            profile(),
+            ScannerPaths::under_runtime(&root, "fidonet"),
+        );
+
+        let materialized = scanner.materialize_outbound_netmail().expect("materialize");
+        assert_eq!(materialized, 1);
+
+        let ready_dir = root.join("network/fidonet/outbound/hub/ready");
+        assert!(ready_dir.exists());
+        let pkt_files: Vec<_> = fs::read_dir(&ready_dir)
+            .expect("ready dir")
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("pkt"))
+            .collect();
+        assert_eq!(pkt_files.len(), 1);
+
+        let packet = PacketReader::read(File::open(pkt_files[0].path()).expect("open"))
+            .expect("read packet");
+        assert_eq!(packet.header.orig_node, 42);
+        assert_eq!(packet.header.dest_node, 1);
+        assert_eq!(packet.messages.len(), 1);
+        assert_eq!(packet.messages[0].from_user, "AreaFix");
+        assert_eq!(packet.messages[0].to_user, "Sysop");
+        assert_eq!(packet.messages[0].subject, "AreaFix Response");
+        assert!(packet.messages[0].area_tag.is_empty());
+
+        let updated_packets = list_network_packets(db.db()).expect("packets");
+        let updated = updated_packets
+            .iter()
+            .find(|p| p.id == packet_id)
+            .expect("packet");
+        assert_eq!(updated.status, "ready");
+
         let _ = fs::remove_dir_all(root);
     }
 }

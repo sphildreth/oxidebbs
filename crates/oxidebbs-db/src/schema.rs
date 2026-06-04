@@ -210,7 +210,7 @@ fn create_full_schema(db: &Db) -> decentdb::Result<()> {
             sha256 TEXT NOT NULL CHECK (LENGTH(TRIM(sha256)) > 0),
             size_bytes INT NOT NULL DEFAULT 0 CHECK (size_bytes >= 0),
             status TEXT NOT NULL DEFAULT 'pending'
-                CHECK (status = 'pending' OR status = 'processing' OR status = 'processed' OR status = 'quarantined' OR status = 'failed'),
+                CHECK (status = 'pending' OR status = 'processing' OR status = 'processed' OR status = 'quarantined' OR status = 'failed' OR status = 'ready'),
             error_message TEXT,
             received_at TIMESTAMPTZ,
             processed_at TIMESTAMPTZ,
@@ -239,7 +239,7 @@ fn create_full_schema(db: &Db) -> decentdb::Result<()> {
             duplicate_hash TEXT,
             packet_id UUID REFERENCES network_packets(id) ON DELETE SET NULL,
             status TEXT NOT NULL DEFAULT 'imported'
-                CHECK (status = 'imported' OR status = 'exported' OR status = 'quarantined' OR status = 'duplicate'),
+                CHECK (status = 'imported' OR status = 'exported' OR status = 'quarantined' OR status = 'duplicate' OR status = 'pending' OR status = 'ready'),
             CHECK (LENGTH(TRIM(origin_address)) > 0)
         );
 

@@ -1307,6 +1307,137 @@ pub fn list_network_packets_for_retention(
     Ok(result.rows().iter().map(network_packet_from_row).collect())
 }
 
+/// Cumulative FTN operations statistics for a network profile.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct NetworkOperationsStats {
+    /// Number of inbound packets successfully processed (status = 'processed')
+    pub packets_tossed: i64,
+    /// Number of inbound packets quarantined (status = 'quarantined')
+    pub packets_quarantined: i64,
+    /// Number of outbound packets created (direction = 'outbound')
+    pub packets_scanned: i64,
+    /// Number of messages imported (status = 'imported')
+    pub messages_imported: i64,
+    /// Number of messages exported (status = 'exported')
+    pub messages_exported: i64,
+    /// Number of duplicate messages detected (from network_duplicate_log)
+    pub duplicates_detected: i64,
+    /// Number of successful polls (status = 'success')
+    pub polls_succeeded: i64,
+    /// Number of failed polls (status = 'failed' or 'timeout')
+    pub polls_failed: i64,
+    /// Total bytes received across all polls
+    pub bytes_received: i64,
+    /// Total bytes sent across all polls
+    pub bytes_sent: i64,
+}
+
+/// Compute cumulative FTN operations statistics for a network profile.
+///
+/// Aggregates statistics from network_packets, network_messages,
+/// network_duplicate_log, and network_poll_log tables.
+pub fn get_network_operations_stats(
+    db: &Db,
+    network_id: &str,
+) -> decentdb::Result<NetworkOperationsStats> {
+    let mut stats = NetworkOperationsStats::default();
+
+    // Packet stats
+    let packet_result = db.execute_with_params(
+        "SELECT status, COUNT(*) as count
+         FROM network_packets
+         WHERE network_id = UUID_PARSE($1)
+         GROUP BY status",
+        &[Value::Text(network_id.to_string())],
+    )?;
+    for row in packet_result.rows() {
+        if let (Some(Value::Text(status)), Some(Value::Int64(count))) =
+            (row.values().first(), row.values().get(1))
+        {
+            match status.as_str() {
+                "processed" => stats.packets_tossed = *count,
+                "quarantined" => stats.packets_quarantined = *count,
+                _ => {}
+            }
+        }
+    }
+
+    // Outbound packets count
+    let outbound_result = db.execute_with_params(
+        "SELECT COUNT(*) FROM network_packets
+         WHERE network_id = UUID_PARSE($1) AND direction = 'outbound'",
+        &[Value::Text(network_id.to_string())],
+    )?;
+    if let Some(row) = outbound_result.rows().first()
+        && let Some(Value::Int64(count)) = row.values().first()
+    {
+        stats.packets_scanned = *count;
+    }
+
+    // Message stats
+    let message_result = db.execute_with_params(
+        "SELECT status, COUNT(*) as count
+         FROM network_messages
+         WHERE network_id = UUID_PARSE($1)
+         GROUP BY status",
+        &[Value::Text(network_id.to_string())],
+    )?;
+    for row in message_result.rows() {
+        if let (Some(Value::Text(status)), Some(Value::Int64(count))) =
+            (row.values().first(), row.values().get(1))
+        {
+            match status.as_str() {
+                "imported" => stats.messages_imported = *count,
+                "exported" => stats.messages_exported = *count,
+                _ => {}
+            }
+        }
+    }
+
+    // Duplicate stats
+    let dup_result = db.execute_with_params(
+        "SELECT COUNT(*) FROM network_duplicate_log
+         WHERE network_id = UUID_PARSE($1)",
+        &[Value::Text(network_id.to_string())],
+    )?;
+    if let Some(row) = dup_result.rows().first()
+        && let Some(Value::Int64(count)) = row.values().first()
+    {
+        stats.duplicates_detected = *count;
+    }
+
+    // Poll stats
+    let poll_result = db.execute_with_params(
+        "SELECT p.status, COUNT(*) as count,
+                COALESCE(SUM(p.bytes_in), 0) as total_bytes_in,
+                COALESCE(SUM(p.bytes_out), 0) as total_bytes_out
+         FROM network_poll_log p
+         INNER JOIN network_links l ON p.link_id = l.id
+         WHERE l.network_id = UUID_PARSE($1)
+         GROUP BY p.status",
+        &[Value::Text(network_id.to_string())],
+    )?;
+    for row in poll_result.rows() {
+        if let Some(Value::Text(status)) = row.values().first() {
+            if let Some(Value::Int64(count)) = row.values().get(1) {
+                match status.as_str() {
+                    "success" => stats.polls_succeeded = *count,
+                    "failed" | "timeout" => stats.polls_failed += count,
+                    _ => {}
+                }
+            }
+            if let Some(Value::Int64(bytes_in)) = row.values().get(2) {
+                stats.bytes_received += bytes_in;
+            }
+            if let Some(Value::Int64(bytes_out)) = row.values().get(3) {
+                stats.bytes_sent += bytes_out;
+            }
+        }
+    }
+
+    Ok(stats)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

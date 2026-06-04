@@ -1,12 +1,13 @@
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
 use tokio::net::TcpListener;
 use tracing::{error, info, warn};
 
-use oxidebbs_binkp::{BinkpServer, BinkpServerHandshake, LinkSessionRegistry};
+use oxidebbs_binkp::{BinkpOutboundFile, BinkpServer, BinkpServerHandshake, LinkSessionRegistry};
 use oxidebbs_db::{NetworkLinkRecord, OxideDb, find_network_profile_by_id};
-use oxidebbs_ftn::TosserPaths;
+use oxidebbs_ftn::{ScannerPaths, TosserPaths};
 
 use crate::config::OxideConfig;
 use crate::serve::{ServeError, ServeResult};
@@ -92,7 +93,7 @@ fn handle_binkp_session_sync(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let server = BinkpServer::new();
 
-    // Build allowed addresses from all enabled links
+    // Build allowed addresses and per-link passwords from all enabled links
     let links = oxidebbs_db::list_network_links(state.db.db())?;
     let allowed_addresses: Vec<String> = links
         .iter()
@@ -100,11 +101,14 @@ fn handle_binkp_session_sync(
         .map(|link| link.address.clone())
         .collect();
 
-    // Perform server handshake
-    let handshake = BinkpServerHandshake {
-        allowed_addresses,
-        password: None, // Will be validated per-link
-    };
+    let link_passwords: HashMap<String, String> = links
+        .iter()
+        .filter(|link| link.enabled)
+        .map(|link| (link.address.clone(), link.password.clone()))
+        .collect();
+
+    // Perform server handshake with per-link password validation
+    let handshake = BinkpServerHandshake::with_link_passwords(allowed_addresses, link_passwords);
 
     let session = server.accept_handshake(&mut stream, &handshake)?;
 
@@ -150,8 +154,55 @@ fn handle_binkp_session_sync(
         );
     }
 
-    // Send end of batch
-    server.send_end_of_batch(&mut stream)?;
+    // Send outbound files to remote
+    let scanner_paths = ScannerPaths::under_runtime(&state.config.paths.runtime, &profile.key);
+    let outbound_ready = scanner_paths.outbound_root.join(&link.key).join("ready");
+    let mut outbound_files = Vec::new();
+    if outbound_ready.exists() {
+        for entry in std::fs::read_dir(&outbound_ready)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_file() {
+                let name = path
+                    .file_name()
+                    .ok_or_else(|| format!("Invalid file name: {:?}", path))?
+                    .to_string_lossy()
+                    .to_string();
+                let metadata = std::fs::metadata(&path)?;
+                let mtime = metadata
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let bytes = std::fs::read(&path)?;
+                outbound_files.push(
+                    BinkpOutboundFile::new(name, mtime, bytes)
+                        .map_err(|e| format!("Invalid outbound file: {e}"))?,
+                );
+            }
+        }
+    }
+
+    if !outbound_files.is_empty() {
+        info!(
+            %peer_addr,
+            files = outbound_files.len(),
+            "Sending outbound BinkP files"
+        );
+        server.send_batch_with_acknowledgements(&mut stream, &outbound_files)?;
+
+        // Mark outbound files as processed after successful send
+        for file in &outbound_files {
+            let file_path = outbound_ready.join(&file.name);
+            if file_path.exists() {
+                std::fs::remove_file(&file_path)?;
+            }
+        }
+    } else {
+        // Send end of batch if no outbound files
+        server.send_end_of_batch(&mut stream)?;
+    }
 
     info!(%peer_addr, "BinkP session completed");
     Ok(())

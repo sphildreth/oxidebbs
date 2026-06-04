@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io::{Read, Write};
 
 use crate::error::BinkpError;
@@ -26,6 +27,7 @@ impl BinkpClientHandshake {
 pub struct BinkpServerHandshake {
     pub allowed_addresses: Vec<String>,
     pub password: Option<String>,
+    pub link_passwords: HashMap<String, String>,
 }
 
 impl BinkpServerHandshake {
@@ -38,6 +40,20 @@ impl BinkpServerHandshake {
         Self {
             allowed_addresses: allowed_addresses.into_iter().collect(),
             password,
+            link_passwords: HashMap::new(),
+        }
+    }
+
+    /// Create a server handshake policy with per-link passwords.
+    #[must_use]
+    pub fn with_link_passwords(
+        allowed_addresses: impl IntoIterator<Item = String>,
+        link_passwords: HashMap<String, String>,
+    ) -> Self {
+        Self {
+            allowed_addresses: allowed_addresses.into_iter().collect(),
+            password: None,
+            link_passwords,
         }
     }
 }
@@ -149,7 +165,15 @@ pub(crate) fn accept_client_handshake<S: Read + Write>(
         return Err(BinkpError::ConnectionRefused);
     }
 
-    if policy.password.as_deref() != peer_password.as_deref() {
+    let expected_password = if !policy.link_passwords.is_empty() {
+        peer_addresses
+            .iter()
+            .find_map(|addr| policy.link_passwords.get(addr).cloned())
+    } else {
+        policy.password.clone()
+    };
+
+    if expected_password.as_deref() != peer_password.as_deref() {
         send_handshake_error(stream)?;
         return Err(BinkpError::ConnectionRefused);
     }

@@ -27,7 +27,10 @@ pub use kludge::{
     EchomailKludge, FtnAddressList, FtnMessageComposer, FtnParsedMessage, compose_kludge,
     parse_kludge, parse_message_body,
 };
-pub use nodelist::{FtnNodelistEntry, NodelistDiffError, apply_nodelist_diff, parse_nodelist};
+pub use nodelist::{
+    FtnNodelistEntry, NodelistDiffError, apply_nodelist_diff, apply_nodelist_diff_with_options,
+    parse_nodelist,
+};
 pub use packet::{
     FtnPacket, MessageAttribute, PacketHeader, PacketMessage, PacketReader, PacketWriter,
 };

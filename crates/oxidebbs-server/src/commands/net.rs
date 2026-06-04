@@ -9,8 +9,8 @@ use clap::Subcommand;
 use serde_json::{Value as JsonValue, json};
 
 use oxidebbs_binkp::{
-    BinkpClient, BinkpClientHandshake, BinkpOutboundFile, BinkpRetryPolicy, LinkSessionRegistry,
-    transport_security_plan,
+    BinkpClient, BinkpClientHandshake, BinkpOutboundFile, BinkpRetryPolicy, BinkpStream,
+    BinkpTlsClientConfig, LinkSessionRegistry, connect_tls, transport_security_plan,
 };
 use oxidebbs_core::FtnAddress;
 use oxidebbs_db::{
@@ -19,17 +19,17 @@ use oxidebbs_db::{
     NetworkSubscriptionRecord, count_network_packets_before, delete_network_packets_older_than,
     find_network_area_by_tag_and_profile, find_network_link_by_key, find_network_nodelist_entry,
     find_network_packet_by_id, find_network_profile_by_id, find_network_profile_by_key,
-    find_network_rescan_by_id, finish_network_packet, insert_network_poll_log,
-    insert_network_subscription, list_network_areas, list_network_links, list_network_messages,
-    list_network_nodelist_entries, list_network_packets, list_network_packets_for_retention,
-    list_network_poll_logs, list_network_profiles, list_network_rescan_queue,
-    list_network_subscriptions, mark_network_packet_quarantined, replace_network_nodelist_entries,
-    requeue_network_packet, set_network_area_subscribed, set_network_subscription_status,
-    summarize_network_packets, update_network_rescan_status,
+    find_network_rescan_by_id, finish_network_packet, get_network_operations_stats,
+    insert_network_poll_log, insert_network_subscription, list_network_areas, list_network_links,
+    list_network_messages, list_network_nodelist_entries, list_network_packets,
+    list_network_packets_for_retention, list_network_poll_logs, list_network_profiles,
+    list_network_rescan_queue, list_network_subscriptions, mark_network_packet_quarantined,
+    replace_network_nodelist_entries, requeue_network_packet, set_network_area_subscribed,
+    set_network_subscription_status, summarize_network_packets, update_network_rescan_status,
 };
 use oxidebbs_ftn::{
     AreaFixCommand, FtnNodelistEntry, Scanner, ScannerPaths, Tosser, TosserPaths,
-    apply_nodelist_diff, parse_areafix_commands, parse_nodelist,
+    apply_nodelist_diff_with_options, parse_areafix_commands, parse_nodelist,
 };
 
 use crate::sysop_cli::{
@@ -105,6 +105,8 @@ pub enum NodelistCommand {
         base: String,
         #[arg(long)]
         network: Option<String>,
+        #[arg(long, default_value_t = false)]
+        validate_crc: bool,
     },
     Lookup {
         address: String,
@@ -273,8 +275,13 @@ fn run_net_scan(ctx: &AppContext, network: &str) -> CliResult<()> {
         )));
     }
     let paths = ScannerPaths::under_runtime(&ctx.config.paths.runtime, &profile.key);
-    let result = Scanner::new(db.db(), profile.clone(), paths.clone())
+    let scanner = Scanner::new(db.db(), profile.clone(), paths.clone());
+    let result = scanner
         .scan()
+        .map_err(|error| CliError::Message(error.to_string()))?;
+
+    let netmail_materialized = scanner
+        .materialize_outbound_netmail()
         .map_err(|error| CliError::Message(error.to_string()))?;
 
     audit(
@@ -283,14 +290,15 @@ fn run_net_scan(ctx: &AppContext, network: &str) -> CliResult<()> {
         None,
         None,
         &format!(
-            "scanned outbound messages for network {} into {}; links={} packets={} messages={} skipped={} errors={}",
+            "scanned outbound messages for network {} into {}; links={} packets={} messages={} skipped={} errors={} netmail_materialized={}",
             profile.key,
             paths.outbound_root.display(),
             result.links_scanned,
             result.packets_created,
             result.messages_scanned,
             result.messages_skipped,
-            result.errors.len()
+            result.errors.len(),
+            netmail_materialized
         ),
     )?;
 
@@ -303,19 +311,21 @@ fn run_net_scan(ctx: &AppContext, network: &str) -> CliResult<()> {
                 "packets_created": result.packets_created,
                 "messages_scanned": result.messages_scanned,
                 "messages_skipped": result.messages_skipped,
-                "errors": result.errors
+                "errors": result.errors,
+                "netmail_materialized": netmail_materialized
             }
         }))
     } else {
         println!(
-            "network={}\toutbound={}\tlinks={}\tpackets={}\tmessages={}\tskipped={}\terrors={}",
+            "network={}\toutbound={}\tlinks={}\tpackets={}\tmessages={}\tskipped={}\terrors={}\tnetmail={}",
             profile.key,
             paths.outbound_root.display(),
             result.links_scanned,
             result.packets_created,
             result.messages_scanned,
             result.messages_skipped,
-            result.errors.len()
+            result.errors.len(),
+            netmail_materialized
         );
         for error in result.errors {
             println!("error={error}");
@@ -569,12 +579,6 @@ fn execute_binkp_poll(
 ) -> CliResult<PollExecution> {
     let security_plan = transport_security_plan(&link.transport_security)
         .map_err(|error| CliError::Message(error.to_string()))?;
-    if security_plan.requires_tls || security_plan.attempts_tls {
-        return Err(CliError::Message(format!(
-            "net poll for link {} requires BinkP TLS session support; use --dry-run to inspect the plan or configure plaintext_legacy only for legacy FTN links",
-            link.key
-        )));
-    }
 
     let outbound_packets = list_network_packets(db.db())?
         .into_iter()
@@ -597,9 +601,35 @@ fn execute_binkp_poll(
             link.key, link.binkp_port
         ))
     })?;
-    let mut stream = TcpStream::connect((&*link.host, port))?;
-    stream.set_read_timeout(Some(Duration::from_secs(30)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(30)))?;
+    let tcp_stream = TcpStream::connect((&*link.host, port))?;
+    tcp_stream.set_read_timeout(Some(Duration::from_secs(30)))?;
+    tcp_stream.set_write_timeout(Some(Duration::from_secs(30)))?;
+
+    let mut stream = if security_plan.attempts_tls {
+        let tls_config = BinkpTlsClientConfig::default();
+        match connect_tls(tcp_stream, &link.host, &tls_config) {
+            Ok(tls_stream) => BinkpStream::tls(tls_stream),
+            Err(tls_error) => {
+                if security_plan.allows_plaintext {
+                    eprintln!(
+                        "TLS failed for link {} ({}); falling back to plaintext: {}",
+                        link.key, link.host, tls_error
+                    );
+                    let fallback_stream = TcpStream::connect((&*link.host, port))?;
+                    fallback_stream.set_read_timeout(Some(Duration::from_secs(30)))?;
+                    fallback_stream.set_write_timeout(Some(Duration::from_secs(30)))?;
+                    BinkpStream::plain(fallback_stream)
+                } else {
+                    return Err(CliError::Message(format!(
+                        "TLS required for link {} but handshake failed: {}",
+                        link.key, tls_error
+                    )));
+                }
+            }
+        }
+    } else {
+        BinkpStream::plain(tcp_stream)
+    };
 
     let client = BinkpClient::new();
     let local_address = profile_address(profile);
@@ -803,6 +833,7 @@ fn run_net_status(ctx: &AppContext, network: &str) -> CliResult<()> {
         .into_iter()
         .filter(|message| message.network_id == profile.id)
         .collect::<Vec<_>>();
+    let stats = get_network_operations_stats(db.db(), &profile.id)?;
 
     if ctx.json {
         print_json(&json!({
@@ -814,7 +845,19 @@ fn run_net_status(ctx: &AppContext, network: &str) -> CliResult<()> {
                 "packets": packets.len(),
                 "messages": messages.len()
             },
-            "packet_status": count_by_status(&packets)
+            "packet_status": count_by_status(&packets),
+            "operations_stats": {
+                "packets_tossed": stats.packets_tossed,
+                "packets_quarantined": stats.packets_quarantined,
+                "packets_scanned": stats.packets_scanned,
+                "messages_imported": stats.messages_imported,
+                "messages_exported": stats.messages_exported,
+                "duplicates_detected": stats.duplicates_detected,
+                "polls_succeeded": stats.polls_succeeded,
+                "polls_failed": stats.polls_failed,
+                "bytes_received": stats.bytes_received,
+                "bytes_sent": stats.bytes_sent
+            }
         }))
     } else {
         println!(
@@ -836,6 +879,22 @@ fn run_net_status(ctx: &AppContext, network: &str) -> CliResult<()> {
         for (status, count) in count_by_status(&packets) {
             println!("packet_status.{status}={count}");
         }
+        println!(
+            "stats.tossed={}\tstats.quarantined={}\tstats.scanned={}\tstats.imported={}\tstats.exported={}",
+            stats.packets_tossed,
+            stats.packets_quarantined,
+            stats.packets_scanned,
+            stats.messages_imported,
+            stats.messages_exported
+        );
+        println!(
+            "stats.duplicates={}\tstats.polls_ok={}\tstats.polls_fail={}\tstats.bytes_in={}\tstats.bytes_out={}",
+            stats.duplicates_detected,
+            stats.polls_succeeded,
+            stats.polls_failed,
+            stats.bytes_received,
+            stats.bytes_sent
+        );
         Ok(())
     }
 }
@@ -1184,7 +1243,8 @@ fn run_nodelist(command: NodelistCommand, ctx: &AppContext) -> CliResult<()> {
             file,
             base,
             network,
-        } => run_nodelist_apply_diff(ctx, &file, &base, network),
+            validate_crc,
+        } => run_nodelist_apply_diff(ctx, &file, &base, network, validate_crc),
         NodelistCommand::Lookup { address, network } => run_nodelist_lookup(ctx, &address, network),
         NodelistCommand::List { network, limit } => {
             run_nodelist_list(ctx, network.as_deref(), limit)
@@ -1224,6 +1284,7 @@ fn run_nodelist_apply_diff(
     file: &str,
     base: &str,
     network: Option<String>,
+    validate_crc: bool,
 ) -> CliResult<()> {
     let db = open_database(&ctx.config)?;
     let profile = resolve_network_profile(&db, network.as_deref())?;
@@ -1231,8 +1292,9 @@ fn run_nodelist_apply_diff(
     let diff_bytes = fs::read(file)?;
     let base_contents = String::from_utf8_lossy(&base_bytes);
     let diff_contents = String::from_utf8_lossy(&diff_bytes);
-    let updated_contents = apply_nodelist_diff(&base_contents, &diff_contents)
-        .map_err(|error| CliError::Message(error.to_string()))?;
+    let updated_contents =
+        apply_nodelist_diff_with_options(&base_contents, &diff_contents, validate_crc)
+            .map_err(|error| CliError::Message(error.to_string()))?;
     let records = nodelist_records_from_contents(&db, &profile.id, &updated_contents)?;
 
     replace_network_nodelist_entries(db.db(), &profile.id, &records)?;
@@ -1704,12 +1766,8 @@ fn run_net_rescan_process(ctx: &AppContext, rescan_id: &str) -> CliResult<()> {
     let paths = ScannerPaths::under_runtime(&ctx.config.paths.runtime, &profile.key);
     let scanner = Scanner::new(db.db(), profile.clone(), paths);
 
-    // Note: The current Scanner::scan() scans all subscribed areas for all links.
-    // For a proper rescan implementation, we would need to add a method to scan
-    // a specific area for a specific link. For now, we'll trigger a full scan
-    // and mark the rescan as completed.
     let result = scanner
-        .scan()
+        .rescan_for_link(&link, &area.area_tag)
         .map_err(|e| CliError::Message(e.to_string()))?;
 
     // Update status to completed
