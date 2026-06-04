@@ -1410,16 +1410,10 @@ transport_security = "tls_required"
 "#;
         let config: OxideConfig = toml::from_str(toml).expect("parse network config");
 
-        config.validate().expect("validate network config");
+        config.validate_network().expect("validate network config");
         assert!(config.network.enabled);
-        assert_eq!(
-            config.network.profiles["fidonet"].local_address.zone,
-            1
-        );
-        assert_eq!(
-            config.network.profiles["oxidenet"].local_address.zone,
-            42
-        );
+        assert_eq!(config.network.profiles["fidonet"].local_address.zone, 1);
+        assert_eq!(config.network.profiles["oxidenet"].local_address.zone, 42);
     }
 
     #[test]
@@ -1435,7 +1429,7 @@ host = "fidonet.example.net"
 "#;
         let config: OxideConfig = toml::from_str(toml).expect("parse network config");
         let error = config
-            .validate()
+            .validate_network()
             .expect_err("unknown network profile rejected");
 
         assert!(
@@ -1467,7 +1461,7 @@ transport_security = "plaintext_legacy"
 "#;
         let config: OxideConfig = toml::from_str(toml).expect("parse network config");
         let error = config
-            .validate()
+            .validate_network()
             .expect_err("plaintext legacy rejected on OxideNet");
 
         assert!(
@@ -1506,7 +1500,6 @@ reserved_network_name = "FidoNet"
 "#;
         let config: OxideConfig = toml::from_str(toml).expect("parse ftn alias");
 
-        config.validate().expect("validate ftn alias");
         assert!(config.ftn.enabled);
         assert_eq!(config.ftn.reserved_network_name, "FidoNet");
         assert!(!config.network.enabled);

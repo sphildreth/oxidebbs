@@ -540,9 +540,7 @@ pub fn build_setup_toml(answers: &SetupAnswers) -> io::Result<String> {
         screens,
         menus,
         doors,
-        network: GeneratedNetworkConfig {
-            enabled: false,
-        },
+        network: GeneratedNetworkConfig { enabled: false },
     };
 
     toml::to_string_pretty(&config)

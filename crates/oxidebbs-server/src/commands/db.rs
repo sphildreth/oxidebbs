@@ -12,10 +12,20 @@ use crate::{
 };
 use oxidebbs_db::{
     AuditEventRecord, AuthAttemptRecord, Db, DoorDefinitionRecord, DoorRunRecord,
-    MessageAreaRecord, MessageRecord, SessionRecord, UserRecord, Value,
+    MessageAreaRecord, MessageRecord, NetworkAreaRecord, NetworkDuplicateLogRecord,
+    NetworkLinkRecord, NetworkMessageRecord, NetworkNodelistRecord, NetworkPacketRecord,
+    NetworkPathNode, NetworkPollLogRecord, NetworkProfileRecord, NetworkSeenByNode,
+    NetworkSubscriptionRecord, SessionRecord, UserRecord, Value,
     insert_audit_event_preserving_record, insert_auth_attempt, insert_door_definition,
-    insert_door_run, insert_message, insert_message_area, insert_session, insert_user,
-    list_auth_attempts, list_door_definitions, list_message_areas, list_messages, list_users,
+    insert_door_run, insert_message, insert_message_area, insert_network_area,
+    insert_network_duplicate_log, insert_network_link, insert_network_message,
+    insert_network_nodelist_entry, insert_network_packet, insert_network_path_node,
+    insert_network_poll_log, insert_network_profile, insert_network_seen_by,
+    insert_network_subscription, insert_session, insert_user, list_auth_attempts,
+    list_door_definitions, list_message_areas, list_messages, list_network_areas,
+    list_network_duplicates, list_network_links, list_network_messages,
+    list_network_nodelist_entries, list_network_packets, list_network_path, list_network_poll_logs,
+    list_network_profiles, list_network_seen_by, list_network_subscriptions, list_users,
     read_schema_version,
 };
 
@@ -31,6 +41,28 @@ struct ImportSchema {
     doors: Vec<ImportDoorDefinitionRecord>,
     door_runs: Vec<ImportDoorRunRecord>,
     audit_events: Vec<ImportAuditEventRecord>,
+    #[serde(default)]
+    network_profiles: Vec<ImportNetworkProfileRecord>,
+    #[serde(default)]
+    network_links: Vec<ImportNetworkLinkRecord>,
+    #[serde(default)]
+    network_areas: Vec<ImportNetworkAreaRecord>,
+    #[serde(default)]
+    network_packets: Vec<ImportNetworkPacketRecord>,
+    #[serde(default)]
+    network_messages: Vec<ImportNetworkMessageRecord>,
+    #[serde(default)]
+    network_seen_by: Vec<ImportNetworkSeenByNode>,
+    #[serde(default)]
+    network_path: Vec<ImportNetworkPathNode>,
+    #[serde(default)]
+    network_duplicate_log: Vec<ImportNetworkDuplicateLogRecord>,
+    #[serde(default)]
+    network_poll_log: Vec<ImportNetworkPollLogRecord>,
+    #[serde(default)]
+    network_area_subscriptions: Vec<ImportNetworkSubscriptionRecord>,
+    #[serde(default)]
+    network_nodelist: Vec<ImportNetworkNodelistRecord>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -78,6 +110,12 @@ struct ImportMessageRecord {
     id: String,
     area_id: String,
     author_user_id: String,
+    #[serde(default = "default_local_author_kind")]
+    author_kind: String,
+    #[serde(default)]
+    author_display_name: String,
+    #[serde(default)]
+    author_network_address: Option<String>,
     to_user_id: Option<String>,
     subject: String,
     body: String,
@@ -140,6 +178,163 @@ struct ImportAuditEventRecord {
     details: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct ImportNetworkProfileRecord {
+    id: String,
+    key: String,
+    name: String,
+    adapter: String,
+    local_zone: i64,
+    local_net: i64,
+    local_node: i64,
+    local_point: i64,
+    enabled: bool,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ImportNetworkLinkRecord {
+    id: String,
+    key: String,
+    network_id: String,
+    address: String,
+    host: String,
+    binkp_port: i64,
+    password: String,
+    poll_schedule_minutes: i64,
+    compression: String,
+    transport_security: String,
+    enabled: bool,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ImportNetworkAreaRecord {
+    id: String,
+    network_id: String,
+    area_tag: String,
+    local_area_id: String,
+    description: String,
+    read_only: bool,
+    subscribed: bool,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ImportNetworkPacketRecord {
+    id: String,
+    network_id: String,
+    direction: String,
+    link_id: Option<String>,
+    filename: String,
+    sha256: String,
+    size_bytes: i64,
+    status: String,
+    error_message: Option<String>,
+    received_at: Option<String>,
+    processed_at: Option<String>,
+    created_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ImportNetworkMessageRecord {
+    id: String,
+    network_id: String,
+    local_message_id: Option<String>,
+    message_type: String,
+    area_tag: Option<String>,
+    origin_address: String,
+    destination_address: Option<String>,
+    from_name: String,
+    to_name: Option<String>,
+    subject: String,
+    raw_text: Vec<u8>,
+    display_body: String,
+    msgid: Option<String>,
+    replyid: Option<String>,
+    created_at: String,
+    imported_at: Option<String>,
+    exported_at: Option<String>,
+    duplicate_hash: Option<String>,
+    packet_id: Option<String>,
+    status: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ImportNetworkSeenByNode {
+    id: String,
+    message_id: String,
+    network_id: String,
+    zone: i64,
+    net: i64,
+    node: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ImportNetworkPathNode {
+    id: String,
+    message_id: String,
+    network_id: String,
+    sequence: i64,
+    zone: i64,
+    net: i64,
+    node: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ImportNetworkDuplicateLogRecord {
+    id: String,
+    network_id: String,
+    duplicate_hash: String,
+    msgid: Option<String>,
+    area_tag: Option<String>,
+    origin_address: String,
+    detected_at: String,
+    action: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ImportNetworkPollLogRecord {
+    id: String,
+    link_id: String,
+    started_at: String,
+    ended_at: Option<String>,
+    direction: String,
+    status: String,
+    bytes_in: i64,
+    bytes_out: i64,
+    packets_in: i64,
+    packets_out: i64,
+    error_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ImportNetworkSubscriptionRecord {
+    id: String,
+    area_id: String,
+    link_id: String,
+    subscribed: bool,
+    subscribed_at: String,
+    unsubscribed_at: Option<String>,
+    source: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ImportNetworkNodelistRecord {
+    id: String,
+    network_id: String,
+    zone: i64,
+    net: i64,
+    node: i64,
+    point: i64,
+    parsed_name: Option<String>,
+    raw_entry: String,
+    updated_at: String,
+}
+
 impl From<ImportUserRecord> for UserRecord {
     fn from(record: ImportUserRecord) -> Self {
         Self {
@@ -195,6 +390,9 @@ impl From<ImportMessageRecord> for MessageRecord {
             id: record.id,
             area_id: record.area_id,
             author_user_id: record.author_user_id,
+            author_kind: record.author_kind,
+            author_display_name: record.author_display_name,
+            author_network_address: record.author_network_address,
             to_user_id: record.to_user_id,
             subject: record.subject,
             body: record.body,
@@ -204,6 +402,10 @@ impl From<ImportMessageRecord> for MessageRecord {
             visibility: record.visibility,
         }
     }
+}
+
+fn default_local_author_kind() -> String {
+    "local".to_string()
 }
 
 impl From<ImportSessionRecord> for SessionRecord {
@@ -267,6 +469,196 @@ impl From<ImportAuditEventRecord> for AuditEventRecord {
             user_id: record.user_id,
             node_number: record.node_number,
             details: record.details,
+        }
+    }
+}
+
+impl From<ImportNetworkProfileRecord> for NetworkProfileRecord {
+    fn from(record: ImportNetworkProfileRecord) -> Self {
+        Self {
+            id: record.id,
+            key: record.key,
+            name: record.name,
+            adapter: record.adapter,
+            local_zone: record.local_zone,
+            local_net: record.local_net,
+            local_node: record.local_node,
+            local_point: record.local_point,
+            enabled: record.enabled,
+            created_at: record.created_at,
+            updated_at: record.updated_at,
+        }
+    }
+}
+
+impl From<ImportNetworkLinkRecord> for NetworkLinkRecord {
+    fn from(record: ImportNetworkLinkRecord) -> Self {
+        Self {
+            id: record.id,
+            key: record.key,
+            network_id: record.network_id,
+            address: record.address,
+            host: record.host,
+            binkp_port: record.binkp_port,
+            password: record.password,
+            poll_schedule_minutes: record.poll_schedule_minutes,
+            compression: record.compression,
+            transport_security: record.transport_security,
+            enabled: record.enabled,
+            created_at: record.created_at,
+            updated_at: record.updated_at,
+        }
+    }
+}
+
+impl From<ImportNetworkAreaRecord> for NetworkAreaRecord {
+    fn from(record: ImportNetworkAreaRecord) -> Self {
+        Self {
+            id: record.id,
+            network_id: record.network_id,
+            area_tag: record.area_tag,
+            local_area_id: record.local_area_id,
+            description: record.description,
+            read_only: record.read_only,
+            subscribed: record.subscribed,
+            created_at: record.created_at,
+            updated_at: record.updated_at,
+        }
+    }
+}
+
+impl From<ImportNetworkPacketRecord> for NetworkPacketRecord {
+    fn from(record: ImportNetworkPacketRecord) -> Self {
+        Self {
+            id: record.id,
+            network_id: record.network_id,
+            direction: record.direction,
+            link_id: record.link_id,
+            filename: record.filename,
+            sha256: record.sha256,
+            size_bytes: record.size_bytes,
+            status: record.status,
+            error_message: record.error_message,
+            received_at: record.received_at,
+            processed_at: record.processed_at,
+            created_at: record.created_at,
+        }
+    }
+}
+
+impl From<ImportNetworkMessageRecord> for NetworkMessageRecord {
+    fn from(record: ImportNetworkMessageRecord) -> Self {
+        Self {
+            id: record.id,
+            network_id: record.network_id,
+            local_message_id: record.local_message_id,
+            message_type: record.message_type,
+            area_tag: record.area_tag,
+            origin_address: record.origin_address,
+            destination_address: record.destination_address,
+            from_name: record.from_name,
+            to_name: record.to_name,
+            subject: record.subject,
+            raw_text: record.raw_text,
+            display_body: record.display_body,
+            msgid: record.msgid,
+            replyid: record.replyid,
+            created_at: record.created_at,
+            imported_at: record.imported_at,
+            exported_at: record.exported_at,
+            duplicate_hash: record.duplicate_hash,
+            packet_id: record.packet_id,
+            status: record.status,
+        }
+    }
+}
+
+impl From<ImportNetworkSeenByNode> for NetworkSeenByNode {
+    fn from(record: ImportNetworkSeenByNode) -> Self {
+        Self {
+            id: record.id,
+            message_id: record.message_id,
+            network_id: record.network_id,
+            zone: record.zone,
+            net: record.net,
+            node: record.node,
+        }
+    }
+}
+
+impl From<ImportNetworkPathNode> for NetworkPathNode {
+    fn from(record: ImportNetworkPathNode) -> Self {
+        Self {
+            id: record.id,
+            message_id: record.message_id,
+            network_id: record.network_id,
+            sequence: record.sequence,
+            zone: record.zone,
+            net: record.net,
+            node: record.node,
+        }
+    }
+}
+
+impl From<ImportNetworkDuplicateLogRecord> for NetworkDuplicateLogRecord {
+    fn from(record: ImportNetworkDuplicateLogRecord) -> Self {
+        Self {
+            id: record.id,
+            network_id: record.network_id,
+            duplicate_hash: record.duplicate_hash,
+            msgid: record.msgid,
+            area_tag: record.area_tag,
+            origin_address: record.origin_address,
+            detected_at: record.detected_at,
+            action: record.action,
+        }
+    }
+}
+
+impl From<ImportNetworkPollLogRecord> for NetworkPollLogRecord {
+    fn from(record: ImportNetworkPollLogRecord) -> Self {
+        Self {
+            id: record.id,
+            link_id: record.link_id,
+            started_at: record.started_at,
+            ended_at: record.ended_at,
+            direction: record.direction,
+            status: record.status,
+            bytes_in: record.bytes_in,
+            bytes_out: record.bytes_out,
+            packets_in: record.packets_in,
+            packets_out: record.packets_out,
+            error_message: record.error_message,
+        }
+    }
+}
+
+impl From<ImportNetworkSubscriptionRecord> for NetworkSubscriptionRecord {
+    fn from(record: ImportNetworkSubscriptionRecord) -> Self {
+        Self {
+            id: record.id,
+            area_id: record.area_id,
+            link_id: record.link_id,
+            subscribed: record.subscribed,
+            subscribed_at: record.subscribed_at,
+            unsubscribed_at: record.unsubscribed_at,
+            source: record.source,
+        }
+    }
+}
+
+impl From<ImportNetworkNodelistRecord> for NetworkNodelistRecord {
+    fn from(record: ImportNetworkNodelistRecord) -> Self {
+        Self {
+            id: record.id,
+            network_id: record.network_id,
+            zone: record.zone,
+            net: record.net,
+            node: record.node,
+            point: record.point,
+            parsed_name: record.parsed_name,
+            raw_entry: record.raw_entry,
+            updated_at: record.updated_at,
         }
     }
 }
@@ -416,6 +808,9 @@ fn message_json(message: &oxidebbs_db::MessageRecord) -> JsonValue {
         "id": message.id,
         "area_id": message.area_id,
         "author_user_id": message.author_user_id,
+        "author_kind": message.author_kind,
+        "author_display_name": message.author_display_name,
+        "author_network_address": message.author_network_address,
         "to_user_id": message.to_user_id,
         "subject": message.subject,
         "body": message.body,
@@ -556,6 +951,174 @@ fn audit_json(event: &oxidebbs_db::AuditEventRecord) -> JsonValue {
     })
 }
 
+fn network_profile_json(profile: &NetworkProfileRecord) -> JsonValue {
+    serde_json::json!({
+        "id": profile.id,
+        "key": profile.key,
+        "name": profile.name,
+        "adapter": profile.adapter,
+        "local_zone": profile.local_zone,
+        "local_net": profile.local_net,
+        "local_node": profile.local_node,
+        "local_point": profile.local_point,
+        "enabled": profile.enabled,
+        "created_at": profile.created_at,
+        "updated_at": profile.updated_at
+    })
+}
+
+fn network_link_json(link: &NetworkLinkRecord) -> JsonValue {
+    serde_json::json!({
+        "id": link.id,
+        "key": link.key,
+        "network_id": link.network_id,
+        "address": link.address,
+        "host": link.host,
+        "binkp_port": link.binkp_port,
+        "password": link.password,
+        "poll_schedule_minutes": link.poll_schedule_minutes,
+        "compression": link.compression,
+        "transport_security": link.transport_security,
+        "enabled": link.enabled,
+        "created_at": link.created_at,
+        "updated_at": link.updated_at
+    })
+}
+
+fn network_area_json(area: &NetworkAreaRecord) -> JsonValue {
+    serde_json::json!({
+        "id": area.id,
+        "network_id": area.network_id,
+        "area_tag": area.area_tag,
+        "local_area_id": area.local_area_id,
+        "description": area.description,
+        "read_only": area.read_only,
+        "subscribed": area.subscribed,
+        "created_at": area.created_at,
+        "updated_at": area.updated_at
+    })
+}
+
+fn network_packet_json(packet: &NetworkPacketRecord) -> JsonValue {
+    serde_json::json!({
+        "id": packet.id,
+        "network_id": packet.network_id,
+        "direction": packet.direction,
+        "link_id": packet.link_id,
+        "filename": packet.filename,
+        "sha256": packet.sha256,
+        "size_bytes": packet.size_bytes,
+        "status": packet.status,
+        "error_message": packet.error_message,
+        "received_at": packet.received_at,
+        "processed_at": packet.processed_at,
+        "created_at": packet.created_at
+    })
+}
+
+fn network_message_json(message: &NetworkMessageRecord) -> JsonValue {
+    serde_json::json!({
+        "id": message.id,
+        "network_id": message.network_id,
+        "local_message_id": message.local_message_id,
+        "message_type": message.message_type,
+        "area_tag": message.area_tag,
+        "origin_address": message.origin_address,
+        "destination_address": message.destination_address,
+        "from_name": message.from_name,
+        "to_name": message.to_name,
+        "subject": message.subject,
+        "raw_text": message.raw_text,
+        "display_body": message.display_body,
+        "msgid": message.msgid,
+        "replyid": message.replyid,
+        "created_at": message.created_at,
+        "imported_at": message.imported_at,
+        "exported_at": message.exported_at,
+        "duplicate_hash": message.duplicate_hash,
+        "packet_id": message.packet_id,
+        "status": message.status
+    })
+}
+
+fn network_seen_by_json(node: &NetworkSeenByNode) -> JsonValue {
+    serde_json::json!({
+        "id": node.id,
+        "message_id": node.message_id,
+        "network_id": node.network_id,
+        "zone": node.zone,
+        "net": node.net,
+        "node": node.node
+    })
+}
+
+fn network_path_json(node: &NetworkPathNode) -> JsonValue {
+    serde_json::json!({
+        "id": node.id,
+        "message_id": node.message_id,
+        "network_id": node.network_id,
+        "sequence": node.sequence,
+        "zone": node.zone,
+        "net": node.net,
+        "node": node.node
+    })
+}
+
+fn network_duplicate_json(log: &NetworkDuplicateLogRecord) -> JsonValue {
+    serde_json::json!({
+        "id": log.id,
+        "network_id": log.network_id,
+        "duplicate_hash": log.duplicate_hash,
+        "msgid": log.msgid,
+        "area_tag": log.area_tag,
+        "origin_address": log.origin_address,
+        "detected_at": log.detected_at,
+        "action": log.action
+    })
+}
+
+fn network_poll_json(log: &NetworkPollLogRecord) -> JsonValue {
+    serde_json::json!({
+        "id": log.id,
+        "link_id": log.link_id,
+        "started_at": log.started_at,
+        "ended_at": log.ended_at,
+        "direction": log.direction,
+        "status": log.status,
+        "bytes_in": log.bytes_in,
+        "bytes_out": log.bytes_out,
+        "packets_in": log.packets_in,
+        "packets_out": log.packets_out,
+        "error_message": log.error_message
+    })
+}
+
+fn network_subscription_json(subscription: &NetworkSubscriptionRecord) -> JsonValue {
+    serde_json::json!({
+        "id": subscription.id,
+        "area_id": subscription.area_id,
+        "link_id": subscription.link_id,
+        "subscribed": subscription.subscribed,
+        "subscribed_at": subscription.subscribed_at,
+        "unsubscribed_at": subscription.unsubscribed_at,
+        "source": subscription.source
+    })
+}
+
+fn network_nodelist_json(entry: &NetworkNodelistRecord) -> JsonValue {
+    serde_json::json!({
+        "id": entry.id,
+        "network_id": entry.network_id,
+        "zone": entry.zone,
+        "net": entry.net,
+        "node": entry.node,
+        "point": entry.point,
+        "parsed_name": entry.parsed_name,
+        "raw_entry": entry.raw_entry,
+        "updated_at": entry.updated_at
+    })
+}
+
 fn db_export(db: &Db) -> CliResult<JsonValue> {
     Ok(serde_json::json!({
         "schema_version": read_schema_version(db)?,
@@ -566,7 +1129,18 @@ fn db_export(db: &Db) -> CliResult<JsonValue> {
         "sessions": list_all_sessions_for_export(db)?.iter().map(session_json).collect::<Vec<_>>(),
         "doors": list_door_definitions(db)?.iter().map(door_json).collect::<Vec<_>>(),
         "door_runs": list_all_door_runs_for_export(db)?.iter().map(door_run_json).collect::<Vec<_>>(),
-        "audit_events": list_all_audit_events_for_export(db)?.iter().map(audit_json).collect::<Vec<_>>()
+        "audit_events": list_all_audit_events_for_export(db)?.iter().map(audit_json).collect::<Vec<_>>(),
+        "network_profiles": list_network_profiles(db)?.iter().map(network_profile_json).collect::<Vec<_>>(),
+        "network_links": list_network_links(db)?.iter().map(network_link_json).collect::<Vec<_>>(),
+        "network_areas": list_network_areas(db)?.iter().map(network_area_json).collect::<Vec<_>>(),
+        "network_packets": list_network_packets(db)?.iter().map(network_packet_json).collect::<Vec<_>>(),
+        "network_messages": list_network_messages(db)?.iter().map(network_message_json).collect::<Vec<_>>(),
+        "network_seen_by": list_network_seen_by(db)?.iter().map(network_seen_by_json).collect::<Vec<_>>(),
+        "network_path": list_network_path(db)?.iter().map(network_path_json).collect::<Vec<_>>(),
+        "network_duplicate_log": list_network_duplicates(db)?.iter().map(network_duplicate_json).collect::<Vec<_>>(),
+        "network_poll_log": list_network_poll_logs(db)?.iter().map(network_poll_json).collect::<Vec<_>>(),
+        "network_area_subscriptions": list_network_subscriptions(db)?.iter().map(network_subscription_json).collect::<Vec<_>>(),
+        "network_nodelist": list_network_nodelist_entries(db)?.iter().map(network_nodelist_json).collect::<Vec<_>>()
     }))
 }
 
@@ -597,6 +1171,17 @@ fn ensure_import_target_is_schema_only(db: &Db) -> CliResult<()> {
         "doors",
         "door_runs",
         "audit_events",
+        "network_profiles",
+        "network_links",
+        "network_areas",
+        "network_packets",
+        "network_messages",
+        "network_seen_by",
+        "network_path",
+        "network_duplicate_log",
+        "network_poll_log",
+        "network_area_subscriptions",
+        "network_nodelist",
     ] {
         let count = db_scalar_i64(db, &format!("SELECT COUNT(*) FROM {table}"))?;
         if count > 0 {
@@ -651,6 +1236,15 @@ fn validate_import_payload(payload: &ImportSchema, current_schema_version: i64) 
                 message.id
             )));
         }
+        match message.author_kind.as_str() {
+            "local" | "network" | "system" => {}
+            other => {
+                return Err(CliError::Message(format!(
+                    "message {} has invalid author_kind {}",
+                    message.id, other
+                )));
+            }
+        }
     }
     for message in &payload.messages {
         if !area_ids.contains(message.area_id.as_str()) {
@@ -659,7 +1253,7 @@ fn validate_import_payload(payload: &ImportSchema, current_schema_version: i64) 
                 message.id, message.area_id
             )));
         }
-        if !user_ids.contains(message.author_user_id.as_str()) {
+        if message.author_kind == "local" && !user_ids.contains(message.author_user_id.as_str()) {
             return Err(CliError::Message(format!(
                 "message {} references missing author {}",
                 message.id, message.author_user_id
@@ -679,6 +1273,218 @@ fn validate_import_payload(payload: &ImportSchema, current_schema_version: i64) 
             return Err(CliError::Message(format!(
                 "message {} references missing parent message {}",
                 message.id, reply_to_id
+            )));
+        }
+    }
+
+    let mut network_profile_ids = HashSet::with_capacity(payload.network_profiles.len());
+    for profile in &payload.network_profiles {
+        if !network_profile_ids.insert(profile.id.clone()) {
+            return Err(CliError::Message(format!(
+                "duplicate network profile id {} in import payload",
+                profile.id
+            )));
+        }
+        if profile.adapter != "legacy-ftn" && profile.adapter != "oxidenet" {
+            return Err(CliError::Message(format!(
+                "network profile {} has invalid adapter {}",
+                profile.key, profile.adapter
+            )));
+        }
+        if profile.local_zone <= 0 || profile.local_net <= 0 || profile.local_node <= 0 {
+            return Err(CliError::Message(format!(
+                "network profile {} has invalid local address",
+                profile.key
+            )));
+        }
+    }
+
+    let mut network_link_ids = HashSet::with_capacity(payload.network_links.len());
+    for link in &payload.network_links {
+        if !network_link_ids.insert(link.id.clone()) {
+            return Err(CliError::Message(format!(
+                "duplicate network link id {} in import payload",
+                link.id
+            )));
+        }
+        if !network_profile_ids.contains(link.network_id.as_str()) {
+            return Err(CliError::Message(format!(
+                "network link {} references missing profile {}",
+                link.key, link.network_id
+            )));
+        }
+        if link.binkp_port <= 0 || link.binkp_port > 65_535 {
+            return Err(CliError::Message(format!(
+                "network link {} has invalid BinkP port {}",
+                link.key, link.binkp_port
+            )));
+        }
+        match link.compression.as_str() {
+            "none" | "zip" | "arj" => {}
+            other => {
+                return Err(CliError::Message(format!(
+                    "network link {} has invalid compression {}",
+                    link.key, other
+                )));
+            }
+        }
+        match link.transport_security.as_str() {
+            "tls_required" | "tls_opportunistic" | "plaintext_legacy" => {}
+            other => {
+                return Err(CliError::Message(format!(
+                    "network link {} has invalid transport_security {}",
+                    link.key, other
+                )));
+            }
+        }
+    }
+
+    let mut network_area_ids = HashSet::with_capacity(payload.network_areas.len());
+    for area in &payload.network_areas {
+        if !network_area_ids.insert(area.id.clone()) {
+            return Err(CliError::Message(format!(
+                "duplicate network area id {} in import payload",
+                area.id
+            )));
+        }
+        if !network_profile_ids.contains(area.network_id.as_str()) {
+            return Err(CliError::Message(format!(
+                "network area {} references missing profile {}",
+                area.area_tag, area.network_id
+            )));
+        }
+        if !area_ids.contains(area.local_area_id.as_str()) {
+            return Err(CliError::Message(format!(
+                "network area {} references missing local message area {}",
+                area.area_tag, area.local_area_id
+            )));
+        }
+    }
+
+    let mut network_packet_ids = HashSet::with_capacity(payload.network_packets.len());
+    for packet in &payload.network_packets {
+        if !network_packet_ids.insert(packet.id.clone()) {
+            return Err(CliError::Message(format!(
+                "duplicate network packet id {} in import payload",
+                packet.id
+            )));
+        }
+        if !network_profile_ids.contains(packet.network_id.as_str()) {
+            return Err(CliError::Message(format!(
+                "network packet {} references missing profile {}",
+                packet.id, packet.network_id
+            )));
+        }
+        if let Some(link_id) = packet.link_id.as_deref()
+            && !network_link_ids.contains(link_id)
+        {
+            return Err(CliError::Message(format!(
+                "network packet {} references missing link {}",
+                packet.id, link_id
+            )));
+        }
+    }
+
+    let mut network_message_ids = HashSet::with_capacity(payload.network_messages.len());
+    for message in &payload.network_messages {
+        if !network_message_ids.insert(message.id.clone()) {
+            return Err(CliError::Message(format!(
+                "duplicate network message id {} in import payload",
+                message.id
+            )));
+        }
+        if !network_profile_ids.contains(message.network_id.as_str()) {
+            return Err(CliError::Message(format!(
+                "network message {} references missing profile {}",
+                message.id, message.network_id
+            )));
+        }
+        if let Some(local_message_id) = message.local_message_id.as_deref()
+            && !message_ids.contains(local_message_id)
+        {
+            return Err(CliError::Message(format!(
+                "network message {} references missing local message {}",
+                message.id, local_message_id
+            )));
+        }
+        if let Some(packet_id) = message.packet_id.as_deref()
+            && !network_packet_ids.contains(packet_id)
+        {
+            return Err(CliError::Message(format!(
+                "network message {} references missing packet {}",
+                message.id, packet_id
+            )));
+        }
+    }
+
+    for seen_by in &payload.network_seen_by {
+        if !network_message_ids.contains(seen_by.message_id.as_str()) {
+            return Err(CliError::Message(format!(
+                "network seen-by row {} references missing message {}",
+                seen_by.id, seen_by.message_id
+            )));
+        }
+        if !network_profile_ids.contains(seen_by.network_id.as_str()) {
+            return Err(CliError::Message(format!(
+                "network seen-by row {} references missing profile {}",
+                seen_by.id, seen_by.network_id
+            )));
+        }
+    }
+
+    for path in &payload.network_path {
+        if !network_message_ids.contains(path.message_id.as_str()) {
+            return Err(CliError::Message(format!(
+                "network path row {} references missing message {}",
+                path.id, path.message_id
+            )));
+        }
+        if !network_profile_ids.contains(path.network_id.as_str()) {
+            return Err(CliError::Message(format!(
+                "network path row {} references missing profile {}",
+                path.id, path.network_id
+            )));
+        }
+    }
+
+    for duplicate in &payload.network_duplicate_log {
+        if !network_profile_ids.contains(duplicate.network_id.as_str()) {
+            return Err(CliError::Message(format!(
+                "network duplicate row {} references missing profile {}",
+                duplicate.id, duplicate.network_id
+            )));
+        }
+    }
+
+    for poll in &payload.network_poll_log {
+        if !network_link_ids.contains(poll.link_id.as_str()) {
+            return Err(CliError::Message(format!(
+                "network poll row {} references missing link {}",
+                poll.id, poll.link_id
+            )));
+        }
+    }
+
+    for subscription in &payload.network_area_subscriptions {
+        if !network_area_ids.contains(subscription.area_id.as_str()) {
+            return Err(CliError::Message(format!(
+                "network subscription {} references missing area {}",
+                subscription.id, subscription.area_id
+            )));
+        }
+        if !network_link_ids.contains(subscription.link_id.as_str()) {
+            return Err(CliError::Message(format!(
+                "network subscription {} references missing link {}",
+                subscription.id, subscription.link_id
+            )));
+        }
+    }
+
+    for entry in &payload.network_nodelist {
+        if !network_profile_ids.contains(entry.network_id.as_str()) {
+            return Err(CliError::Message(format!(
+                "network nodelist row {} references missing profile {}",
+                entry.id, entry.network_id
             )));
         }
     }
@@ -800,6 +1606,52 @@ fn perform_db_import(db: &oxidebbs_db::OxideDb, payload: ImportSchema) -> CliRes
     let door_runs: Vec<DoorRunRecord> = payload.door_runs.into_iter().map(Into::into).collect();
     let audit_events: Vec<AuditEventRecord> =
         payload.audit_events.into_iter().map(Into::into).collect();
+    let network_profiles: Vec<NetworkProfileRecord> = payload
+        .network_profiles
+        .into_iter()
+        .map(Into::into)
+        .collect();
+    let network_links: Vec<NetworkLinkRecord> =
+        payload.network_links.into_iter().map(Into::into).collect();
+    let network_areas: Vec<NetworkAreaRecord> =
+        payload.network_areas.into_iter().map(Into::into).collect();
+    let network_packets: Vec<NetworkPacketRecord> = payload
+        .network_packets
+        .into_iter()
+        .map(Into::into)
+        .collect();
+    let network_messages: Vec<NetworkMessageRecord> = payload
+        .network_messages
+        .into_iter()
+        .map(Into::into)
+        .collect();
+    let network_seen_by: Vec<NetworkSeenByNode> = payload
+        .network_seen_by
+        .into_iter()
+        .map(Into::into)
+        .collect();
+    let network_path: Vec<NetworkPathNode> =
+        payload.network_path.into_iter().map(Into::into).collect();
+    let network_duplicates: Vec<NetworkDuplicateLogRecord> = payload
+        .network_duplicate_log
+        .into_iter()
+        .map(Into::into)
+        .collect();
+    let network_poll_logs: Vec<NetworkPollLogRecord> = payload
+        .network_poll_log
+        .into_iter()
+        .map(Into::into)
+        .collect();
+    let network_subscriptions: Vec<NetworkSubscriptionRecord> = payload
+        .network_area_subscriptions
+        .into_iter()
+        .map(Into::into)
+        .collect();
+    let network_nodelist: Vec<NetworkNodelistRecord> = payload
+        .network_nodelist
+        .into_iter()
+        .map(Into::into)
+        .collect();
 
     let db = db.db();
     db.begin_transaction()?;
@@ -814,6 +1666,39 @@ fn perform_db_import(db: &oxidebbs_db::OxideDb, payload: ImportSchema) -> CliRes
             insert_message_area(db, area)?;
         }
         insert_messages_with_replies(db, &messages)?;
+        for profile in &network_profiles {
+            insert_network_profile(db, profile)?;
+        }
+        for link in &network_links {
+            insert_network_link(db, link)?;
+        }
+        for area in &network_areas {
+            insert_network_area(db, area)?;
+        }
+        for packet in &network_packets {
+            insert_network_packet(db, packet)?;
+        }
+        for message in &network_messages {
+            insert_network_message(db, message)?;
+        }
+        for seen_by in &network_seen_by {
+            insert_network_seen_by(db, seen_by)?;
+        }
+        for path in &network_path {
+            insert_network_path_node(db, path)?;
+        }
+        for duplicate in &network_duplicates {
+            insert_network_duplicate_log(db, duplicate)?;
+        }
+        for poll in &network_poll_logs {
+            insert_network_poll_log(db, poll)?;
+        }
+        for subscription in &network_subscriptions {
+            insert_network_subscription(db, subscription)?;
+        }
+        for entry in &network_nodelist {
+            insert_network_nodelist_entry(db, entry)?;
+        }
         for session in &sessions {
             insert_session(db, session)?;
         }
@@ -1055,6 +1940,9 @@ mod tests {
             id: id.to_string(),
             area_id: area_id.to_string(),
             author_user_id: author_id.to_string(),
+            author_kind: "local".to_string(),
+            author_display_name: String::new(),
+            author_network_address: None,
             to_user_id: None,
             subject: "Hello".to_string(),
             body: "Body".to_string(),

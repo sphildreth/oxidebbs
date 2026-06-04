@@ -841,6 +841,9 @@ pub(crate) fn message_json(message: &oxidebbs_db::MessageRecord) -> JsonValue {
         "id": message.id,
         "area_id": message.area_id,
         "author_user_id": message.author_user_id,
+        "author_kind": message.author_kind,
+        "author_display_name": message.author_display_name,
+        "author_network_address": message.author_network_address,
         "to_user_id": message.to_user_id,
         "subject": message.subject,
         "body": message.body,
@@ -944,6 +947,9 @@ pub(crate) fn print_message(message: &oxidebbs_db::MessageRecord) {
     println!("id: {}", message.id);
     println!("area: {}", message.area_id);
     println!("author: {}", message.author_user_id);
+    println!("author kind: {}", message.author_kind);
+    println!("author display: {}", message.author_display_name);
+    println!("author network: {:?}", message.author_network_address);
     println!("to: {:?}", message.to_user_id);
     println!("created: {}", message.created_at);
     println!("visibility: {}", message.visibility);

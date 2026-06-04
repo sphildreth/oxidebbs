@@ -19,6 +19,9 @@ pub struct MessageRecord {
     pub id: String,
     pub area_id: String,
     pub author_user_id: String,
+    pub author_kind: String,
+    pub author_display_name: String,
+    pub author_network_address: Option<String>,
     pub to_user_id: Option<String>,
     pub subject: String,
     pub body: String,
@@ -67,21 +70,45 @@ pub fn find_message_area_by_key(db: &Db, key: &str) -> decentdb::Result<Option<M
 
 pub fn insert_message(db: &Db, message: &MessageRecord) -> decentdb::Result<()> {
     db.execute_with_params(
-        "INSERT INTO messages (id, area_id, author_user_id, to_user_id, subject, body, created_at, reply_to_id, network_message_id, visibility)
-         VALUES (UUID_PARSE($1), UUID_PARSE($2), UUID_PARSE($3), UUID_PARSE($4), $5, $6, $7, UUID_PARSE($8), $9, $10)",
+        "INSERT INTO messages (
+            id, area_id, author_user_id, to_user_id, subject, body, created_at,
+            reply_to_id, network_message_id, author_kind, author_display_name,
+            author_network_address, visibility
+         )
+         VALUES (
+            UUID_PARSE($1), UUID_PARSE($2), UUID_PARSE($3), UUID_PARSE($4),
+            $5, $6, $7, UUID_PARSE($8), $9, $10,
+            COALESCE(NULLIF($11, ''), (SELECT alias FROM users WHERE id = UUID_PARSE($3)), ''),
+            $12, $13
+         )",
         &[
             Value::Text(message.id.clone()),
             Value::Text(message.area_id.clone()),
-            Value::Text(message.author_user_id.clone()),
-            message.to_user_id.as_ref().map(|id| Value::Text(id.clone())).unwrap_or(Value::Null),
+            text_uuid_or_null(&message.author_user_id),
+            message
+                .to_user_id
+                .as_ref()
+                .map(|id| Value::Text(id.clone()))
+                .unwrap_or(Value::Null),
             Value::Text(message.subject.clone()),
             Value::Text(message.body.clone()),
             Value::Text(message.created_at.clone()),
-            message.reply_to_id.as_ref().map(|id| Value::Text(id.clone())).unwrap_or(Value::Null),
+            message
+                .reply_to_id
+                .as_ref()
+                .map(|id| Value::Text(id.clone()))
+                .unwrap_or(Value::Null),
             message
                 .network_message_id
                 .as_ref()
                 .map(|id| Value::Text(id.clone()))
+                .unwrap_or(Value::Null),
+            Value::Text(message.author_kind.clone()),
+            Value::Text(message.author_display_name.clone()),
+            message
+                .author_network_address
+                .as_ref()
+                .map(|address| Value::Text(address.clone()))
                 .unwrap_or(Value::Null),
             Value::Text(message.visibility.clone()),
         ],
@@ -91,7 +118,7 @@ pub fn insert_message(db: &Db, message: &MessageRecord) -> decentdb::Result<()> 
 
 pub fn list_messages_in_area(db: &Db, area_id: &str) -> decentdb::Result<Vec<MessageRecord>> {
     let result = db.execute_with_params(
-        "SELECT UUID_TO_STRING(id), UUID_TO_STRING(area_id), UUID_TO_STRING(author_user_id), UUID_TO_STRING(to_user_id), subject, body, CAST(created_at AS TEXT), UUID_TO_STRING(reply_to_id), network_message_id, visibility
+        "SELECT UUID_TO_STRING(id), UUID_TO_STRING(area_id), UUID_TO_STRING(author_user_id), author_kind, author_display_name, author_network_address, UUID_TO_STRING(to_user_id), subject, body, CAST(created_at AS TEXT), UUID_TO_STRING(reply_to_id), network_message_id, visibility
          FROM messages WHERE area_id = UUID_PARSE($1) ORDER BY created_at",
         &[Value::Text(area_id.to_string())],
     )?;
@@ -104,7 +131,7 @@ pub fn list_visible_messages_in_area(
     user_security_level: i64,
 ) -> decentdb::Result<Vec<MessageRecord>> {
     let result = db.execute_with_params(
-        "SELECT UUID_TO_STRING(messages.id), UUID_TO_STRING(messages.area_id), UUID_TO_STRING(messages.author_user_id), UUID_TO_STRING(messages.to_user_id), messages.subject, messages.body, CAST(messages.created_at AS TEXT), UUID_TO_STRING(messages.reply_to_id), messages.network_message_id, messages.visibility
+        "SELECT UUID_TO_STRING(messages.id), UUID_TO_STRING(messages.area_id), UUID_TO_STRING(messages.author_user_id), messages.author_kind, messages.author_display_name, messages.author_network_address, UUID_TO_STRING(messages.to_user_id), messages.subject, messages.body, CAST(messages.created_at AS TEXT), UUID_TO_STRING(messages.reply_to_id), messages.network_message_id, messages.visibility
          FROM messages
          JOIN message_areas ON message_areas.id = messages.area_id
          WHERE messages.area_id = UUID_PARSE($1)
@@ -122,7 +149,7 @@ pub fn list_visible_messages_in_area(
 
 pub fn list_messages(db: &Db) -> decentdb::Result<Vec<MessageRecord>> {
     let result = db.execute(
-        "SELECT UUID_TO_STRING(id), UUID_TO_STRING(area_id), UUID_TO_STRING(author_user_id), UUID_TO_STRING(to_user_id), subject, body, CAST(created_at AS TEXT), UUID_TO_STRING(reply_to_id), network_message_id, visibility
+        "SELECT UUID_TO_STRING(id), UUID_TO_STRING(area_id), UUID_TO_STRING(author_user_id), author_kind, author_display_name, author_network_address, UUID_TO_STRING(to_user_id), subject, body, CAST(created_at AS TEXT), UUID_TO_STRING(reply_to_id), network_message_id, visibility
          FROM messages ORDER BY created_at DESC",
     )?;
     Ok(result.rows().iter().map(row_to_message).collect())
@@ -130,7 +157,7 @@ pub fn list_messages(db: &Db) -> decentdb::Result<Vec<MessageRecord>> {
 
 pub fn find_message_by_id(db: &Db, message_id: &str) -> decentdb::Result<Option<MessageRecord>> {
     let result = db.execute_with_params(
-        "SELECT UUID_TO_STRING(id), UUID_TO_STRING(area_id), UUID_TO_STRING(author_user_id), UUID_TO_STRING(to_user_id), subject, body, CAST(created_at AS TEXT), UUID_TO_STRING(reply_to_id), network_message_id, visibility
+        "SELECT UUID_TO_STRING(id), UUID_TO_STRING(area_id), UUID_TO_STRING(author_user_id), author_kind, author_display_name, author_network_address, UUID_TO_STRING(to_user_id), subject, body, CAST(created_at AS TEXT), UUID_TO_STRING(reply_to_id), network_message_id, visibility
          FROM messages WHERE id = UUID_PARSE($1)",
         &[Value::Text(message_id.to_string())],
     )?;
@@ -221,13 +248,16 @@ fn row_to_message(row: &decentdb::QueryRow) -> MessageRecord {
         id: text_value(&values[0]),
         area_id: text_value(&values[1]),
         author_user_id: text_value(&values[2]),
-        to_user_id: opt_text_value(&values[3]),
-        subject: text_value(&values[4]),
-        body: text_value(&values[5]),
-        created_at: text_value(&values[6]),
-        reply_to_id: opt_text_value(&values[7]),
-        network_message_id: opt_text_value(&values[8]),
-        visibility: text_value(&values[9]),
+        author_kind: text_value(&values[3]),
+        author_display_name: text_value(&values[4]),
+        author_network_address: opt_text_value(&values[5]),
+        to_user_id: opt_text_value(&values[6]),
+        subject: text_value(&values[7]),
+        body: text_value(&values[8]),
+        created_at: text_value(&values[9]),
+        reply_to_id: opt_text_value(&values[10]),
+        network_message_id: opt_text_value(&values[11]),
+        visibility: text_value(&values[12]),
     }
 }
 
@@ -242,6 +272,14 @@ fn opt_text_value(value: &Value) -> Option<String> {
     match value {
         Value::Text(text) => Some(text.clone()),
         _ => None,
+    }
+}
+
+fn text_uuid_or_null(value: &str) -> Value {
+    if value.trim().is_empty() {
+        Value::Null
+    } else {
+        Value::Text(value.to_string())
     }
 }
 
@@ -320,6 +358,9 @@ mod tests {
             id: id.to_string(),
             area_id: area_id.to_string(),
             author_user_id: USER_1.to_string(),
+            author_kind: "local".to_string(),
+            author_display_name: String::new(),
+            author_network_address: None,
             to_user_id: None,
             subject: "Subject".to_string(),
             body: "Body".to_string(),
@@ -352,6 +393,9 @@ mod tests {
 
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].id, MSG_1);
+        assert_eq!(messages[0].author_kind, "local");
+        assert_eq!(messages[0].author_display_name, "alice");
+        assert_eq!(messages[0].author_network_address, None);
     }
 
     #[test]
@@ -365,6 +409,27 @@ mod tests {
 
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].id, MSG_1);
+    }
+
+    #[test]
+    fn inserts_network_author_message_without_local_author_user() {
+        let db = test_db();
+        insert_message_area(&db, &sample_area("general")).expect("insert area");
+        let mut message = sample_message(MSG_1, AREA_GENERAL);
+        message.author_user_id = String::new();
+        message.author_kind = "network".to_string();
+        message.author_display_name = "Remote Alice".to_string();
+        message.author_network_address = Some("1:105/42".to_string());
+        insert_message(&db, &message).expect("insert network message");
+
+        let found = find_message_by_id(&db, MSG_1)
+            .expect("find")
+            .expect("message exists");
+
+        assert_eq!(found.author_user_id, "");
+        assert_eq!(found.author_kind, "network");
+        assert_eq!(found.author_display_name, "Remote Alice");
+        assert_eq!(found.author_network_address.as_deref(), Some("1:105/42"));
     }
 
     #[test]

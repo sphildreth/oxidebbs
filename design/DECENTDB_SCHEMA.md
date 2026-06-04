@@ -4,9 +4,9 @@ OxideBBS uses DecentDB as the only system database. The schema should lean into
 DecentDB's PostgreSQL-like type system instead of treating it as a SQLite-style
 string store.
 
-Current schema version: `4`
+Current schema version: `5`
 
-Schema version `4` is the current v1 release-line schema. The initializer now upgrades
+Schema version `5` is the current v1.2 foundation schema. The initializer upgrades
 supported older development schemas and keeps development upgrades safe:
 
 - schema `2 -> 3` is migratable. The migration adds `message_areas.enabled` with
@@ -16,6 +16,11 @@ supported older development schemas and keeps development upgrades safe:
   `users.alias_normalized`, rebuilds user-related foreign-key tables so new rows
   reference the v4 `users` table, creates `auth_attempts`, and updates
   `system_config.schema_version` to `4`.
+- schema `4 -> 5` is migratable. The migration rebuilds `messages` so
+  `author_user_id` is nullable and external author metadata is first-class,
+  backfills existing local rows with `author_kind = 'local'` and
+  `author_display_name` from the referenced user alias, creates the shared
+  `network_*` tables, and updates `system_config.schema_version` to `5`.
 - the pinned DecentDB rejects direct `ALTER TABLE ... ADD COLUMN` on checked
   tables, so migrations use table-rebuild strategies. Renamed pre-upgrade
   tables are retained under `oxidebbs_schema*_` archive names where DecentDB
@@ -40,12 +45,12 @@ Open and startup flow:
 ## Restore and Compaction Semantics
 
 - `db import --format json <path>` is a full, whole-database restore. It expects a
-  schema `4` payload and fails fast on schema mismatch or malformed foreign-key
+  schema `5` payload and fails fast on schema mismatch or malformed foreign-key
   references.
 - Restore targets must be schema-only: existing rows are only allowed in
   `system_config` for the `schema_version` marker.
 - Restore order is dependency-aware:
-  `users -> auth_attempts -> message_areas -> messages -> sessions -> doors -> door_runs -> audit_events`.
+  `users -> auth_attempts -> message_areas -> messages -> network_profiles -> network_links -> network_areas -> network_packets -> network_messages -> network_seen_by -> network_path -> network_duplicate_log -> network_poll_log -> network_area_subscriptions -> network_nodelist -> sessions -> doors -> door_runs -> audit_events`.
 - Restores are executed inside one DecentDB transaction; validation is complete before
   any rows are written.
 - `db compact` is intentionally unsupported in this phase because DecentDB does not
@@ -170,30 +175,275 @@ Constraints:
 ```sql
 id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID()
 area_id UUID NOT NULL REFERENCES message_areas(id) ON DELETE CASCADE
-author_user_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT
+author_user_id UUID REFERENCES users(id) ON DELETE RESTRICT
 to_user_id UUID REFERENCES users(id) ON DELETE SET NULL
 subject TEXT NOT NULL
 body TEXT NOT NULL
 created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 reply_to_id UUID REFERENCES messages(id) ON DELETE SET NULL
 network_message_id TEXT
+author_kind TEXT NOT NULL DEFAULT 'local'
+author_display_name TEXT NOT NULL DEFAULT ''
+author_network_address TEXT
 visibility TEXT NOT NULL DEFAULT 'normal'
 ```
 
 Constraints:
 
 - subject must not be blank
+- author kind is `local`, `network`, or `system`
+- local rows use `author_user_id`; network rows may leave it `NULL` and use
+  `author_display_name` plus `author_network_address`
 - visibility is `normal`, `deleted`, or `hidden`
 
 Indexes:
 
 - `(area_id, created_at)`
 - `author_user_id`
+- `author_kind`
 - `to_user_id`
 
 Caller message reads use a SQL-side visibility query that joins
 `message_areas` and filters disabled areas, area read security, and non-normal
 message visibility before rows are returned to the server.
+
+### network_profiles
+
+```sql
+id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID()
+key TEXT NOT NULL UNIQUE
+name TEXT NOT NULL
+adapter TEXT NOT NULL DEFAULT 'legacy-ftn'
+local_zone INT NOT NULL
+local_net INT NOT NULL
+local_node INT NOT NULL
+local_point INT NOT NULL DEFAULT 0
+enabled BOOL NOT NULL DEFAULT TRUE
+created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+```
+
+Constraints:
+
+- key and name must not be blank
+- adapter is `legacy-ftn` or `oxidenet`
+- local zone, net, and node are positive
+- local point cannot be negative
+
+### network_links
+
+```sql
+id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID()
+key TEXT NOT NULL UNIQUE
+network_id UUID NOT NULL REFERENCES network_profiles(id) ON DELETE CASCADE
+address TEXT NOT NULL
+host TEXT NOT NULL
+binkp_port INT NOT NULL DEFAULT 24554
+password TEXT NOT NULL
+poll_schedule_minutes INT NOT NULL DEFAULT 60
+compression TEXT NOT NULL DEFAULT 'zip'
+transport_security TEXT NOT NULL DEFAULT 'tls_required'
+enabled BOOL NOT NULL DEFAULT TRUE
+created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+```
+
+Constraints:
+
+- key, address, and host must not be blank
+- BinkP ports are `1..65535`
+- poll intervals are positive
+- compression is `none`, `zip`, or `arj`
+- transport security is `tls_required`, `tls_opportunistic`, or
+  `plaintext_legacy`
+
+### network_areas
+
+```sql
+id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID()
+network_id UUID NOT NULL REFERENCES network_profiles(id) ON DELETE CASCADE
+area_tag TEXT NOT NULL
+local_area_id UUID NOT NULL REFERENCES message_areas(id) ON DELETE CASCADE
+description TEXT NOT NULL DEFAULT ''
+read_only BOOL NOT NULL DEFAULT FALSE
+subscribed BOOL NOT NULL DEFAULT TRUE
+created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+UNIQUE (network_id, area_tag)
+UNIQUE (network_id, local_area_id)
+```
+
+Constraints:
+
+- area tags must not be blank
+- one network profile maps a tag to one local message area
+
+### network_packets
+
+```sql
+id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID()
+network_id UUID NOT NULL REFERENCES network_profiles(id) ON DELETE CASCADE
+direction TEXT NOT NULL
+link_id UUID REFERENCES network_links(id) ON DELETE SET NULL
+filename TEXT NOT NULL
+sha256 TEXT NOT NULL
+size_bytes INT NOT NULL DEFAULT 0
+status TEXT NOT NULL DEFAULT 'pending'
+error_message TEXT
+received_at TIMESTAMPTZ
+processed_at TIMESTAMPTZ
+created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+```
+
+Constraints:
+
+- direction is `inbound` or `outbound`
+- filenames and SHA-256 values must not be blank
+- byte sizes cannot be negative
+- status is `pending`, `processing`, `processed`, `quarantined`, or `failed`
+
+### network_messages
+
+```sql
+id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID()
+network_id UUID NOT NULL REFERENCES network_profiles(id) ON DELETE CASCADE
+local_message_id UUID REFERENCES messages(id) ON DELETE SET NULL
+message_type TEXT NOT NULL DEFAULT 'echomail'
+area_tag TEXT
+origin_address TEXT NOT NULL
+destination_address TEXT
+from_name TEXT NOT NULL
+to_name TEXT
+subject TEXT NOT NULL
+raw_text BLOB NOT NULL
+display_body TEXT NOT NULL DEFAULT ''
+msgid TEXT
+replyid TEXT
+created_at TIMESTAMPTZ NOT NULL
+imported_at TIMESTAMPTZ
+exported_at TIMESTAMPTZ
+duplicate_hash TEXT
+packet_id UUID REFERENCES network_packets(id) ON DELETE SET NULL
+status TEXT NOT NULL DEFAULT 'imported'
+```
+
+Constraints:
+
+- message type is `echomail`, `netmail`, or `local`
+- origin address, sender name, and subject must not be blank
+- raw network text is stored as bytes in `raw_text`; decoded UI/search text is
+  stored separately in `display_body`
+- status is `imported`, `exported`, `quarantined`, or `duplicate`
+
+### network_seen_by
+
+```sql
+id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID()
+message_id UUID NOT NULL REFERENCES network_messages(id) ON DELETE CASCADE
+network_id UUID NOT NULL REFERENCES network_profiles(id) ON DELETE CASCADE
+zone INT NOT NULL
+net INT NOT NULL
+node INT NOT NULL
+```
+
+Constraints:
+
+- zone, net, and node are positive
+
+### network_path
+
+```sql
+id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID()
+message_id UUID NOT NULL REFERENCES network_messages(id) ON DELETE CASCADE
+network_id UUID NOT NULL REFERENCES network_profiles(id) ON DELETE CASCADE
+sequence INT NOT NULL
+zone INT NOT NULL
+net INT NOT NULL
+node INT NOT NULL
+```
+
+Constraints:
+
+- path sequence cannot be negative
+- zone, net, and node are positive
+
+### network_duplicate_log
+
+```sql
+id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID()
+network_id UUID NOT NULL REFERENCES network_profiles(id) ON DELETE CASCADE
+duplicate_hash TEXT NOT NULL
+msgid TEXT
+area_tag TEXT
+origin_address TEXT NOT NULL
+detected_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+action TEXT NOT NULL DEFAULT 'rejected'
+```
+
+Constraints:
+
+- duplicate hashes must not be blank
+- action is `rejected`, `quarantined`, or `replaced`
+
+### network_poll_log
+
+```sql
+id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID()
+link_id UUID NOT NULL REFERENCES network_links(id) ON DELETE CASCADE
+started_at TIMESTAMPTZ NOT NULL
+ended_at TIMESTAMPTZ
+direction TEXT NOT NULL
+status TEXT NOT NULL DEFAULT 'started'
+bytes_in INT NOT NULL DEFAULT 0
+bytes_out INT NOT NULL DEFAULT 0
+packets_in INT NOT NULL DEFAULT 0
+packets_out INT NOT NULL DEFAULT 0
+error_message TEXT
+```
+
+Constraints:
+
+- direction is `inbound`, `outbound`, or `bidirectional`
+- status is `started`, `success`, `failed`, or `timeout`
+- byte and packet counters cannot be negative
+
+### network_area_subscriptions
+
+```sql
+id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID()
+area_id UUID NOT NULL REFERENCES network_areas(id) ON DELETE CASCADE
+link_id UUID NOT NULL REFERENCES network_links(id) ON DELETE CASCADE
+subscribed BOOL NOT NULL DEFAULT TRUE
+subscribed_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+unsubscribed_at TIMESTAMPTZ
+source TEXT NOT NULL DEFAULT 'manual'
+UNIQUE (area_id, link_id)
+```
+
+Constraints:
+
+- source is `manual`, `areafix`, or `default`
+
+### network_nodelist
+
+```sql
+id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID()
+network_id UUID NOT NULL REFERENCES network_profiles(id) ON DELETE CASCADE
+zone INT NOT NULL
+net INT NOT NULL
+node INT NOT NULL
+point INT NOT NULL DEFAULT 0
+parsed_name TEXT
+raw_entry TEXT NOT NULL
+updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+UNIQUE (network_id, zone, net, node, point)
+```
+
+Constraints:
+
+- zone, net, and node are positive
+- point cannot be negative
+- raw nodelist entries must not be blank
 
 ### sessions
 
@@ -274,5 +524,3 @@ These domains are still design-level and should follow the same native-type and
 foreign-key rules when implemented:
 
 - `nodes`
-- `network_config`
-- FTN/OxideNet packet import/export tables

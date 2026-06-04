@@ -26,7 +26,7 @@ Status values:
 | --- | --- | --- | --- |
 | P0 | Scope freeze and ADR baseline | Complete | This plan and ADRs 0018 through 0032 exist. |
 | P1 | Release hygiene and stale-future sweep | Complete | All docs and examples name v1.2 scope accurately before coding starts. |
-| P2 | Schema, config, and DbWriter foundation | Planned | Schema migration, shared config, and ordered write service are in place. |
+| P2 | Schema, config, and DbWriter foundation | Complete | Schema migration, shared config, and ordered write service are in place. |
 | P3 | Caller authorization and flow polish | Planned | Menu security, caller sysop submenu, and logoff assets work. |
 | P4 | Serial/modem transport and file transfers | Planned | Serial callers, ZMODEM caller transfers, and XMODEM-CRC fallback transfers pass integration tests. |
 | P5 | Door ecosystem expansion | Planned | Mutable doors, extra drop files, DOS/Pascal-compatible door tooling, and remote providers work. |
@@ -192,7 +192,7 @@ No code is changed in P0.
 
 ## P1: Release Hygiene And Stale-Future Sweep
 
-Status: Planned
+Status: Complete
 
 Objective: Prepare the repository for a long v1.2 implementation without stale
 documentation misleading agents.

@@ -155,7 +155,9 @@ Initial storage domains:
 - door_runs
 - audit_events
 - system_config
-- network_config
+- network_profiles, network_links, network_areas, network_packets,
+  network_messages, network_seen_by, network_path, network_duplicate_log,
+  network_poll_log, network_area_subscriptions, and network_nodelist
 
 Implemented DecentDB tables must use DecentDB-native types where the domain is
 known. Entity IDs use `UUID`, lifecycle fields use `TIMESTAMPTZ`, caller peer IP
@@ -175,7 +177,8 @@ Do not introduce SQLite, PostgreSQL, MySQL, Redis, or an ORM.
 
 Use a deliberate write model to avoid chaotic concurrent writes from many sessions.
 
-Longer term, the preferred pattern is:
+The v1.2 write foundation includes a single-writer service for session,
+message, and network work that must be serialized:
 
 ```text
 Session tasks
@@ -187,12 +190,11 @@ single DbWriter service
 DecentDB transaction
 ```
 
-The current v1 implementation uses direct repository writes through the shared
-DecentDB wrapper and keeps multi-row restore operations inside explicit
-transactions. This is acceptable for the current local telnet scope because the
-repository layer owns the SQL boundary and the CI suite exercises the active
-write paths. A single `DbWriter` service remains the next scaling step if
-write contention or transaction serialization becomes a practical issue.
+`DbWriter` accepts bounded queued closures, runs each closure in a DecentDB
+transaction, preserves submission order, reports queue backpressure, rolls back
+failed writes, and drains accepted work during shutdown. Direct repository APIs
+remain available for setup, import/restore, isolated CLI commands, and focused
+tests where the caller owns transaction boundaries.
 
 ## 8. Door runner design
 

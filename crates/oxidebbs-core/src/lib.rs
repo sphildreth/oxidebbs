@@ -10,6 +10,6 @@ pub mod session;
 pub mod user;
 
 pub use network::{
-    DuplicateDetectionKey, EchoMailAreaMapping, FtnAddress, NetworkAddressError, NetMailMessage,
+    DuplicateDetectionKey, EchoMailAreaMapping, FtnAddress, NetMailMessage, NetworkAddressError,
     PacketBoundary, PacketDirection,
 };

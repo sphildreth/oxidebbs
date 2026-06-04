@@ -6,11 +6,11 @@ pub use decentdb::{Db, DbConfig, DbError, QueryResult, QueryRow, Value};
 
 mod audit_repo;
 mod auth_repo;
+mod db_writer;
 mod door_repo;
 mod message_repo;
-mod db_writer;
-mod network_repo;
 mod migrations;
+mod network_repo;
 mod schema;
 mod session_repo;
 mod user_repo;
@@ -25,6 +25,7 @@ pub use auth_repo::{
     AuthAttemptRecord, clear_auth_attempt, find_auth_attempt, insert_auth_attempt,
     is_auth_scope_locked, list_auth_attempts, record_auth_failure,
 };
+pub use db_writer::{DbWriteTicket, DbWriter, DbWriterError, DbWriterResult};
 pub use door_repo::{
     DoorDefinitionRecord, DoorRunFinish, DoorRunRecord, find_door_by_key, find_door_run_by_id,
     finish_door_run, insert_door_definition, insert_door_run, list_door_definitions,
@@ -36,27 +37,21 @@ pub use message_repo::{
     list_visible_messages_in_area, move_message_to_area, update_message_area_enabled,
     update_message_area_levels, update_message_visibility,
 };
-pub use db_writer::{
-    DbWriter,
-    DbWriterError,
-    DbWriterResult,
-    DbWriteTicket,
-};
+pub use migrations::migrate_to_current;
 pub use network_repo::{
     NetworkAreaRecord, NetworkDuplicateLogRecord, NetworkLinkRecord, NetworkMessageRecord,
     NetworkNodelistRecord, NetworkPacketRecord, NetworkPathNode, NetworkPollLogRecord,
     NetworkProfileRecord, NetworkSeenByNode, NetworkSubscriptionRecord,
-    find_network_area_by_tag_and_profile, find_network_link_by_key,
-    find_network_profile_by_key, insert_network_area, insert_network_duplicate_log,
+    find_network_area_by_tag_and_profile, find_network_link_by_key, find_network_profile_by_key,
+    finish_network_packet, finish_network_poll, insert_network_area, insert_network_duplicate_log,
     insert_network_link, insert_network_message, insert_network_nodelist_entry,
-    insert_network_packet, insert_network_path_node, insert_network_profile,
-    insert_network_seen_by_node, insert_network_subscription, insert_network_path,
-    insert_network_seen_by, list_network_areas, list_network_duplicates, list_network_links,
-    list_network_messages, list_network_nodelist_entries, list_network_packets,
-    list_network_profiles, list_network_poll_logs, list_network_seen_by,
-    list_network_subscriptions, finish_network_packet, finish_network_poll, set_network_profile_enabled,
+    insert_network_packet, insert_network_path, insert_network_path_node, insert_network_poll_log,
+    insert_network_profile, insert_network_seen_by, insert_network_seen_by_node,
+    insert_network_subscription, list_network_areas, list_network_duplicates, list_network_links,
+    list_network_messages, list_network_nodelist_entries, list_network_packets, list_network_path,
+    list_network_poll_logs, list_network_profiles, list_network_seen_by,
+    list_network_subscriptions, set_network_profile_enabled,
 };
-pub use migrations::migrate_to_current;
 pub use schema::schema_version as read_schema_version;
 pub use session_repo::{
     SessionRecord, end_session, find_active_session_by_node, insert_session, list_active_sessions,
