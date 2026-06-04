@@ -12,4 +12,10 @@ pub enum FtnError {
 
     #[error("protocol error: {0}")]
     Protocol(String),
+
+    #[error("bundle error: {0}")]
+    Bundle(#[from] crate::bundle::BundleError),
+
+    #[error("database error: {0}")]
+    Database(#[from] oxidebbs_db::DbError),
 }

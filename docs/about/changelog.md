@@ -26,6 +26,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Optional DOSEMU2 smoke workflow that skips cleanly when the runner cannot provide DOSEMU2.
 - BBSLink and DoorParty-style remote door provider adapters with local dry-run
   validation and redacted provider-secret display helpers.
+- `oxidebbs-oxidenet` address classification/allocation helpers, PRD-aligned
+  application lifecycle statuses, and validated config-package structs for
+  OxideNet onboarding package data.
+- OxideNet DecentDB registry tables and repository APIs for applications,
+  assigned nodes, and credential hashes, with schema-8 backup/restore support.
 - Exact CRLF byte-output tests for every currently supported door drop-file
   format.
 - `files` sysop CLI group for file-area list/add/edit, file list/import/remove,
@@ -39,6 +44,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Safe ZIP arcmail packet extraction in `oxidebbs-ftn`, limited to top-level
   `.pkt` entries with typed errors for corrupt, empty, nested, duplicate, and
   overwrite-risk archives.
+- ZIP arcmail bundle creation in `oxidebbs-ftn` with deterministic `.pkt` entry
+  ordering plus empty-input, duplicate-name, non-packet, and overwrite guards.
 - `oxidebbs-ftn` full-nodelist parser for common Zone/Host/node/point rows.
 - `oxidebbs-ftn` pure `NetmailRouter` and `RoutingDecision` coverage for
   local, direct, hub-routed, crash, hold, and unknown netmail destinations.
@@ -52,6 +59,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   visibility and safe DecentDB-only packet state controls.
 - `oxidebbs-server net nodelist apply-diff`, backed by conservative FTS-style
   `NODEDIFF.xxx` apply support in `oxidebbs-ftn`.
+- `oxidebbs-server net toss <network>` for inbound raw `.pkt` and safe ZIP
+  packet-bundle processing, including packet password/origin validation,
+  DecentDB packet/message state, duplicate skips, SEEN-BY/PATH storage, archive
+  movement, and quarantine movement.
+- `oxidebbs-server net scan <network>` for subscribed local echomail export into
+  outbound Type-2+ packet files with DecentDB packet/message state.
+- `oxidebbs-server net poll <link|--all>` plaintext-legacy BinkP client polling
+  that sends ready outbound packets, receives inbound files into the profile
+  inbound drop directory, updates packet state, and records poll logs.
+- `oxidebbs-server net areafix send <link>` for local AreaFix command
+  execution with link-password authentication, DecentDB subscription mutation,
+  audit events, and generated reply text.
 - `oxidebbs-binkp` command/data frame parser/writer plus client/server
   handshake primitives with address/password validation.
 - `oxidebbs-binkp` `M_FILE` offer parsing/writing, bounded data-frame
@@ -69,20 +88,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Public docs pages for doors, serial/modem transport, caller file-transfer
   status, and OxideNet status, with navigation entries.
 - Disabled-by-default `[admin_web]` configuration model with validation for
-  loopback/TLS, read-only mode, CSRF/replay timing, and rate-limit settings.
+  loopback-only enabled binds, public-status opt-in, origin allowlists,
+  reverse-proxy TLS policy, read-only mode, CSRF/replay timing, and rate-limit
+  settings.
+- Reusable read-only admin status JSON payload helper shared by the existing
+  `status --json` command and the opt-in loopback `/status` route.
 - C64/C64 Ultimate caller compatibility requirement with a named `c64`
   terminal profile, 40-column plain fallback assets, C64 terminal-type
   detection, CR/LF and backspace/delete coverage, and terminal profile config
   contract.
 
 ### Changed
-- Schema version bumped to 7; schema `5` added shared network and message-author
-  foundation tables, schema `6` added `doors.min_security_level`, and schema `7`
-  added file-transfer storage tables.
+- Schema version bumped to 8; schema `5` added shared network and message-author
+  foundation tables, schema `6` added `doors.min_security_level`, schema `7`
+  added file-transfer storage tables, and schema `8` added OxideNet registry
+  storage with JSON backup/restore coverage for application, node, and
+  credential-hash rows.
 - Menu items and door definitions now carry `min_security_level` (defaults to 0).
 - The caller menu and door dispatch enforce security levels before executing actions.
 - Live caller door validation now accepts every drop-file format rendered by
   `oxidebbs-door`.
+- Exclusive local doors now block a second launch while the same door has an
+  unfinished DecentDB `door_runs` row.
 - Release workflow manual dispatch now defaults to the `v1.2.0` release line and smokes packaged binaries before upload.
 - File-entry removal from the sysop CLI is a safe unapprove operation that
   requires a reason and preserves stored file bytes.
@@ -91,10 +118,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - User, message, message-area, door, file, nodelist, and manual network
   subscription CLI write commands now audit successful mutations where DecentDB
   audit storage is available.
-- `net toss`, `net scan`, and non-dry-run `net poll` now return explicit
-  not-implemented errors until the FTN tosser/scanner/BinkP session engine
-  exists.
-- Remote admin remains config-only and disabled; no HTTP listener is started.
+- Caller-session helpers now operate over the shared byte `Transport` trait, so
+  the login/menu flow can be reused by future serial/modem listeners without
+  changing telnet behavior.
+- Sysop TUI read-only mode now blocks Dashboard send/broadcast shortcuts and
+  mutating modal/command-palette submissions while preserving navigation,
+  filters, refresh, and quit confirmation.
+- TLS-required and TLS-opportunistic non-dry-run `net poll` now return explicit
+  errors until native BinkP TLS session support exists.
+- Remote admin remains disabled by default, but `[admin_web]` can now start an
+  opt-in loopback read-only `/status` endpoint. Authenticated admin views and
+  remote mutations are still not implemented.
 
 ## [1.1.0] - 2026-06-03
 

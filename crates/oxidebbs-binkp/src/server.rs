@@ -58,6 +58,21 @@ impl BinkpServer {
         crate::transfer::send_batch(writer, files)
     }
 
+    /// Send a complete BinkP batch, waiting for one `M_GOT` acknowledgement per
+    /// file before terminating the batch with `M_EOB`.
+    ///
+    /// # Errors
+    ///
+    /// Returns protocol errors for invalid metadata, bad acknowledgements, or
+    /// I/O errors from the stream.
+    pub fn send_batch_with_acknowledgements<S: Read + Write>(
+        &self,
+        stream: &mut S,
+        files: &[BinkpOutboundFile],
+    ) -> Result<(), BinkpError> {
+        crate::transfer::send_batch_with_acknowledgements(stream, files)
+    }
+
     /// Receive the next BinkP file, or `None` when the peer ends the batch.
     ///
     /// # Errors

@@ -48,7 +48,7 @@ The wizard asks for:
 Press Enter at a prompt to accept the value shown in brackets.
 
 Setup writes the TOML config, creates required directories, installs the bundled
-ANSI/screen assets when requested, initializes a schema `4` DecentDB database,
+ANSI/screen assets when requested, initializes a schema `8` DecentDB database,
 creates the initial sysop account, and creates the
 default `general` local message area. The generated sysop account is real data,
 so a setup-created database is not an empty restore target for `db import`.

@@ -247,9 +247,12 @@ legacy_compatible = true
 
 [admin_web]
 enabled = false
+public_status_enabled = false
 bind = "127.0.0.1:8080"
 require_tls = true
 read_only = true
+allowed_origins = []
+behind_reverse_proxy = false
 session_timeout_seconds = 900
 csrf_token_ttl_seconds = 900
 replay_window_seconds = 300

@@ -1,3 +1,5 @@
+mod admin_status;
+mod admin_web;
 mod commands;
 mod config;
 mod control;

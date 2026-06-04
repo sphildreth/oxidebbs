@@ -1,23 +1,32 @@
 use std::collections::BTreeMap;
 use std::fs;
+use std::net::TcpStream;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use clap::Subcommand;
 use serde_json::{Value as JsonValue, json};
 
-use oxidebbs_binkp::transport_security_plan;
+use oxidebbs_binkp::{
+    BinkpClient, BinkpClientHandshake, BinkpOutboundFile, transport_security_plan,
+};
 use oxidebbs_core::FtnAddress;
 use oxidebbs_db::{
     NetworkAreaRecord, NetworkLinkRecord, NetworkNodelistRecord, NetworkPacketRecord,
     NetworkPacketSummaryRecord, NetworkPollLogRecord, NetworkProfileRecord,
     NetworkSubscriptionRecord, find_network_area_by_tag_and_profile, find_network_link_by_key,
     find_network_nodelist_entry, find_network_packet_by_id, find_network_profile_by_key,
-    insert_network_subscription, list_network_areas, list_network_links, list_network_messages,
-    list_network_nodelist_entries, list_network_packets, list_network_poll_logs,
-    list_network_profiles, list_network_subscriptions, mark_network_packet_quarantined,
-    replace_network_nodelist_entries, requeue_network_packet, set_network_area_subscribed,
-    set_network_subscription_status, summarize_network_packets,
+    finish_network_packet, insert_network_poll_log, insert_network_subscription,
+    list_network_areas, list_network_links, list_network_messages, list_network_nodelist_entries,
+    list_network_packets, list_network_poll_logs, list_network_profiles,
+    list_network_subscriptions, mark_network_packet_quarantined, replace_network_nodelist_entries,
+    requeue_network_packet, set_network_area_subscribed, set_network_subscription_status,
+    summarize_network_packets,
 };
-use oxidebbs_ftn::{FtnNodelistEntry, apply_nodelist_diff, parse_nodelist};
+use oxidebbs_ftn::{
+    AreaFixCommand, FtnNodelistEntry, Scanner, ScannerPaths, Tosser, TosserPaths,
+    apply_nodelist_diff, parse_areafix_commands, parse_nodelist,
+};
 
 use crate::sysop_cli::{
     AppContext, CliError, CliResult, audit, current_timestamp, emit_ok, generated_uuid,
@@ -65,6 +74,11 @@ pub enum NetCommand {
         link: Option<String>,
         #[arg(short, long, default_value_t = 50)]
         limit: usize,
+    },
+    #[command(name = "areafix")]
+    AreaFix {
+        #[command(subcommand)]
+        command: NetAreaFixCommand,
     },
 }
 
@@ -163,10 +177,22 @@ pub enum NetPacketsCommand {
     },
 }
 
+#[derive(Subcommand)]
+pub enum NetAreaFixCommand {
+    Send {
+        link: String,
+        command: String,
+        #[arg(long)]
+        password: String,
+        #[arg(long)]
+        network: Option<String>,
+    },
+}
+
 pub fn run_net(command: NetCommand, ctx: &AppContext) -> CliResult<()> {
     match command {
-        NetCommand::Toss { network } => unsupported_network_operation("toss", &network),
-        NetCommand::Scan { network } => unsupported_network_operation("scan", &network),
+        NetCommand::Toss { network } => run_net_toss(ctx, &network),
+        NetCommand::Scan { network } => run_net_scan(ctx, &network),
         NetCommand::Poll { link, all, dry_run } => run_net_poll(ctx, link, all, dry_run),
         NetCommand::Status { network } => run_net_status(ctx, &network),
         NetCommand::Queue { link } => run_net_queue(ctx, &link),
@@ -190,13 +216,139 @@ pub fn run_net(command: NetCommand, ctx: &AppContext) -> CliResult<()> {
             NetLinksCommand::Show { link } => run_net_links_show(ctx, &link),
         },
         NetCommand::Logs { link, limit } => run_net_logs(ctx, link.as_deref(), limit),
+        NetCommand::AreaFix { command } => run_net_areafix(command, ctx),
     }
 }
 
-fn unsupported_network_operation(operation: &str, target: &str) -> CliResult<()> {
-    Err(CliError::Message(format!(
-        "net {operation} for {target:?} requires the v1.2 FTN tosser/scanner/BinkP session engine, which is not implemented yet"
-    )))
+fn run_net_scan(ctx: &AppContext, network: &str) -> CliResult<()> {
+    let db = open_database(&ctx.config)?;
+    let profile = require_network_profile(&db, network)?;
+    if !profile.enabled {
+        return Err(CliError::Message(format!(
+            "network profile {} is disabled; enable it before scanning outbound messages",
+            profile.key
+        )));
+    }
+    let paths = ScannerPaths::under_runtime(&ctx.config.paths.runtime, &profile.key);
+    let result = Scanner::new(db.db(), profile.clone(), paths.clone())
+        .scan()
+        .map_err(|error| CliError::Message(error.to_string()))?;
+
+    audit(
+        &db,
+        "network:scan",
+        None,
+        None,
+        &format!(
+            "scanned outbound messages for network {} into {}; links={} packets={} messages={} skipped={} errors={}",
+            profile.key,
+            paths.outbound_root.display(),
+            result.links_scanned,
+            result.packets_created,
+            result.messages_scanned,
+            result.messages_skipped,
+            result.errors.len()
+        ),
+    )?;
+
+    if ctx.json {
+        print_json(&json!({
+            "network": network_profile_json(&profile),
+            "outbound_root": paths.outbound_root,
+            "result": {
+                "links_scanned": result.links_scanned,
+                "packets_created": result.packets_created,
+                "messages_scanned": result.messages_scanned,
+                "messages_skipped": result.messages_skipped,
+                "errors": result.errors
+            }
+        }))
+    } else {
+        println!(
+            "network={}\toutbound={}\tlinks={}\tpackets={}\tmessages={}\tskipped={}\terrors={}",
+            profile.key,
+            paths.outbound_root.display(),
+            result.links_scanned,
+            result.packets_created,
+            result.messages_scanned,
+            result.messages_skipped,
+            result.errors.len()
+        );
+        for error in result.errors {
+            println!("error={error}");
+        }
+        Ok(())
+    }
+}
+
+fn run_net_toss(ctx: &AppContext, network: &str) -> CliResult<()> {
+    let db = open_database(&ctx.config)?;
+    let profile = require_network_profile(&db, network)?;
+    if !profile.enabled {
+        return Err(CliError::Message(format!(
+            "network profile {} is disabled; enable it before tossing inbound packets",
+            profile.key
+        )));
+    }
+    let paths = TosserPaths::under_runtime(&ctx.config.paths.runtime, &profile.key);
+    let result = Tosser::new(db.db(), profile.clone(), paths.clone())
+        .toss()
+        .map_err(|error| CliError::Message(error.to_string()))?;
+
+    audit(
+        &db,
+        "network:toss",
+        None,
+        None,
+        &format!(
+            "tossed inbound packets for network {} from {}; files={} packets={} imported={} duplicates={} quarantined_packets={} quarantined_messages={} skipped={} errors={}",
+            profile.key,
+            paths.inbound_drop.display(),
+            result.files_processed,
+            result.packets_processed,
+            result.messages_imported,
+            result.messages_duplicate,
+            result.packets_quarantined,
+            result.messages_quarantined,
+            result.messages_skipped,
+            result.errors.len()
+        ),
+    )?;
+
+    if ctx.json {
+        print_json(&json!({
+            "network": network_profile_json(&profile),
+            "inbound_drop": paths.inbound_drop,
+            "result": {
+                "files_processed": result.files_processed,
+                "packets_processed": result.packets_processed,
+                "packets_quarantined": result.packets_quarantined,
+                "messages_imported": result.messages_imported,
+                "messages_duplicate": result.messages_duplicate,
+                "messages_quarantined": result.messages_quarantined,
+                "messages_skipped": result.messages_skipped,
+                "errors": result.errors
+            }
+        }))
+    } else {
+        println!(
+            "network={}\tinbound={}\tfiles={}\tpackets={}\timported={}\tduplicates={}\tpacket_quarantine={}\tmessage_quarantine={}\tskipped={}\terrors={}",
+            profile.key,
+            paths.inbound_drop.display(),
+            result.files_processed,
+            result.packets_processed,
+            result.messages_imported,
+            result.messages_duplicate,
+            result.packets_quarantined,
+            result.messages_quarantined,
+            result.messages_skipped,
+            result.errors.len()
+        );
+        for error in result.errors {
+            println!("error={error}");
+        }
+        Ok(())
+    }
 }
 
 fn run_net_poll(ctx: &AppContext, link: Option<String>, all: bool, dry_run: bool) -> CliResult<()> {
@@ -211,13 +363,297 @@ fn run_net_poll(ctx: &AppContext, link: Option<String>, all: bool, dry_run: bool
     }
 
     match (link.as_deref(), all) {
-        (Some(link), false) => unsupported_network_operation("poll", link),
-        (None, true) => unsupported_network_operation("poll", "all links"),
+        (Some(link), false) => run_net_poll_execute(ctx, Some(link), false),
+        (None, true) => run_net_poll_execute(ctx, None, true),
         (None, false) => Err(CliError::Message(
             "net poll requires <link> or --all".to_string(),
         )),
         (Some(_), true) => unreachable!("link/--all conflict checked above"),
     }
+}
+
+fn run_net_poll_execute(ctx: &AppContext, link: Option<&str>, all: bool) -> CliResult<()> {
+    let db = open_database(&ctx.config)?;
+    let links = if all {
+        list_network_links(db.db())?
+            .into_iter()
+            .filter(|link| link.enabled)
+            .collect::<Vec<_>>()
+    } else {
+        vec![require_network_link(
+            &db,
+            link.ok_or_else(|| CliError::Message("net poll requires <link> or --all".to_string()))?,
+        )?]
+    };
+    if links.is_empty() {
+        return Err(CliError::Message(
+            "no enabled network links are available to poll".to_string(),
+        ));
+    }
+
+    let mut executions = Vec::with_capacity(links.len());
+    for link in links {
+        let profile = require_network_profile(&db, &link.network_id)?;
+        let paths = TosserPaths::under_runtime(&ctx.config.paths.runtime, &profile.key);
+        let execution = poll_link_once(&db, &profile, &link, &paths)?;
+        audit(
+            &db,
+            "network:poll",
+            None,
+            None,
+            &format!(
+                "polled link {} on network {}; status={} sent_files={} received_files={} bytes_out={} bytes_in={}",
+                link.key,
+                profile.key,
+                execution.status,
+                execution.packets_out,
+                execution.packets_in,
+                execution.bytes_out,
+                execution.bytes_in
+            ),
+        )?;
+        executions.push((profile, link, execution));
+    }
+
+    if ctx.json {
+        print_json(&json!({
+            "polls": executions.iter().map(|(profile, link, execution)| {
+                json!({
+                    "network": network_profile_json(profile),
+                    "link": network_link_json(link),
+                    "status": execution.status,
+                    "bytes_in": execution.bytes_in,
+                    "bytes_out": execution.bytes_out,
+                    "packets_in": execution.packets_in,
+                    "packets_out": execution.packets_out,
+                    "received_files": execution.received_files,
+                    "error_message": execution.error_message
+                })
+            }).collect::<Vec<_>>()
+        }))
+    } else {
+        for (profile, link, execution) in executions {
+            println!(
+                "{}\tnetwork={}\tstatus={}\tin_files={}\tout_files={}\tin_bytes={}\tout_bytes={}\terror={}",
+                link.key,
+                profile.key,
+                execution.status,
+                execution.packets_in,
+                execution.packets_out,
+                execution.bytes_in,
+                execution.bytes_out,
+                execution.error_message.as_deref().unwrap_or("")
+            );
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PollExecution {
+    status: String,
+    bytes_in: i64,
+    bytes_out: i64,
+    packets_in: i64,
+    packets_out: i64,
+    received_files: Vec<String>,
+    error_message: Option<String>,
+}
+
+fn poll_link_once(
+    db: &oxidebbs_db::OxideDb,
+    profile: &NetworkProfileRecord,
+    link: &NetworkLinkRecord,
+    paths: &TosserPaths,
+) -> CliResult<PollExecution> {
+    let started_at = current_timestamp(db)?;
+    let poll_result = execute_binkp_poll(db, profile, link, paths);
+    match poll_result {
+        Ok(mut execution) => {
+            execution.status = "success".to_string();
+            insert_poll_log(db, link, &started_at, &execution)?;
+            Ok(execution)
+        }
+        Err(error) => {
+            let execution = PollExecution {
+                status: "failed".to_string(),
+                bytes_in: 0,
+                bytes_out: 0,
+                packets_in: 0,
+                packets_out: 0,
+                received_files: Vec::new(),
+                error_message: Some(error.to_string()),
+            };
+            insert_poll_log(db, link, &started_at, &execution)?;
+            Err(error)
+        }
+    }
+}
+
+fn execute_binkp_poll(
+    db: &oxidebbs_db::OxideDb,
+    profile: &NetworkProfileRecord,
+    link: &NetworkLinkRecord,
+    paths: &TosserPaths,
+) -> CliResult<PollExecution> {
+    let security_plan = transport_security_plan(&link.transport_security)
+        .map_err(|error| CliError::Message(error.to_string()))?;
+    if security_plan.requires_tls || security_plan.attempts_tls {
+        return Err(CliError::Message(format!(
+            "net poll for link {} requires BinkP TLS session support; use --dry-run to inspect the plan or configure plaintext_legacy only for legacy FTN links",
+            link.key
+        )));
+    }
+
+    let outbound_packets = list_network_packets(db.db())?
+        .into_iter()
+        .filter(|packet| {
+            packet.network_id == profile.id
+                && packet.link_id.as_deref() == Some(link.id.as_str())
+                && packet.direction == "outbound"
+                && packet.status == "pending"
+        })
+        .collect::<Vec<_>>();
+    let outbound_files = outbound_files_from_packets(&outbound_packets)?;
+    let bytes_out = outbound_files
+        .iter()
+        .map(|file| i64::try_from(file.bytes.len()).unwrap_or(i64::MAX))
+        .sum::<i64>();
+
+    let port = u16::try_from(link.binkp_port).map_err(|_| {
+        CliError::Message(format!(
+            "link {} has invalid BinkP port {}",
+            link.key, link.binkp_port
+        ))
+    })?;
+    let mut stream = TcpStream::connect((&*link.host, port))?;
+    stream.set_read_timeout(Some(Duration::from_secs(30)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(30)))?;
+
+    let client = BinkpClient::new();
+    let local_address = profile_address(profile);
+    let handshake = BinkpClientHandshake::new(
+        vec![local_address],
+        (!link.password.is_empty()).then_some(link.password.clone()),
+    );
+    client
+        .handshake(&mut stream, &handshake)
+        .map_err(|error| CliError::Message(error.to_string()))?;
+    client
+        .send_batch_with_acknowledgements(&mut stream, &outbound_files)
+        .map_err(|error| CliError::Message(error.to_string()))?;
+    for packet in &outbound_packets {
+        finish_network_packet(db.db(), &packet.id, "processed", None)?;
+    }
+
+    let inbound = client
+        .receive_batch(&mut stream)
+        .map_err(|error| CliError::Message(error.to_string()))?;
+    fs::create_dir_all(&paths.inbound_drop)?;
+    let mut received_files = Vec::with_capacity(inbound.len());
+    let mut bytes_in = 0_i64;
+    for file in inbound {
+        bytes_in = bytes_in.saturating_add(i64::try_from(file.bytes.len()).unwrap_or(i64::MAX));
+        let output_path = available_spool_destination(&paths.inbound_drop.join(&file.name));
+        fs::write(&output_path, &file.bytes)?;
+        received_files.push(output_path.display().to_string());
+    }
+
+    Ok(PollExecution {
+        status: String::new(),
+        bytes_in,
+        bytes_out,
+        packets_in: i64::try_from(received_files.len()).unwrap_or(i64::MAX),
+        packets_out: i64::try_from(outbound_files.len()).unwrap_or(i64::MAX),
+        received_files,
+        error_message: None,
+    })
+}
+
+fn outbound_files_from_packets(
+    packets: &[NetworkPacketRecord],
+) -> CliResult<Vec<BinkpOutboundFile>> {
+    let mut files = Vec::with_capacity(packets.len());
+    for packet in packets {
+        let path = Path::new(&packet.filename);
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| {
+                CliError::Message(format!(
+                    "outbound packet {} has no safe filename for BinkP",
+                    packet.filename
+                ))
+            })?
+            .to_string();
+        let bytes = fs::read(path)?;
+        let mtime = fs::metadata(path)
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+            .map(|duration| duration.as_secs())
+            .unwrap_or_else(current_unix_seconds);
+        files.push(
+            BinkpOutboundFile::new(name, mtime, bytes)
+                .map_err(|error| CliError::Message(error.to_string()))?,
+        );
+    }
+    Ok(files)
+}
+
+fn insert_poll_log(
+    db: &oxidebbs_db::OxideDb,
+    link: &NetworkLinkRecord,
+    started_at: &str,
+    execution: &PollExecution,
+) -> CliResult<()> {
+    insert_network_poll_log(
+        db.db(),
+        &NetworkPollLogRecord {
+            id: generated_uuid(db)?,
+            link_id: link.id.clone(),
+            started_at: started_at.to_string(),
+            ended_at: Some(current_timestamp(db)?),
+            direction: "bidirectional".to_string(),
+            status: execution.status.clone(),
+            bytes_in: execution.bytes_in,
+            bytes_out: execution.bytes_out,
+            packets_in: execution.packets_in,
+            packets_out: execution.packets_out,
+            error_message: execution.error_message.clone(),
+        },
+    )?;
+    Ok(())
+}
+
+fn current_unix_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
+}
+
+fn available_spool_destination(destination: &Path) -> PathBuf {
+    if !destination.exists() {
+        return destination.to_path_buf();
+    }
+    let parent = destination.parent().unwrap_or_else(|| Path::new(""));
+    let stem = destination
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("packet");
+    let extension = destination
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| format!(".{extension}"))
+        .unwrap_or_default();
+    for index in 1.. {
+        let candidate = parent.join(format!("{stem}.{index}{extension}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    destination.to_path_buf()
 }
 
 fn run_net_poll_dry_run(ctx: &AppContext, link: Option<&str>, all: bool) -> CliResult<()> {
@@ -808,6 +1244,234 @@ fn run_net_area_subscription(
     )
 }
 
+fn run_net_areafix(command: NetAreaFixCommand, ctx: &AppContext) -> CliResult<()> {
+    match command {
+        NetAreaFixCommand::Send {
+            link,
+            command,
+            password,
+            network,
+        } => run_net_areafix_send(ctx, &link, &command, &password, network.as_deref()),
+    }
+}
+
+fn run_net_areafix_send(
+    ctx: &AppContext,
+    link: &str,
+    command_body: &str,
+    password: &str,
+    network: Option<&str>,
+) -> CliResult<()> {
+    let db = open_database(&ctx.config)?;
+    let link_record = require_network_link(&db, link)?;
+    if link_record.password != password {
+        audit(
+            &db,
+            "network:areafix:auth-failed",
+            None,
+            None,
+            &format!("AreaFix authentication failed for link {}", link_record.key),
+        )?;
+        return Err(CliError::Message(
+            "AreaFix password did not match the configured link password".to_string(),
+        ));
+    }
+
+    let profile = match network {
+        Some(network) => require_network_profile(&db, network)?,
+        None => require_network_profile(&db, &link_record.network_id)?,
+    };
+    if link_record.network_id != profile.id {
+        return Err(CliError::Message(format!(
+            "link {} belongs to a different network profile",
+            link_record.key
+        )));
+    }
+
+    let commands = parse_areafix_commands(command_body)
+        .map_err(|error| CliError::Message(error.to_string()))?;
+    let reply = execute_areafix_commands(&db, &profile, &link_record, &commands)?;
+
+    if ctx.json {
+        print_json(&json!({
+            "network": network_profile_json(&profile),
+            "link": network_link_json(&link_record),
+            "reply": reply
+        }))
+    } else {
+        println!("{reply}");
+        Ok(())
+    }
+}
+
+fn execute_areafix_commands(
+    db: &oxidebbs_db::OxideDb,
+    profile: &NetworkProfileRecord,
+    link: &NetworkLinkRecord,
+    commands: &[AreaFixCommand],
+) -> CliResult<String> {
+    let mut lines = vec![
+        format!("AreaFix response for {}", link.address),
+        format!("Network: {}", profile.key),
+        String::new(),
+    ];
+
+    for command in commands {
+        match command {
+            AreaFixCommand::List => {
+                lines.push("Available areas:".to_string());
+                let areas = matching_areas(db, &profile.id)?;
+                for area in areas {
+                    lines.push(format!(
+                        "{}\t{}\t{}",
+                        area.area_tag,
+                        if area.subscribed {
+                            "active"
+                        } else {
+                            "available"
+                        },
+                        area.description
+                    ));
+                }
+            }
+            AreaFixCommand::Query => {
+                lines.push("Subscribed areas:".to_string());
+                let subscriptions = link_subscribed_areas(db, profile, link)?;
+                if subscriptions.is_empty() {
+                    lines.push("(none)".to_string());
+                } else {
+                    lines.extend(subscriptions.into_iter().map(|area| area.area_tag));
+                }
+            }
+            AreaFixCommand::Help => {
+                lines.push(
+                    "Commands: %LIST, %QUERY, %HELP, +AREA.TAG, -AREA.TAG, +AREA.TAG !".to_string(),
+                );
+            }
+            AreaFixCommand::Subscribe { area_tag, rescan } => {
+                let area = require_network_area(db, profile, area_tag)?;
+                set_link_subscription(db, &area, link, true, "areafix")?;
+                audit(
+                    db,
+                    "network:areafix:subscribe",
+                    None,
+                    None,
+                    &format!(
+                        "AreaFix subscribed link {} to area {} on network {}",
+                        link.key, area.area_tag, profile.key
+                    ),
+                )?;
+                lines.push(format!("Subscribed {}", area.area_tag));
+                if *rescan {
+                    lines.push(format!(
+                        "Rescan requested for {}; rescan queueing is not implemented yet",
+                        area.area_tag
+                    ));
+                }
+            }
+            AreaFixCommand::Unsubscribe { area_tag } => {
+                let area = require_network_area(db, profile, area_tag)?;
+                set_link_subscription(db, &area, link, false, "areafix")?;
+                audit(
+                    db,
+                    "network:areafix:unsubscribe",
+                    None,
+                    None,
+                    &format!(
+                        "AreaFix unsubscribed link {} from area {} on network {}",
+                        link.key, area.area_tag, profile.key
+                    ),
+                )?;
+                lines.push(format!("Unsubscribed {}", area.area_tag));
+            }
+        }
+    }
+
+    audit(
+        db,
+        "network:areafix:processed",
+        None,
+        None,
+        &format!(
+            "processed {} AreaFix command(s) for link {} on network {}",
+            commands.len(),
+            link.key,
+            profile.key
+        ),
+    )?;
+
+    Ok(lines.join("\n"))
+}
+
+fn require_network_area(
+    db: &oxidebbs_db::OxideDb,
+    profile: &NetworkProfileRecord,
+    area_tag: &str,
+) -> CliResult<NetworkAreaRecord> {
+    find_network_area_by_tag_and_profile(db.db(), &profile.id, area_tag)?.ok_or_else(|| {
+        CliError::Message(format!(
+            "network area {area_tag:?} was not found for network {}",
+            profile.key
+        ))
+    })
+}
+
+fn set_link_subscription(
+    db: &oxidebbs_db::OxideDb,
+    area: &NetworkAreaRecord,
+    link: &NetworkLinkRecord,
+    subscribed: bool,
+    source: &str,
+) -> CliResult<()> {
+    let timestamp = current_timestamp(db)?;
+    if !set_network_subscription_status(
+        db.db(),
+        &area.id,
+        &link.id,
+        subscribed,
+        &timestamp,
+        source,
+    )? {
+        insert_network_subscription(
+            db.db(),
+            &NetworkSubscriptionRecord {
+                id: generated_uuid(db)?,
+                area_id: area.id.clone(),
+                link_id: link.id.clone(),
+                subscribed,
+                subscribed_at: timestamp.clone(),
+                unsubscribed_at: (!subscribed).then_some(timestamp),
+                source: source.to_string(),
+            },
+        )?;
+    }
+
+    let area_subscribed = subscribed
+        || list_network_subscriptions(db.db())?
+            .into_iter()
+            .any(|subscription| subscription.area_id == area.id && subscription.subscribed);
+    set_network_area_subscribed(db.db(), &area.id, area_subscribed)?;
+    Ok(())
+}
+
+fn link_subscribed_areas(
+    db: &oxidebbs_db::OxideDb,
+    profile: &NetworkProfileRecord,
+    link: &NetworkLinkRecord,
+) -> CliResult<Vec<NetworkAreaRecord>> {
+    let subscriptions = list_network_subscriptions(db.db())?;
+    Ok(matching_areas(db, &profile.id)?
+        .into_iter()
+        .filter(|area| {
+            subscriptions.iter().any(|subscription| {
+                subscription.link_id == link.id
+                    && subscription.area_id == area.id
+                    && subscription.subscribed
+            })
+        })
+        .collect())
+}
+
 fn run_net_links_list(ctx: &AppContext, network: Option<&str>) -> CliResult<()> {
     let db = open_database(&ctx.config)?;
     let links = match network {
@@ -1244,6 +1908,15 @@ fn poll_log_json(log: &NetworkPollLogRecord) -> JsonValue {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use oxidebbs_binkp::{BinkpOutboundFile, BinkpServer, BinkpServerHandshake};
+    use oxidebbs_db::{
+        MessageAreaRecord, OxideDb, insert_message_area, insert_network_area, insert_network_link,
+        insert_network_packet, insert_network_profile, list_network_poll_logs,
+        list_network_subscriptions,
+    };
+    use std::net::TcpListener;
+    use std::thread;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn network_link_json_redacts_password() {
@@ -1366,5 +2039,187 @@ mod tests {
         assert!(!packet_can_retry(&packet));
         packet.status = "processed".to_string();
         assert!(!packet_can_retry(&packet));
+    }
+
+    #[test]
+    fn poll_link_sends_ready_packet_and_receives_inbound_file() {
+        let db = OxideDb::open_memory().expect("open db");
+        let profile = test_profile();
+        let mut link = test_link(&profile.id);
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind fake BinkP server");
+        link.host = "127.0.0.1".to_string();
+        link.binkp_port = i64::from(listener.local_addr().expect("addr").port());
+        insert_network_profile(db.db(), &profile).expect("insert profile");
+        insert_network_link(db.db(), &link).expect("insert link");
+        let root = temp_root("poll");
+        let outbound_dir = root.join("network/fidonet/outbound/hub/ready");
+        fs::create_dir_all(&outbound_dir).expect("create outbound");
+        let outbound_path = outbound_dir.join("00000001.pkt");
+        fs::write(&outbound_path, b"outbound packet").expect("write outbound");
+        insert_network_packet(
+            db.db(),
+            &NetworkPacketRecord {
+                id: "00000000-0000-4000-8000-000000003003".to_string(),
+                network_id: profile.id.clone(),
+                direction: "outbound".to_string(),
+                link_id: Some(link.id.clone()),
+                filename: outbound_path.display().to_string(),
+                sha256: "hash".to_string(),
+                size_bytes: 15,
+                status: "pending".to_string(),
+                error_message: None,
+                received_at: None,
+                processed_at: None,
+                created_at: "2026-06-04T00:00:00Z".to_string(),
+            },
+        )
+        .expect("insert packet");
+
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept fake BinkP client");
+            let server = BinkpServer::new();
+            server
+                .accept_handshake(
+                    &mut stream,
+                    &BinkpServerHandshake::new(
+                        vec!["1:105/42".to_string()],
+                        Some("SECRET".to_string()),
+                    ),
+                )
+                .expect("accept handshake");
+            let files = server.receive_batch(&mut stream).expect("receive outbound");
+            assert_eq!(files.len(), 1);
+            assert_eq!(files[0].name, "00000001.pkt");
+            assert_eq!(files[0].bytes, b"outbound packet");
+            let inbound = BinkpOutboundFile::new("inbound.pkt", 1234, b"inbound packet".to_vec())
+                .expect("inbound file");
+            server
+                .send_batch(&mut stream, &[inbound])
+                .expect("send inbound");
+        });
+
+        let execution = poll_link_once(
+            &db,
+            &profile,
+            &link,
+            &TosserPaths::under_runtime(&root, "fidonet"),
+        )
+        .expect("poll link");
+        server.join().expect("fake server joined");
+
+        assert_eq!(execution.status, "success");
+        assert_eq!(execution.packets_out, 1);
+        assert_eq!(execution.packets_in, 1);
+        assert!(
+            root.join("network/fidonet/inbound/drop/inbound.pkt")
+                .exists()
+        );
+        let packets = list_network_packets(db.db()).expect("list packets");
+        assert_eq!(packets[0].status, "processed");
+        let logs = list_network_poll_logs(db.db()).expect("list poll logs");
+        assert_eq!(logs[0].status, "success");
+        assert_eq!(logs[0].packets_in, 1);
+        assert_eq!(logs[0].packets_out, 1);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn areafix_subscribe_mutates_subscription_and_returns_reply() {
+        let db = OxideDb::open_memory().expect("open db");
+        let profile = test_profile();
+        let link = test_link(&profile.id);
+        insert_message_area(
+            db.db(),
+            &MessageAreaRecord {
+                id: "00000000-0000-4000-8000-000000003004".to_string(),
+                key: "oxide.general".to_string(),
+                name: "Oxide General".to_string(),
+                description: "General".to_string(),
+                kind: "echomail".to_string(),
+                network_id: Some(profile.id.clone()),
+                read_security_level: 0,
+                post_security_level: 10,
+                moderated: false,
+                enabled: true,
+            },
+        )
+        .expect("insert message area");
+        insert_network_profile(db.db(), &profile).expect("insert profile");
+        insert_network_link(db.db(), &link).expect("insert link");
+        insert_network_area(
+            db.db(),
+            &NetworkAreaRecord {
+                id: "00000000-0000-4000-8000-000000003005".to_string(),
+                network_id: profile.id.clone(),
+                area_tag: "OXIDE.GENERAL".to_string(),
+                local_area_id: "00000000-0000-4000-8000-000000003004".to_string(),
+                description: "General".to_string(),
+                read_only: false,
+                subscribed: false,
+                created_at: "2026-06-04T00:00:00Z".to_string(),
+                updated_at: "2026-06-04T00:00:00Z".to_string(),
+            },
+        )
+        .expect("insert network area");
+
+        let reply = execute_areafix_commands(
+            &db,
+            &profile,
+            &link,
+            &[AreaFixCommand::Subscribe {
+                area_tag: "OXIDE.GENERAL".to_string(),
+                rescan: true,
+            }],
+        )
+        .expect("execute areafix");
+
+        assert!(reply.contains("Subscribed OXIDE.GENERAL"));
+        assert!(reply.contains("Rescan requested"));
+        let subscriptions = list_network_subscriptions(db.db()).expect("subscriptions");
+        assert_eq!(subscriptions.len(), 1);
+        assert!(subscriptions[0].subscribed);
+        assert_eq!(subscriptions[0].source, "areafix");
+    }
+
+    fn test_profile() -> NetworkProfileRecord {
+        NetworkProfileRecord {
+            id: "00000000-0000-4000-8000-000000003001".to_string(),
+            key: "fidonet".to_string(),
+            name: "FidoNet".to_string(),
+            adapter: "legacy-ftn".to_string(),
+            local_zone: 1,
+            local_net: 105,
+            local_node: 42,
+            local_point: 0,
+            enabled: true,
+            created_at: "2026-06-04T00:00:00Z".to_string(),
+            updated_at: "2026-06-04T00:00:00Z".to_string(),
+        }
+    }
+
+    fn test_link(network_id: &str) -> NetworkLinkRecord {
+        NetworkLinkRecord {
+            id: "00000000-0000-4000-8000-000000003002".to_string(),
+            key: "hub".to_string(),
+            network_id: network_id.to_string(),
+            address: "1:105/1".to_string(),
+            host: "127.0.0.1".to_string(),
+            binkp_port: 24554,
+            password: "SECRET".to_string(),
+            poll_schedule_minutes: 60,
+            compression: "none".to_string(),
+            transport_security: "plaintext_legacy".to_string(),
+            enabled: true,
+            created_at: "2026-06-04T00:00:00Z".to_string(),
+            updated_at: "2026-06-04T00:00:00Z".to_string(),
+        }
+    }
+
+    fn temp_root(test_name: &str) -> PathBuf {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos();
+        std::env::temp_dir().join(format!("oxidebbs-net-{test_name}-{suffix}"))
     }
 }

@@ -369,11 +369,11 @@ Each live row may include heartbeat age in seconds.
 Live `status --json` also includes `audit_write_failures`, the in-memory count
 of best-effort audit writes that failed while the server was running.
 
-The `[admin_web]` configuration surface is disabled by default and validated,
-but no remote HTTP admin server is started yet. Any enabled remote admin runtime
-must add CSRF, replay protection, audit logging, and rate limiting before it can
-accept mutations; the current admin/control surface remains local CLI plus Unix
-control socket.
+The `[admin_web]` configuration surface is disabled by default and validated.
+When explicitly enabled, it can serve a loopback read-only `/status` endpoint
+for status dashboards. Any remote admin runtime must add CSRF, replay
+protection, audit logging, and rate limiting before it can accept mutations; the
+mutating admin/control surface remains local CLI plus Unix control socket.
 
 ## Messages
 
@@ -513,7 +513,7 @@ cargo run -p oxidebbs-server -- audit purge-retention --dry-run
 - `db backup` copies the active database file.
 - `db export --format json` is read-only and safe.
 - `db import --format json <path>` performs a full restore only:
-  - requires a schema-7, schema-only target
+  - requires a schema-8, schema-only target
   - validates schema and all foreign-key references before writing
   - preserves UUIDs and load ordering
   - executes in one transaction and fails atomically
@@ -526,8 +526,8 @@ cargo run -p oxidebbs-server -- audit purge-retention --dry-run
 
 ## Schema migration notes
 
-- Schema version is currently `7`.
-- Existing schema `2` through `6` databases migrate automatically to `7` on
+- Schema version is currently `8`.
+- Existing schema `2` through `7` databases migrate automatically to `8` on
   first open.
 - Databases with missing, malformed, or future markers are rejected with explicit
   operator-facing errors.
@@ -541,6 +541,8 @@ full nodelist import/lookup:
 
 ```bash
 cargo run -p oxidebbs-server -- net status fidonet
+cargo run -p oxidebbs-server -- net toss fidonet
+cargo run -p oxidebbs-server -- net scan fidonet
 cargo run -p oxidebbs-server -- net links list --network fidonet
 cargo run -p oxidebbs-server -- net links show fidonet-hub
 cargo run -p oxidebbs-server -- net areas list --network fidonet
@@ -552,25 +554,36 @@ cargo run -p oxidebbs-server -- net packets retry <packet-id>
 cargo run -p oxidebbs-server -- net packets mark-quarantined <packet-id> --reason "operator review"
 cargo run -p oxidebbs-server -- net packets outbound --network fidonet
 cargo run -p oxidebbs-server -- net logs fidonet-hub --limit 25
+cargo run -p oxidebbs-server -- net poll fidonet-hub
 cargo run -p oxidebbs-server -- net poll fidonet-hub --dry-run
+cargo run -p oxidebbs-server -- net areafix send fidonet-hub "+FSX_GEN" --password <password> --network fidonet
 cargo run -p oxidebbs-server -- net nodelist import NODELIST.123 --network fidonet
 cargo run -p oxidebbs-server -- net nodelist lookup 1:105/42 --network fidonet
 ```
 
-`net toss`, `net scan`, and `net poll` return explicit not-implemented errors
-until the tosser, scanner, and BinkP session engine are complete, except for
-`net poll --dry-run`. Packet retry/quarantine commands update DecentDB packet
-state only; they do not move spool files or process packets yet.
+`net toss` imports raw `.pkt` files and safe ZIP packet bundles from
+`paths.runtime/network/<profile>/inbound/drop`, archives accepted inputs, and
+quarantines malformed, unauthorized, unknown-area, or netmail inputs. `net scan`
+writes outbound Type-2+ packets for subscribed echomail links under
+`paths.runtime/network/<profile>/outbound/<link>/ready`. `net poll` transports
+ready files over plaintext-legacy BinkP links, receives remote files into the
+inbound drop directory, and logs the poll. TLS-capable BinkP sessions remain
+future work. Packet retry/quarantine commands update DecentDB packet state only;
+they do not move spool files.
+`net areafix send` authenticates command text against the selected link
+password, applies AreaFix subscription changes, audits the activity, and prints
+the reply text. Reply netmail and rescan queueing remain future work.
 
-See [FTN CLI](../ftn/cli.md) and [FTN Nodelists](../ftn/nodelist.md) for the
-current scope and limitations.
+See [FTN CLI](../ftn/cli.md), [FTN Tosser](../ftn/tosser.md),
+[FTN Scanner](../ftn/scanner.md), and [FTN Nodelists](../ftn/nodelist.md) for
+the current scope and limitations.
 
 ## Local-only boundary
 
 All operations here are local to the current machine:
 
-- no remote TCP admin interface is started yet; `[admin_web]` is currently
-  validated disabled-by-default configuration only
+- the only remote TCP admin surface is the opt-in loopback read-only `/status`
+  endpoint
 - no remote secret/token auth model
 - control socket path must be local filesystem access only
 - local control socket uses Unix peer UID checks plus filesystem permissions

@@ -316,6 +316,79 @@ fn create_full_schema(db: &Db) -> decentdb::Result<()> {
             UNIQUE (network_id, zone, net, node, point)
         );
 
+        CREATE TABLE IF NOT EXISTS network_applications (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            submitted_at TIMESTAMPTZ,
+            reviewed_at TIMESTAMPTZ,
+            status TEXT NOT NULL DEFAULT 'submitted'
+                CHECK (status = 'draft' OR status = 'submitted' OR status = 'needs-info' OR status = 'approved' OR status = 'config-generated' OR status = 'first-poll-pending' OR status = 'active' OR status = 'probation' OR status = 'suspended' OR status = 'retired' OR status = 'rejected' OR status = 'withdrawn' OR status = 'needs-review-hold'),
+            applicant_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+            board_name TEXT NOT NULL CHECK (LENGTH(TRIM(board_name)) > 0),
+            sysop_alias TEXT NOT NULL CHECK (LENGTH(TRIM(sysop_alias)) > 0),
+            contact_email TEXT NOT NULL CHECK (LENGTH(TRIM(contact_email)) > 0),
+            host TEXT NOT NULL CHECK (LENGTH(TRIM(host)) > 0),
+            binkp_port INT NOT NULL DEFAULT 24554 CHECK (binkp_port > 0 AND binkp_port <= 65535),
+            telnet_host TEXT,
+            telnet_port INT CHECK (telnet_port IS NULL OR (telnet_port > 0 AND telnet_port <= 65535)),
+            software TEXT NOT NULL DEFAULT 'OxideBBS' CHECK (LENGTH(TRIM(software)) > 0),
+            software_version TEXT NOT NULL DEFAULT '',
+            timezone TEXT NOT NULL DEFAULT 'UTC' CHECK (LENGTH(TRIM(timezone)) > 0),
+            region TEXT NOT NULL DEFAULT '',
+            description TEXT NOT NULL DEFAULT '',
+            reason TEXT NOT NULL DEFAULT '',
+            policy_version TEXT NOT NULL DEFAULT '',
+            policy_accepted_at TIMESTAMPTZ,
+            admin_notes TEXT NOT NULL DEFAULT '',
+            reviewed_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+            assigned_address TEXT UNIQUE
+        );
+
+        CREATE TABLE IF NOT EXISTS network_nodes (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            application_id UUID REFERENCES network_applications(id) ON DELETE SET NULL,
+            network_key TEXT NOT NULL DEFAULT 'oxidenet' CHECK (LENGTH(TRIM(network_key)) > 0),
+            address TEXT NOT NULL UNIQUE CHECK (LENGTH(TRIM(address)) > 0),
+            zone INT NOT NULL CHECK (zone > 0),
+            net INT NOT NULL CHECK (net > 0),
+            node INT NOT NULL CHECK (node > 0),
+            point INT NOT NULL DEFAULT 0 CHECK (point >= 0),
+            hub_address TEXT NOT NULL CHECK (LENGTH(TRIM(hub_address)) > 0),
+            board_name TEXT NOT NULL CHECK (LENGTH(TRIM(board_name)) > 0),
+            sysop_alias TEXT NOT NULL CHECK (LENGTH(TRIM(sysop_alias)) > 0),
+            contact_email TEXT NOT NULL CHECK (LENGTH(TRIM(contact_email)) > 0),
+            host TEXT NOT NULL CHECK (LENGTH(TRIM(host)) > 0),
+            binkp_port INT NOT NULL DEFAULT 24554 CHECK (binkp_port > 0 AND binkp_port <= 65535),
+            telnet_host TEXT,
+            telnet_port INT CHECK (telnet_port IS NULL OR (telnet_port > 0 AND telnet_port <= 65535)),
+            software TEXT NOT NULL DEFAULT 'OxideBBS' CHECK (LENGTH(TRIM(software)) > 0),
+            software_version TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'first-poll-pending'
+                CHECK (status = 'first-poll-pending' OR status = 'config-generated' OR status = 'active' OR status = 'probation' OR status = 'suspended' OR status = 'retired'),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            activated_at TIMESTAMPTZ,
+            suspended_at TIMESTAMPTZ,
+            retired_at TIMESTAMPTZ,
+            last_poll_at TIMESTAMPTZ,
+            last_successful_poll_at TIMESTAMPTZ,
+            flags TEXT NOT NULL DEFAULT ''
+        );
+
+        CREATE TABLE IF NOT EXISTS network_credentials (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            node_id UUID NOT NULL REFERENCES network_nodes(id) ON DELETE CASCADE,
+            credential_kind TEXT NOT NULL
+                CHECK (credential_kind = 'binkp_session' OR credential_kind = 'invite_token'),
+            secret_hash TEXT NOT NULL CHECK (LENGTH(TRIM(secret_hash)) > 0),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            rotated_at TIMESTAMPTZ,
+            expires_at TIMESTAMPTZ,
+            status TEXT NOT NULL DEFAULT 'active'
+                CHECK (status = 'active' OR status = 'revoked' OR status = 'expired')
+        );
+
         CREATE TABLE IF NOT EXISTS sessions (
             id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
             node_number INT NOT NULL CHECK (node_number > 0),
@@ -379,6 +452,11 @@ fn create_full_schema(db: &Db) -> decentdb::Result<()> {
         CREATE INDEX IF NOT EXISTS idx_network_area_subscriptions_area_id ON network_area_subscriptions (area_id);
         CREATE INDEX IF NOT EXISTS idx_network_area_subscriptions_link_id ON network_area_subscriptions (link_id);
         CREATE INDEX IF NOT EXISTS idx_network_nodelist_network_id_zone_net_node_point ON network_nodelist (network_id, zone, net, node, point);
+        CREATE INDEX IF NOT EXISTS idx_network_applications_status ON network_applications (status);
+        CREATE INDEX IF NOT EXISTS idx_network_applications_assigned_address ON network_applications (assigned_address);
+        CREATE INDEX IF NOT EXISTS idx_network_nodes_network_key_status ON network_nodes (network_key, status);
+        CREATE INDEX IF NOT EXISTS idx_network_nodes_address ON network_nodes (address);
+        CREATE INDEX IF NOT EXISTS idx_network_credentials_node_status ON network_credentials (node_id, status);
         CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions (user_id);
         CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions (started_at);
         CREATE INDEX IF NOT EXISTS idx_door_runs_door_id ON door_runs (door_id);
@@ -568,6 +646,9 @@ mod tests {
             "network_poll_log",
             "network_area_subscriptions",
             "network_nodelist",
+            "network_applications",
+            "network_nodes",
+            "network_credentials",
             "sessions",
             "doors",
             "door_runs",

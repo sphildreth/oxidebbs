@@ -93,7 +93,7 @@ impl DashboardScreen {
         &mut self,
         event: UiEvent,
         _db: &Option<oxidebbs_db::OxideDb>,
-        _readonly: bool,
+        readonly: bool,
     ) -> UiAction {
         match event {
             UiEvent::Key(key) => {
@@ -112,7 +112,7 @@ impl DashboardScreen {
                     KeyCode::Enter => {
                         return UiAction::Navigate(ScreenId::Nodes);
                     }
-                    KeyCode::Char('m') => {
+                    KeyCode::Char('m') if !readonly => {
                         return UiAction::OpenModal(ModalKind::Form(FormModal {
                             title: "Send Message".to_string(),
                             fields: vec![
@@ -130,7 +130,7 @@ impl DashboardScreen {
                             active_field: 1,
                         }));
                     }
-                    KeyCode::Char('b') => {
+                    KeyCode::Char('b') if !readonly => {
                         return UiAction::OpenModal(ModalKind::Form(FormModal {
                             title: "Broadcast Message".to_string(),
                             fields: vec![FormField {

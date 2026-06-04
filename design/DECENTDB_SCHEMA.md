@@ -4,11 +4,12 @@ OxideBBS uses DecentDB as the only system database. The schema should lean into
 DecentDB's PostgreSQL-like type system instead of treating it as a SQLite-style
 string store.
 
-Current schema version: `7`
+Current schema version: `8`
 
-Schema version `7` is the current v1.2 development schema. The P2 foundation
+Schema version `8` is the current v1.2 development schema. The P2 foundation
 landed in schema `5`; later v1.2 phases added caller door-security storage in
-schema `6` and file-transfer storage tables in schema `7`. The initializer
+schema `6`, file-transfer storage tables in schema `7`, and OxideNet registry
+tables in schema `8`. The initializer
 upgrades supported older development schemas and keeps development upgrades safe:
 
 - schema `2 -> 3` is migratable. The migration adds `message_areas.enabled` with
@@ -29,6 +30,10 @@ upgrades supported older development schemas and keeps development upgrades safe
 - schema `6 -> 7` is migratable. The migration creates `file_areas`,
   `file_entries`, and `file_transfers`, then updates
   `system_config.schema_version` to `7`.
+- schema `7 -> 8` is migratable. The migration creates
+  `network_applications`, `network_nodes`, and `network_credentials` for the
+  OxideNet application/node registry, then updates `system_config.schema_version`
+  to `8`.
 - the pinned DecentDB rejects direct `ALTER TABLE ... ADD COLUMN` on checked
   tables, so migrations use table-rebuild strategies. Renamed pre-upgrade
   tables are retained under `oxidebbs_schema*_` archive names where DecentDB
@@ -53,15 +58,18 @@ Open and startup flow:
 ## Restore and Compaction Semantics
 
 - `db import --format json <path>` is a full restore for the tables currently
-  represented in the JSON import/export payload. It expects a schema `7` payload
+  represented in the JSON import/export payload. It expects a schema `8` payload
   and fails fast on schema mismatch or malformed foreign-key references.
 - Restore targets must be schema-only: existing rows are only allowed in
   `system_config` for the `schema_version` marker.
 - Restore order is dependency-aware for the covered tables:
-  `users -> auth_attempts -> message_areas -> messages -> network_profiles -> network_links -> network_areas -> network_packets -> network_messages -> network_seen_by -> network_path -> network_duplicate_log -> network_poll_log -> network_area_subscriptions -> network_nodelist -> sessions -> doors -> door_runs -> audit_events`.
+  `users -> auth_attempts -> message_areas -> messages -> network_profiles -> network_links -> network_areas -> network_packets -> network_messages -> network_seen_by -> network_path -> network_duplicate_log -> network_poll_log -> network_area_subscriptions -> network_nodelist -> network_applications -> network_nodes -> network_credentials -> sessions -> doors -> door_runs -> audit_events`.
 - Schema `7` file-transfer tables are initialized and verified by database
   diagnostics, but transfer import/export rows remain part of the file-transfer
   implementation work rather than P2 schema/config foundation.
+- Schema `8` OxideNet registry tables are exported/imported by the database
+  backup JSON path. Credentials persist only `secret_hash`, never plaintext
+  session passwords or invite tokens.
 - Restores are executed inside one DecentDB transaction; validation is complete before
   any rows are written.
 - `db compact --output <path> [--overwrite]` checkpoints the active DecentDB,
@@ -457,6 +465,103 @@ Constraints:
 - zone, net, and node are positive
 - point cannot be negative
 - raw nodelist entries must not be blank
+
+### network_applications
+
+```sql
+id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID()
+created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+submitted_at TIMESTAMPTZ
+reviewed_at TIMESTAMPTZ
+status TEXT NOT NULL DEFAULT 'submitted'
+applicant_user_id UUID REFERENCES users(id) ON DELETE SET NULL
+board_name TEXT NOT NULL
+sysop_alias TEXT NOT NULL
+contact_email TEXT NOT NULL
+host TEXT NOT NULL
+binkp_port INT NOT NULL DEFAULT 24554
+telnet_host TEXT
+telnet_port INT
+software TEXT NOT NULL DEFAULT 'OxideBBS'
+software_version TEXT NOT NULL DEFAULT ''
+timezone TEXT NOT NULL DEFAULT 'UTC'
+region TEXT NOT NULL DEFAULT ''
+description TEXT NOT NULL DEFAULT ''
+reason TEXT NOT NULL DEFAULT ''
+policy_version TEXT NOT NULL DEFAULT ''
+policy_accepted_at TIMESTAMPTZ
+admin_notes TEXT NOT NULL DEFAULT ''
+reviewed_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL
+assigned_address TEXT UNIQUE
+```
+
+Constraints:
+
+- blank board names, sysop aliases, contact emails, hosts, software names, and
+  timezones are rejected
+- ports must be `1..65535`
+- status is one of the OxideNet application lifecycle labels
+
+### network_nodes
+
+```sql
+id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID()
+application_id UUID REFERENCES network_applications(id) ON DELETE SET NULL
+network_key TEXT NOT NULL DEFAULT 'oxidenet'
+address TEXT NOT NULL UNIQUE
+zone INT NOT NULL
+net INT NOT NULL
+node INT NOT NULL
+point INT NOT NULL DEFAULT 0
+hub_address TEXT NOT NULL
+board_name TEXT NOT NULL
+sysop_alias TEXT NOT NULL
+contact_email TEXT NOT NULL
+host TEXT NOT NULL
+binkp_port INT NOT NULL DEFAULT 24554
+telnet_host TEXT
+telnet_port INT
+software TEXT NOT NULL DEFAULT 'OxideBBS'
+software_version TEXT NOT NULL DEFAULT ''
+status TEXT NOT NULL DEFAULT 'first-poll-pending'
+created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+activated_at TIMESTAMPTZ
+suspended_at TIMESTAMPTZ
+retired_at TIMESTAMPTZ
+last_poll_at TIMESTAMPTZ
+last_successful_poll_at TIMESTAMPTZ
+flags TEXT NOT NULL DEFAULT ''
+```
+
+Constraints:
+
+- addresses and human-facing identity fields must not be blank
+- address zone, net, and node are positive; point cannot be negative
+- ports must be `1..65535`
+- status is `config-generated`, `first-poll-pending`, `active`, `probation`,
+  `suspended`, or `retired`
+
+### network_credentials
+
+```sql
+id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID()
+node_id UUID NOT NULL REFERENCES network_nodes(id) ON DELETE CASCADE
+credential_kind TEXT NOT NULL
+secret_hash TEXT NOT NULL
+created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+rotated_at TIMESTAMPTZ
+expires_at TIMESTAMPTZ
+status TEXT NOT NULL DEFAULT 'active'
+```
+
+Constraints:
+
+- credentials are scoped to a node and cascade when that node is removed
+- `credential_kind` is `binkp_session` or `invite_token`
+- `secret_hash` must not be blank; plaintext secrets are not stored
+- status is `active`, `revoked`, or `expired`
 
 ### sessions
 

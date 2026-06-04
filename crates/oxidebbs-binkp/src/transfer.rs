@@ -76,6 +76,30 @@ pub fn send_batch<W: Write>(writer: &mut W, files: &[BinkpOutboundFile]) -> Resu
     send_end_of_batch(writer)
 }
 
+/// Send zero or more BinkP file offers, wait for one `M_GOT` acknowledgement
+/// per file, then finish with `M_EOB`.
+///
+/// This helper is intended for synchronous session loops that send a batch and
+/// then receive the peer's batch on the same stream.
+///
+/// # Errors
+///
+/// Returns protocol errors for invalid file metadata, missing or wrong
+/// acknowledgements, and I/O errors from the stream.
+pub fn send_batch_with_acknowledgements<S: Read + Write>(
+    stream: &mut S,
+    files: &[BinkpOutboundFile],
+) -> Result<(), BinkpError> {
+    for file in files {
+        validate_binkp_file_name(&file.name)?;
+    }
+    for file in files {
+        send_file(stream, file)?;
+        read_file_acknowledgement(stream, &file.name)?;
+    }
+    send_end_of_batch(stream)
+}
+
 /// Send the BinkP end-of-batch marker.
 ///
 /// # Errors
@@ -219,6 +243,41 @@ fn parse_file_descriptor(payload: &[u8]) -> Result<FileDescriptor, BinkpError> {
         declared_size,
         mtime,
     })
+}
+
+fn read_file_acknowledgement<R: Read>(
+    reader: &mut R,
+    expected_name: &str,
+) -> Result<(), BinkpError> {
+    let frame = read_frame(reader)?;
+    if frame.frame_type != FrameType::Command {
+        return Err(BinkpError::Protocol(
+            "BinkP peer sent data before M_GOT acknowledgement".to_string(),
+        ));
+    }
+    match frame.command {
+        M_GOT => {
+            let acknowledged = String::from_utf8(frame.payload).map_err(|_| {
+                BinkpError::Protocol("BinkP M_GOT payload is not UTF-8".to_string())
+            })?;
+            if acknowledged.trim() == expected_name {
+                Ok(())
+            } else {
+                Err(BinkpError::Protocol(format!(
+                    "BinkP peer acknowledged {acknowledged:?}, expected {expected_name:?}"
+                )))
+            }
+        }
+        M_SKIP => Err(BinkpError::Protocol(format!(
+            "BinkP peer skipped file {expected_name:?}"
+        ))),
+        M_ERR => Err(BinkpError::Protocol(format!(
+            "BinkP peer reported an error while acknowledging {expected_name:?}"
+        ))),
+        command => Err(BinkpError::Protocol(format!(
+            "unexpected BinkP command {command} while waiting for M_GOT"
+        ))),
+    }
 }
 
 fn parse_u64_field(value: Option<&str>, field: &str) -> Result<u64, BinkpError> {
@@ -406,5 +465,55 @@ mod tests {
         let error = receive_next_file(&mut stream).expect_err("short data");
 
         assert!(matches!(error, BinkpError::Protocol(_)));
+    }
+
+    #[test]
+    fn acknowledged_batch_waits_for_got_per_file() {
+        let files = vec![
+            BinkpOutboundFile::new("00000001.pkt", 1234, b"first".to_vec()).expect("first"),
+            BinkpOutboundFile::new("00000002.pkt", 1235, b"second".to_vec()).expect("second"),
+        ];
+        let mut acks = Vec::new();
+        write_frame(
+            &mut acks,
+            &BinkpFrame::command(M_GOT, b"00000001.pkt".to_vec()),
+        )
+        .expect("first ack");
+        write_frame(
+            &mut acks,
+            &BinkpFrame::command(M_GOT, b"00000002.pkt".to_vec()),
+        )
+        .expect("second ack");
+        let mut stream = ScriptStream::new(acks);
+
+        send_batch_with_acknowledgements(&mut stream, &files).expect("send acknowledged batch");
+
+        let mut written = Cursor::new(stream.writes);
+        let first_offer = read_frame(&mut written).expect("first offer");
+        assert_eq!(first_offer.command, M_FILE);
+        let first_data = read_frame(&mut written).expect("first data");
+        assert_eq!(first_data.frame_type, FrameType::Data);
+        let second_offer = read_frame(&mut written).expect("second offer");
+        assert_eq!(second_offer.command, M_FILE);
+        let second_data = read_frame(&mut written).expect("second data");
+        assert_eq!(second_data.frame_type, FrameType::Data);
+        let eob = read_frame(&mut written).expect("eob");
+        assert_eq!(eob.command, M_EOB);
+    }
+
+    #[test]
+    fn acknowledged_batch_rejects_wrong_got_name() {
+        let file = BinkpOutboundFile::new("00000001.pkt", 1234, b"first".to_vec()).expect("file");
+        let mut acks = Vec::new();
+        write_frame(
+            &mut acks,
+            &BinkpFrame::command(M_GOT, b"other.pkt".to_vec()),
+        )
+        .expect("ack");
+        let mut stream = ScriptStream::new(acks);
+
+        let error = send_batch_with_acknowledgements(&mut stream, &[file]).expect_err("wrong ack");
+
+        assert!(format!("{error}").contains("expected"));
     }
 }

@@ -111,32 +111,35 @@ answering, or caller pass-through from a front-end mailer.
 
 ## Spool Directories
 
-The planned spool layout is under the network runtime directory:
+The active spool layout is profile-scoped under the runtime directory:
 
 ```text
 runtime/network/
-  inbound/
-    drop/
-  temp-inbound/
-  outbound/
-    <link-key>/
-      ready/
-      busy/
-      sent/
-      hold/
-      temp/
-  archive/
-  quarantine/
-  nodelist/
+  <profile-key>/
+    inbound/
+      drop/
+      archive/
+      quarantine/
+    temp-inbound/
+    outbound/
+      <link-key>/
+        ready/
+        busy/
+        sent/
+        hold/
+        temp/
+    nodelist/
 ```
 
 Important directories:
 
-- `inbound/drop`: manual or external-mailer drop point.
+- `inbound/drop`: manual or external-mailer drop point. `net toss <profile>`
+  scans this directory.
+- `inbound/archive`: packet and bundle files that were accepted by the tosser.
 - `outbound/<link-key>/ready`: files ready for BinkP or external transport.
 - `outbound/<link-key>/busy`: files claimed by an active session.
 - `outbound/<link-key>/sent`: files acknowledged by the remote.
-- `quarantine`: files that were malformed, unauthorized, unsafe, or failed
+- `inbound/quarantine`: files that were malformed, unauthorized, unsafe, or failed
   validation.
 
 Sysops should not place files in `temp-inbound`, `busy`, or `temp` directories.
@@ -165,28 +168,32 @@ When network mail fails, identify which boundary failed:
 | Netmail does not route onward | Nodelist, link routing, hold/crash policy, or unknown destination. |
 | Repeated duplicate posts are skipped | Duplicate detector is working; inspect duplicate logs for source details. |
 
-`net status`, `net links list/show`, `net areas list/subscribe/unsubscribe`,
-`net queue`, `net packets`, `net logs`, `net poll --dry-run`, and nodelist
-import/list/lookup commands already expose or update DecentDB network state.
-Toss/scan/poll execution and AreaFix remain planned.
+`net status`, `net toss`, `net scan`, `net poll`, `net links list/show`, `net areas
+list/subscribe/unsubscribe`, `net queue`, `net packets`, `net logs`, `net poll
+--dry-run`, `net areafix send`, and nodelist import/list/lookup commands
+already expose, import, export, transport, or update DecentDB network state.
+TLS-capable poll sessions, inbound listener execution, inbound AreaFix netmail
+processing, AreaFix reply netmail, and AreaFix rescan queueing remain planned.
 
 ## Current Implementation Status
 
 The v1.2 foundation currently includes shared network configuration, DecentDB
 network tables, protocol-neutral network types, FTN packet/kludge/duplicate
-primitives, pure netmail routing decisions, AreaFix command parsing, BinkP
-frame I/O, BinkP transport-security preflight policy, and nodelist
+primitives, inbound raw/ZIP packet tossing for mapped echomail, outbound packet
+scanning for subscribed echomail links, plaintext-legacy BinkP client polling,
+pure netmail routing decisions, AreaFix command parsing and local execution,
+BinkP frame I/O, BinkP transport-security preflight policy, and nodelist
 import/lookup.
 
 The following pieces are still planned:
 
-- tosser
-- scanner
-- bundle handling
+- ARJ extraction and outbound bundle creation
+- netmail scanning
+- netmail delivery/forwarding from the tosser
 - nodelist-driven runtime routing integration
-- AreaFix authentication, subscription mutation, reply netmail, and logging
-- BinkP client/server loops, TLS sessions, retry scheduling, and poll logging
-- operational toss/scan/poll `net` CLI commands
+- inbound AreaFix netmail processing, reply netmail, and rescan queueing
+- BinkP client/server listener loops, TLS sessions, and retry scheduling
+- TLS-capable BinkP sessions and inbound BinkP listener execution
 
 See `design/MAILER.md` and `design/FTN_PLAN.md` in the repository for the
 implementation specifications.

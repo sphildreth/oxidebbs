@@ -15,18 +15,20 @@ use oxidebbs_db::{
     MessageAreaRecord, MessageRecord, NetworkAreaRecord, NetworkDuplicateLogRecord,
     NetworkLinkRecord, NetworkMessageRecord, NetworkNodelistRecord, NetworkPacketRecord,
     NetworkPathNode, NetworkPollLogRecord, NetworkProfileRecord, NetworkSeenByNode,
-    NetworkSubscriptionRecord, SessionRecord, UserRecord, Value, evict_shared_wal,
+    NetworkSubscriptionRecord, OxideNetApplicationRecord, OxideNetCredentialRecord,
+    OxideNetNodeRecord, SessionRecord, UserRecord, Value, evict_shared_wal,
     insert_audit_event_preserving_record, insert_auth_attempt, insert_door_definition,
     insert_door_run, insert_message, insert_message_area, insert_network_area,
     insert_network_duplicate_log, insert_network_link, insert_network_message,
     insert_network_nodelist_entry, insert_network_packet, insert_network_path_node,
     insert_network_poll_log, insert_network_profile, insert_network_seen_by,
-    insert_network_subscription, insert_session, insert_user, list_auth_attempts,
-    list_door_definitions, list_message_areas, list_messages, list_network_areas,
-    list_network_duplicates, list_network_links, list_network_messages,
-    list_network_nodelist_entries, list_network_packets, list_network_path, list_network_poll_logs,
-    list_network_profiles, list_network_seen_by, list_network_subscriptions, list_users,
-    read_schema_version,
+    insert_network_subscription, insert_oxidenet_application, insert_oxidenet_credential,
+    insert_oxidenet_node, insert_session, insert_user, list_auth_attempts, list_door_definitions,
+    list_message_areas, list_messages, list_network_areas, list_network_duplicates,
+    list_network_links, list_network_messages, list_network_nodelist_entries, list_network_packets,
+    list_network_path, list_network_poll_logs, list_network_profiles, list_network_seen_by,
+    list_network_subscriptions, list_oxidenet_applications, list_oxidenet_credentials_for_node,
+    list_oxidenet_nodes, list_users, read_schema_version,
 };
 
 #[derive(Debug, Clone, Deserialize)]
@@ -63,6 +65,12 @@ struct ImportSchema {
     network_area_subscriptions: Vec<ImportNetworkSubscriptionRecord>,
     #[serde(default)]
     network_nodelist: Vec<ImportNetworkNodelistRecord>,
+    #[serde(default)]
+    oxidenet_applications: Vec<ImportOxideNetApplicationRecord>,
+    #[serde(default)]
+    oxidenet_nodes: Vec<ImportOxideNetNodeRecord>,
+    #[serde(default)]
+    oxidenet_credentials: Vec<ImportOxideNetCredentialRecord>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -335,6 +343,78 @@ struct ImportNetworkNodelistRecord {
     parsed_name: Option<String>,
     raw_entry: String,
     updated_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ImportOxideNetApplicationRecord {
+    id: String,
+    created_at: String,
+    updated_at: String,
+    submitted_at: Option<String>,
+    reviewed_at: Option<String>,
+    status: String,
+    applicant_user_id: Option<String>,
+    board_name: String,
+    sysop_alias: String,
+    contact_email: String,
+    host: String,
+    binkp_port: i64,
+    telnet_host: Option<String>,
+    telnet_port: Option<i64>,
+    software: String,
+    software_version: String,
+    timezone: String,
+    region: String,
+    description: String,
+    reason: String,
+    policy_version: String,
+    policy_accepted_at: Option<String>,
+    admin_notes: String,
+    reviewed_by_user_id: Option<String>,
+    assigned_address: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ImportOxideNetNodeRecord {
+    id: String,
+    application_id: Option<String>,
+    network_key: String,
+    address: String,
+    zone: i64,
+    net: i64,
+    node: i64,
+    point: i64,
+    hub_address: String,
+    board_name: String,
+    sysop_alias: String,
+    contact_email: String,
+    host: String,
+    binkp_port: i64,
+    telnet_host: Option<String>,
+    telnet_port: Option<i64>,
+    software: String,
+    software_version: String,
+    status: String,
+    created_at: String,
+    updated_at: String,
+    activated_at: Option<String>,
+    suspended_at: Option<String>,
+    retired_at: Option<String>,
+    last_poll_at: Option<String>,
+    last_successful_poll_at: Option<String>,
+    flags: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ImportOxideNetCredentialRecord {
+    id: String,
+    node_id: String,
+    credential_kind: String,
+    secret_hash: String,
+    created_at: String,
+    rotated_at: Option<String>,
+    expires_at: Option<String>,
+    status: String,
 }
 
 impl From<ImportUserRecord> for UserRecord {
@@ -662,6 +742,87 @@ impl From<ImportNetworkNodelistRecord> for NetworkNodelistRecord {
             parsed_name: record.parsed_name,
             raw_entry: record.raw_entry,
             updated_at: record.updated_at,
+        }
+    }
+}
+
+impl From<ImportOxideNetApplicationRecord> for OxideNetApplicationRecord {
+    fn from(record: ImportOxideNetApplicationRecord) -> Self {
+        Self {
+            id: record.id,
+            created_at: record.created_at,
+            updated_at: record.updated_at,
+            submitted_at: record.submitted_at,
+            reviewed_at: record.reviewed_at,
+            status: record.status,
+            applicant_user_id: record.applicant_user_id,
+            board_name: record.board_name,
+            sysop_alias: record.sysop_alias,
+            contact_email: record.contact_email,
+            host: record.host,
+            binkp_port: record.binkp_port,
+            telnet_host: record.telnet_host,
+            telnet_port: record.telnet_port,
+            software: record.software,
+            software_version: record.software_version,
+            timezone: record.timezone,
+            region: record.region,
+            description: record.description,
+            reason: record.reason,
+            policy_version: record.policy_version,
+            policy_accepted_at: record.policy_accepted_at,
+            admin_notes: record.admin_notes,
+            reviewed_by_user_id: record.reviewed_by_user_id,
+            assigned_address: record.assigned_address,
+        }
+    }
+}
+
+impl From<ImportOxideNetNodeRecord> for OxideNetNodeRecord {
+    fn from(record: ImportOxideNetNodeRecord) -> Self {
+        Self {
+            id: record.id,
+            application_id: record.application_id,
+            network_key: record.network_key,
+            address: record.address,
+            zone: record.zone,
+            net: record.net,
+            node: record.node,
+            point: record.point,
+            hub_address: record.hub_address,
+            board_name: record.board_name,
+            sysop_alias: record.sysop_alias,
+            contact_email: record.contact_email,
+            host: record.host,
+            binkp_port: record.binkp_port,
+            telnet_host: record.telnet_host,
+            telnet_port: record.telnet_port,
+            software: record.software,
+            software_version: record.software_version,
+            status: record.status,
+            created_at: record.created_at,
+            updated_at: record.updated_at,
+            activated_at: record.activated_at,
+            suspended_at: record.suspended_at,
+            retired_at: record.retired_at,
+            last_poll_at: record.last_poll_at,
+            last_successful_poll_at: record.last_successful_poll_at,
+            flags: record.flags,
+        }
+    }
+}
+
+impl From<ImportOxideNetCredentialRecord> for OxideNetCredentialRecord {
+    fn from(record: ImportOxideNetCredentialRecord) -> Self {
+        Self {
+            id: record.id,
+            node_id: record.node_id,
+            credential_kind: record.credential_kind,
+            secret_hash: record.secret_hash,
+            created_at: record.created_at,
+            rotated_at: record.rotated_at,
+            expires_at: record.expires_at,
+            status: record.status,
         }
     }
 }
@@ -1123,7 +1284,90 @@ fn network_nodelist_json(entry: &NetworkNodelistRecord) -> JsonValue {
     })
 }
 
+fn oxidenet_application_json(application: &OxideNetApplicationRecord) -> JsonValue {
+    serde_json::json!({
+        "id": application.id,
+        "created_at": application.created_at,
+        "updated_at": application.updated_at,
+        "submitted_at": application.submitted_at,
+        "reviewed_at": application.reviewed_at,
+        "status": application.status,
+        "applicant_user_id": application.applicant_user_id,
+        "board_name": application.board_name,
+        "sysop_alias": application.sysop_alias,
+        "contact_email": application.contact_email,
+        "host": application.host,
+        "binkp_port": application.binkp_port,
+        "telnet_host": application.telnet_host,
+        "telnet_port": application.telnet_port,
+        "software": application.software,
+        "software_version": application.software_version,
+        "timezone": application.timezone,
+        "region": application.region,
+        "description": application.description,
+        "reason": application.reason,
+        "policy_version": application.policy_version,
+        "policy_accepted_at": application.policy_accepted_at,
+        "admin_notes": application.admin_notes,
+        "reviewed_by_user_id": application.reviewed_by_user_id,
+        "assigned_address": application.assigned_address
+    })
+}
+
+fn oxidenet_node_json(node: &OxideNetNodeRecord) -> JsonValue {
+    serde_json::json!({
+        "id": node.id,
+        "application_id": node.application_id,
+        "network_key": node.network_key,
+        "address": node.address,
+        "zone": node.zone,
+        "net": node.net,
+        "node": node.node,
+        "point": node.point,
+        "hub_address": node.hub_address,
+        "board_name": node.board_name,
+        "sysop_alias": node.sysop_alias,
+        "contact_email": node.contact_email,
+        "host": node.host,
+        "binkp_port": node.binkp_port,
+        "telnet_host": node.telnet_host,
+        "telnet_port": node.telnet_port,
+        "software": node.software,
+        "software_version": node.software_version,
+        "status": node.status,
+        "created_at": node.created_at,
+        "updated_at": node.updated_at,
+        "activated_at": node.activated_at,
+        "suspended_at": node.suspended_at,
+        "retired_at": node.retired_at,
+        "last_poll_at": node.last_poll_at,
+        "last_successful_poll_at": node.last_successful_poll_at,
+        "flags": node.flags
+    })
+}
+
+fn oxidenet_credential_json(credential: &OxideNetCredentialRecord) -> JsonValue {
+    serde_json::json!({
+        "id": credential.id,
+        "node_id": credential.node_id,
+        "credential_kind": credential.credential_kind,
+        "secret_hash": credential.secret_hash,
+        "created_at": credential.created_at,
+        "rotated_at": credential.rotated_at,
+        "expires_at": credential.expires_at,
+        "status": credential.status
+    })
+}
+
 fn db_export(db: &Db) -> CliResult<JsonValue> {
+    const EXPORT_ROW_LIMIT: i64 = 1_000_000;
+
+    let oxidenet_nodes = list_oxidenet_nodes(db, EXPORT_ROW_LIMIT)?;
+    let mut oxidenet_credentials = Vec::new();
+    for node in &oxidenet_nodes {
+        oxidenet_credentials.extend(list_oxidenet_credentials_for_node(db, &node.id)?);
+    }
+
     Ok(serde_json::json!({
         "schema_version": read_schema_version(db)?,
         "users": list_users(db)?.iter().map(user_json).collect::<Vec<_>>(),
@@ -1144,7 +1388,10 @@ fn db_export(db: &Db) -> CliResult<JsonValue> {
         "network_duplicate_log": list_network_duplicates(db)?.iter().map(network_duplicate_json).collect::<Vec<_>>(),
         "network_poll_log": list_network_poll_logs(db)?.iter().map(network_poll_json).collect::<Vec<_>>(),
         "network_area_subscriptions": list_network_subscriptions(db)?.iter().map(network_subscription_json).collect::<Vec<_>>(),
-        "network_nodelist": list_network_nodelist_entries(db)?.iter().map(network_nodelist_json).collect::<Vec<_>>()
+        "network_nodelist": list_network_nodelist_entries(db)?.iter().map(network_nodelist_json).collect::<Vec<_>>(),
+        "oxidenet_applications": list_oxidenet_applications(db, EXPORT_ROW_LIMIT)?.iter().map(oxidenet_application_json).collect::<Vec<_>>(),
+        "oxidenet_nodes": oxidenet_nodes.iter().map(oxidenet_node_json).collect::<Vec<_>>(),
+        "oxidenet_credentials": oxidenet_credentials.iter().map(oxidenet_credential_json).collect::<Vec<_>>()
     }))
 }
 
@@ -1186,6 +1433,9 @@ fn ensure_import_target_is_schema_only(db: &Db) -> CliResult<()> {
         "network_poll_log",
         "network_area_subscriptions",
         "network_nodelist",
+        "network_applications",
+        "network_nodes",
+        "network_credentials",
     ] {
         let count = db_scalar_i64(db, &format!("SELECT COUNT(*) FROM {table}"))?;
         if count > 0 {
@@ -1493,6 +1743,148 @@ fn validate_import_payload(payload: &ImportSchema, current_schema_version: i64) 
         }
     }
 
+    let mut oxidenet_application_ids = HashSet::with_capacity(payload.oxidenet_applications.len());
+    let mut oxidenet_assigned_addresses = HashSet::new();
+    for application in &payload.oxidenet_applications {
+        if !oxidenet_application_ids.insert(application.id.clone()) {
+            return Err(CliError::Message(format!(
+                "duplicate OxideNet application id {} in import payload",
+                application.id
+            )));
+        }
+        if !valid_oxidenet_application_status(&application.status) {
+            return Err(CliError::Message(format!(
+                "OxideNet application {} has invalid status {}",
+                application.id, application.status
+            )));
+        }
+        if application.binkp_port <= 0 || application.binkp_port > 65_535 {
+            return Err(CliError::Message(format!(
+                "OxideNet application {} has invalid BinkP port {}",
+                application.id, application.binkp_port
+            )));
+        }
+        if let Some(telnet_port) = application.telnet_port
+            && (telnet_port <= 0 || telnet_port > 65_535)
+        {
+            return Err(CliError::Message(format!(
+                "OxideNet application {} has invalid telnet port {}",
+                application.id, telnet_port
+            )));
+        }
+        if let Some(user_id) = application.applicant_user_id.as_deref()
+            && !user_ids.contains(user_id)
+        {
+            return Err(CliError::Message(format!(
+                "OxideNet application {} references missing applicant {}",
+                application.id, user_id
+            )));
+        }
+        if let Some(user_id) = application.reviewed_by_user_id.as_deref()
+            && !user_ids.contains(user_id)
+        {
+            return Err(CliError::Message(format!(
+                "OxideNet application {} references missing reviewer {}",
+                application.id, user_id
+            )));
+        }
+        if let Some(address) = application.assigned_address.as_deref()
+            && !oxidenet_assigned_addresses.insert(address)
+        {
+            return Err(CliError::Message(format!(
+                "duplicate OxideNet assigned address {} in import payload",
+                address
+            )));
+        }
+    }
+
+    let mut oxidenet_node_ids = HashSet::with_capacity(payload.oxidenet_nodes.len());
+    let mut oxidenet_node_addresses = HashSet::with_capacity(payload.oxidenet_nodes.len());
+    for node in &payload.oxidenet_nodes {
+        if !oxidenet_node_ids.insert(node.id.clone()) {
+            return Err(CliError::Message(format!(
+                "duplicate OxideNet node id {} in import payload",
+                node.id
+            )));
+        }
+        if !oxidenet_node_addresses.insert(node.address.clone()) {
+            return Err(CliError::Message(format!(
+                "duplicate OxideNet node address {} in import payload",
+                node.address
+            )));
+        }
+        if let Some(application_id) = node.application_id.as_deref()
+            && !oxidenet_application_ids.contains(application_id)
+        {
+            return Err(CliError::Message(format!(
+                "OxideNet node {} references missing application {}",
+                node.id, application_id
+            )));
+        }
+        if !valid_oxidenet_node_status(&node.status) {
+            return Err(CliError::Message(format!(
+                "OxideNet node {} has invalid status {}",
+                node.id, node.status
+            )));
+        }
+        if node.zone <= 0 || node.net <= 0 || node.node <= 0 || node.point < 0 {
+            return Err(CliError::Message(format!(
+                "OxideNet node {} has invalid address parts",
+                node.id
+            )));
+        }
+        if node.binkp_port <= 0 || node.binkp_port > 65_535 {
+            return Err(CliError::Message(format!(
+                "OxideNet node {} has invalid BinkP port {}",
+                node.id, node.binkp_port
+            )));
+        }
+        if let Some(telnet_port) = node.telnet_port
+            && (telnet_port <= 0 || telnet_port > 65_535)
+        {
+            return Err(CliError::Message(format!(
+                "OxideNet node {} has invalid telnet port {}",
+                node.id, telnet_port
+            )));
+        }
+    }
+
+    let mut oxidenet_credential_ids = HashSet::with_capacity(payload.oxidenet_credentials.len());
+    for credential in &payload.oxidenet_credentials {
+        if !oxidenet_credential_ids.insert(credential.id.clone()) {
+            return Err(CliError::Message(format!(
+                "duplicate OxideNet credential id {} in import payload",
+                credential.id
+            )));
+        }
+        if !oxidenet_node_ids.contains(credential.node_id.as_str()) {
+            return Err(CliError::Message(format!(
+                "OxideNet credential {} references missing node {}",
+                credential.id, credential.node_id
+            )));
+        }
+        if credential.credential_kind != "binkp_session"
+            && credential.credential_kind != "invite_token"
+        {
+            return Err(CliError::Message(format!(
+                "OxideNet credential {} has invalid kind {}",
+                credential.id, credential.credential_kind
+            )));
+        }
+        if !valid_oxidenet_credential_status(&credential.status) {
+            return Err(CliError::Message(format!(
+                "OxideNet credential {} has invalid status {}",
+                credential.id, credential.status
+            )));
+        }
+        if credential.secret_hash.trim().is_empty() {
+            return Err(CliError::Message(format!(
+                "OxideNet credential {} has blank secret_hash",
+                credential.id
+            )));
+        }
+    }
+
     for session in &payload.sessions {
         if let Some(user_id) = session.user_id.as_deref()
             && !user_ids.contains(user_id)
@@ -1571,6 +1963,41 @@ fn validate_import_payload(payload: &ImportSchema, current_schema_version: i64) 
     }
 
     Ok(())
+}
+
+fn valid_oxidenet_application_status(status: &str) -> bool {
+    matches!(
+        status,
+        "draft"
+            | "submitted"
+            | "needs-info"
+            | "approved"
+            | "config-generated"
+            | "first-poll-pending"
+            | "active"
+            | "probation"
+            | "suspended"
+            | "retired"
+            | "rejected"
+            | "withdrawn"
+            | "needs-review-hold"
+    )
+}
+
+fn valid_oxidenet_node_status(status: &str) -> bool {
+    matches!(
+        status,
+        "config-generated"
+            | "first-poll-pending"
+            | "active"
+            | "probation"
+            | "suspended"
+            | "retired"
+    )
+}
+
+fn valid_oxidenet_credential_status(status: &str) -> bool {
+    matches!(status, "active" | "revoked" | "expired")
 }
 
 fn insert_messages_with_replies(db: &Db, messages: &[MessageRecord]) -> CliResult<()> {
@@ -1656,6 +2083,18 @@ fn perform_db_import(db: &oxidebbs_db::OxideDb, payload: ImportSchema) -> CliRes
         .into_iter()
         .map(Into::into)
         .collect();
+    let oxidenet_applications: Vec<OxideNetApplicationRecord> = payload
+        .oxidenet_applications
+        .into_iter()
+        .map(Into::into)
+        .collect();
+    let oxidenet_nodes: Vec<OxideNetNodeRecord> =
+        payload.oxidenet_nodes.into_iter().map(Into::into).collect();
+    let oxidenet_credentials: Vec<OxideNetCredentialRecord> = payload
+        .oxidenet_credentials
+        .into_iter()
+        .map(Into::into)
+        .collect();
 
     let db = db.db();
     db.begin_transaction()?;
@@ -1702,6 +2141,15 @@ fn perform_db_import(db: &oxidebbs_db::OxideDb, payload: ImportSchema) -> CliRes
         }
         for entry in &network_nodelist {
             insert_network_nodelist_entry(db, entry)?;
+        }
+        for application in &oxidenet_applications {
+            insert_oxidenet_application(db, application)?;
+        }
+        for node in &oxidenet_nodes {
+            insert_oxidenet_node(db, node)?;
+        }
+        for credential in &oxidenet_credentials {
+            insert_oxidenet_credential(db, credential)?;
         }
         for session in &sessions {
             insert_session(db, session)?;
@@ -1782,6 +2230,9 @@ fn verify_database(db: &oxidebbs_db::OxideDb) -> DatabaseVerifyReport {
         "network_poll_log",
         "network_area_subscriptions",
         "network_nodelist",
+        "network_applications",
+        "network_nodes",
+        "network_credentials",
         "file_areas",
         "file_entries",
         "file_transfers",
@@ -1801,7 +2252,14 @@ fn verify_database(db: &oxidebbs_db::OxideDb) -> DatabaseVerifyReport {
         }
     }
 
-    for name in ["users", "messages", "doors", "sessions", "file_areas"] {
+    for name in [
+        "users",
+        "messages",
+        "doors",
+        "sessions",
+        "file_areas",
+        "oxidenet_nodes",
+    ] {
         let result: Result<(), String> = match name {
             "users" => oxidebbs_db::list_users(db.db())
                 .map(|_| ())
@@ -1816,6 +2274,9 @@ fn verify_database(db: &oxidebbs_db::OxideDb) -> DatabaseVerifyReport {
                 .map(|_| ())
                 .map_err(|error| error.to_string()),
             "file_areas" => oxidebbs_db::list_file_areas(db.db())
+                .map(|_| ())
+                .map_err(|error| error.to_string()),
+            "oxidenet_nodes" => oxidebbs_db::list_oxidenet_nodes(db.db(), 1)
                 .map(|_| ())
                 .map_err(|error| error.to_string()),
             _ => Ok(()),
@@ -2141,7 +2602,9 @@ mod tests {
     use super::*;
     use oxidebbs_db::{
         SCHEMA_VERSION, find_message_by_id, insert_audit_event, insert_door_definition,
-        insert_door_run, insert_message, insert_message_area, insert_session, insert_user,
+        insert_door_run, insert_message, insert_message_area, insert_oxidenet_application,
+        insert_oxidenet_credential, insert_oxidenet_node, insert_session, insert_user,
+        list_oxidenet_applications, list_oxidenet_credentials_for_node, list_oxidenet_nodes,
         list_users,
     };
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -2235,6 +2698,81 @@ mod tests {
         }
     }
 
+    fn seed_oxidenet_application(id: &str) -> OxideNetApplicationRecord {
+        OxideNetApplicationRecord {
+            id: id.to_string(),
+            created_at: "2026-06-04T00:00:00.000000Z".to_string(),
+            updated_at: "2026-06-04T00:00:00.000000Z".to_string(),
+            submitted_at: Some("2026-06-04T00:00:00.000000Z".to_string()),
+            reviewed_at: Some("2026-06-04T01:00:00.000000Z".to_string()),
+            status: "approved".to_string(),
+            applicant_user_id: None,
+            board_name: "Example BBS".to_string(),
+            sysop_alias: "Sysop".to_string(),
+            contact_email: "sysop@example.test".to_string(),
+            host: "bbs.example.test".to_string(),
+            binkp_port: 24554,
+            telnet_host: Some("bbs.example.test".to_string()),
+            telnet_port: Some(23),
+            software: "OxideBBS".to_string(),
+            software_version: "1.2.0".to_string(),
+            timezone: "America/Chicago".to_string(),
+            region: "NA".to_string(),
+            description: "test board".to_string(),
+            reason: "join oxidenet".to_string(),
+            policy_version: "2026-06-04".to_string(),
+            policy_accepted_at: Some("2026-06-04T00:00:00.000000Z".to_string()),
+            admin_notes: "approved".to_string(),
+            reviewed_by_user_id: None,
+            assigned_address: Some("777:1/100".to_string()),
+        }
+    }
+
+    fn seed_oxidenet_node(id: &str, application_id: &str) -> OxideNetNodeRecord {
+        OxideNetNodeRecord {
+            id: id.to_string(),
+            application_id: Some(application_id.to_string()),
+            network_key: "oxidenet".to_string(),
+            address: "777:1/100".to_string(),
+            zone: 777,
+            net: 1,
+            node: 100,
+            point: 0,
+            hub_address: "777:1/1".to_string(),
+            board_name: "Example BBS".to_string(),
+            sysop_alias: "Sysop".to_string(),
+            contact_email: "sysop@example.test".to_string(),
+            host: "bbs.example.test".to_string(),
+            binkp_port: 24554,
+            telnet_host: None,
+            telnet_port: None,
+            software: "OxideBBS".to_string(),
+            software_version: "1.2.0".to_string(),
+            status: "active".to_string(),
+            created_at: "2026-06-04T01:00:00.000000Z".to_string(),
+            updated_at: "2026-06-04T01:00:00.000000Z".to_string(),
+            activated_at: Some("2026-06-04T01:30:00.000000Z".to_string()),
+            suspended_at: None,
+            retired_at: None,
+            last_poll_at: Some("2026-06-04T02:00:00.000000Z".to_string()),
+            last_successful_poll_at: Some("2026-06-04T02:00:00.000000Z".to_string()),
+            flags: "CM".to_string(),
+        }
+    }
+
+    fn seed_oxidenet_credential(id: &str, node_id: &str) -> OxideNetCredentialRecord {
+        OxideNetCredentialRecord {
+            id: id.to_string(),
+            node_id: node_id.to_string(),
+            credential_kind: "binkp_session".to_string(),
+            secret_hash: "sha256:abc123".to_string(),
+            created_at: "2026-06-04T01:00:00.000000Z".to_string(),
+            rotated_at: None,
+            expires_at: None,
+            status: "active".to_string(),
+        }
+    }
+
     fn table_counts(db: &oxidebbs_db::OxideDb) -> (i64, i64, i64, i64, i64, i64, i64, i64) {
         (
             db_scalar_i64(db.db(), "SELECT COUNT(*) FROM users").expect("count users"),
@@ -2316,6 +2854,14 @@ mod tests {
             node_number: Some(1),
             details: "created fixture".to_string(),
         };
+        let oxidenet_application =
+            seed_oxidenet_application("00000000-0000-4000-8000-000000000701");
+        let oxidenet_node = seed_oxidenet_node(
+            "00000000-0000-4000-8000-000000000702",
+            &oxidenet_application.id,
+        );
+        let oxidenet_credential =
+            seed_oxidenet_credential("00000000-0000-4000-8000-000000000703", &oxidenet_node.id);
 
         insert_user(source.db(), &user).expect("seed user");
         insert_message_area(source.db(), &area).expect("seed area");
@@ -2325,6 +2871,11 @@ mod tests {
         insert_door_definition(source.db(), &door).expect("seed door");
         insert_door_run(source.db(), &door_run).expect("seed run");
         insert_audit_event(source.db(), &audit_event.into()).expect("seed audit");
+        insert_oxidenet_application(source.db(), &oxidenet_application)
+            .expect("seed oxidenet application");
+        insert_oxidenet_node(source.db(), &oxidenet_node).expect("seed oxidenet node");
+        insert_oxidenet_credential(source.db(), &oxidenet_credential)
+            .expect("seed oxidenet credential");
 
         let payload = export_payload(&source);
         (source, payload)
@@ -2353,6 +2904,54 @@ mod tests {
             reply.reply_to_id.as_deref(),
             Some("00000000-0000-4000-8000-000000000201")
         );
+        let applications = list_oxidenet_applications(target.db(), 10).expect("list applications");
+        let nodes = list_oxidenet_nodes(target.db(), 10).expect("list nodes");
+        let credentials =
+            list_oxidenet_credentials_for_node(target.db(), &nodes[0].id).expect("list creds");
+        assert_eq!(applications.len(), 1);
+        assert_eq!(
+            applications[0].assigned_address.as_deref(),
+            Some("777:1/100")
+        );
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(
+            nodes[0].application_id.as_deref(),
+            Some(applications[0].id.as_str())
+        );
+        assert_eq!(credentials.len(), 1);
+        assert_eq!(credentials[0].secret_hash, "sha256:abc123");
+    }
+
+    #[test]
+    fn import_restores_oxidenet_registry_rows() {
+        let source = test_db();
+        let application = seed_oxidenet_application("00000000-0000-4000-8000-000000000701");
+        let node = seed_oxidenet_node("00000000-0000-4000-8000-000000000702", &application.id);
+        let credential = seed_oxidenet_credential("00000000-0000-4000-8000-000000000703", &node.id);
+
+        insert_oxidenet_application(source.db(), &application).expect("seed application");
+        insert_oxidenet_node(source.db(), &node).expect("seed node");
+        insert_oxidenet_credential(source.db(), &credential).expect("seed credential");
+
+        let payload = export_payload(&source);
+        assert_eq!(payload.oxidenet_applications.len(), 1);
+        assert_eq!(payload.oxidenet_nodes.len(), 1);
+        assert_eq!(payload.oxidenet_credentials.len(), 1);
+
+        let target = test_db();
+        perform_db_import(&target, payload).expect("import");
+
+        let applications = list_oxidenet_applications(target.db(), 10).expect("list applications");
+        let nodes = list_oxidenet_nodes(target.db(), 10).expect("list nodes");
+        let credentials = list_oxidenet_credentials_for_node(target.db(), &nodes[0].id)
+            .expect("list credentials");
+
+        assert_eq!(
+            applications[0].assigned_address.as_deref(),
+            Some("777:1/100")
+        );
+        assert_eq!(nodes[0].address, "777:1/100");
+        assert_eq!(credentials[0].secret_hash, "sha256:abc123");
     }
 
     #[test]

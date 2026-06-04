@@ -61,6 +61,8 @@ export default defineConfig({
         items: [
           { text: 'Architecture', link: '/ftn/architecture' },
           { text: 'CLI', link: '/ftn/cli' },
+          { text: 'Tosser', link: '/ftn/tosser' },
+          { text: 'Scanner', link: '/ftn/scanner' },
           { text: 'Nodelists', link: '/ftn/nodelist' },
           { text: 'Packet Format', link: '/ftn/packet-format' },
           { text: 'Echomail', link: '/ftn/echomail' },
@@ -73,7 +75,12 @@ export default defineConfig({
       },
       {
         text: 'OxideNet',
-        items: [{ text: 'Overview', link: '/oxidenet/overview' }]
+        items: [
+          { text: 'Overview', link: '/oxidenet/overview' },
+          { text: 'Addressing', link: '/oxidenet/addressing' },
+          { text: 'Registry', link: '/oxidenet/registry' },
+          { text: 'Config Package', link: '/oxidenet/config-package' }
+        ]
       },
       {
         text: 'About',

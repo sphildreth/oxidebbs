@@ -22,7 +22,7 @@ crates/
   oxidebbs-core/     # domain models: User, Node, Session, Door, Message, Audit
   oxidebbs-term/     # ANSI/CP437 rendering, CP437 encode/decode
   oxidebbs-telnet/   # telnet transport and negotiation
-  oxidebbs-db/       # DecentDB repository layer, OxideDb, schema v4
+  oxidebbs-db/       # DecentDB repository layer, OxideDb, schema v8
   oxidebbs-door/     # door definitions, drop files, runners
   oxidebbs-sysop/    # local sysop TUI
 design/              # architecture docs, specs, ADRs

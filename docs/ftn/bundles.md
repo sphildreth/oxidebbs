@@ -11,6 +11,8 @@ Current `oxidebbs-ftn` bundle foundation:
   `PacketReader`.
 - `.zip` is classified as a ZIP arcmail bundle and extracts top-level `.pkt`
   entries into the requested output directory.
+- `BundleCreator::create_zip_bundle` creates a ZIP arcmail bundle from one or
+  more packet files using top-level packet filenames as entries.
 - `.arj` is classified as an ARJ arcmail bundle.
 - ARJ extraction returns an explicit unsupported-extraction error until the
   policy is implemented.
@@ -22,6 +24,11 @@ to overwrite an existing extracted packet. This keeps inbound processing
 deterministic before the tosser decides whether to import, archive, or
 quarantine a packet.
 
+ZIP creation is also intentionally strict. OxideBBS refuses empty packet lists,
+non-`.pkt` packet inputs, duplicate packet filenames case-insensitively, and
+existing bundle output files. The created bundle can be passed back through the
+same extraction boundary for verification.
+
 Classic day-of-week arcmail names such as `.su0`, `.mo0`, `.tu0`, `.we0`,
 `.th0`, `.fr0`, and `.sa0` still need a documented naming and compression
 policy before OxideBBS treats them as extractable bundles. The current
@@ -30,5 +37,6 @@ classifier intentionally recognizes only unambiguous suffixes.
 Remaining work:
 
 - decide whether ARJ support is built in, external-tool based, or deferred
-- implement outbound bundle creation and naming
+- connect outbound ZIP bundle creation to scanner/mailer workflows
+- implement arcmail bundle naming
 - connect bundle extraction to the tosser quarantine/archive workflow

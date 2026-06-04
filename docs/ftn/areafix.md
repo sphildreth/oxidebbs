@@ -4,8 +4,20 @@ AreaFix is the FTN netmail robot used to manage echomail subscriptions. A linked
 system sends netmail to `AreaFix` at the board's FTN address, with the link
 password in the subject line and commands in the message body.
 
-OxideBBS v1.2 currently includes the pure `oxidebbs-ftn` command parser. The
-parser recognizes every planned command form and normalizes area tags to
+OxideBBS v1.2 currently includes the pure `oxidebbs-ftn` command parser and a
+local sysop-side executor:
+
+```bash
+oxidebbs-server net areafix send <link> "<commands>" --password <password> [--network <network>]
+```
+
+The executor authenticates the supplied password against the configured link
+password, applies subscription commands to DecentDB, audits the activity, and
+prints the reply text that would be sent to the link. It is intended for local
+operator testing and for proving the AreaFix state transitions before inbound
+netmail processing is wired into the tosser.
+
+The parser recognizes every planned command form and normalizes area tags to
 uppercase ASCII.
 
 Supported commands:
@@ -32,9 +44,8 @@ Example body:
 
 Current runtime boundaries:
 
-- the parser does not authenticate the subject-line password
-- it does not mutate `network_area_subscriptions`
-- it does not generate reply netmail
-- it does not enqueue rescans or write activity logs
+- inbound netmail addressed to `AreaFix` is not processed automatically yet
+- generated replies are printed by the CLI but are not queued as netmail yet
+- rescan requests are acknowledged but do not enqueue historical messages yet
 - manual `net areas subscribe` and `net areas unsubscribe` remain the current
-  operator-side subscription mutation commands
+  direct operator-side subscription mutation commands

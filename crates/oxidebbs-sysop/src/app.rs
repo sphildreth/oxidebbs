@@ -640,8 +640,20 @@ fn handle_ui_event(app: &mut App, event: UiEvent) {
             UiEvent::Confirm => {
                 if let Some(modal) = app.modal.take() {
                     match modal {
-                        ModalKind::Form(form) => handle_form_submit(app, form),
-                        ModalKind::Confirm(confirm) => handle_confirm_submit(app, &confirm.title),
+                        ModalKind::Form(form) => {
+                            if app.config.readonly && form_submit_mutates(&form.title) {
+                                block_readonly_action(app, &form.title);
+                            } else {
+                                handle_form_submit(app, form);
+                            }
+                        }
+                        ModalKind::Confirm(confirm) => {
+                            if app.config.readonly && confirm_submit_mutates(&confirm.title) {
+                                block_readonly_action(app, &confirm.title);
+                            } else {
+                                handle_confirm_submit(app, &confirm.title);
+                            }
+                        }
                         ModalKind::Error(_) | ModalKind::Info(_) => {}
                     }
                 }
@@ -675,7 +687,11 @@ fn handle_ui_event(app: &mut App, event: UiEvent) {
                     Some(ModalKind::Confirm(_)) => match key.code {
                         KeyCode::Char('y') | KeyCode::Char('Y') => {
                             if let Some(ModalKind::Confirm(confirm)) = app.modal.take() {
-                                handle_confirm_submit(app, &confirm.title);
+                                if app.config.readonly && confirm_submit_mutates(&confirm.title) {
+                                    block_readonly_action(app, &confirm.title);
+                                } else {
+                                    handle_confirm_submit(app, &confirm.title);
+                                }
                             }
                         }
                         KeyCode::Char('n') | KeyCode::Char('N') => {
@@ -715,7 +731,9 @@ fn handle_ui_event(app: &mut App, event: UiEvent) {
                     match cmd.action {
                         PaletteAction::Navigate(screen) => app.navigate_to(screen),
                         PaletteAction::RunCommand(ref id) => {
-                            if id == "nodes.reset_stale" {
+                            if app.config.readonly {
+                                block_readonly_action(app, &cmd.label);
+                            } else if id == "nodes.reset_stale" {
                                 match app.node_service.reset_stale() {
                                     Ok(()) => {
                                         if let Some(db) = &app.db {
@@ -823,6 +841,27 @@ fn apply_ui_action(app: &mut App, action: UiAction) {
         }
         UiAction::Quit => app.should_quit = true,
     }
+}
+
+fn form_submit_mutates(title: &str) -> bool {
+    matches!(
+        title,
+        "Send Message" | "Broadcast Message" | "Reset Password" | "Set Security Level"
+    )
+}
+
+fn confirm_submit_mutates(title: &str) -> bool {
+    !matches!(title, "Quit Sysop TUI" | "Active Nodes")
+}
+
+fn block_readonly_action(app: &mut App, title: &str) {
+    app.users_screen.cancel_pending_action();
+    app.doors_screen.cancel_pending_action();
+    set_info_message(
+        app,
+        "Read Only",
+        &format!("{title} is unavailable while the sysop TUI is running in read-only mode."),
+    );
 }
 
 fn request_quit(app: &mut App) {
@@ -1318,6 +1357,92 @@ mod tests {
     #[test]
     fn confirming_quit_modal_sets_should_quit() {
         let mut app = App::new(AppConfig::default());
+        handle_ui_event(&mut app, UiEvent::Quit);
+
+        handle_ui_event(&mut app, UiEvent::Confirm);
+
+        assert!(app.should_quit);
+        assert!(app.modal.is_none());
+    }
+
+    #[test]
+    fn readonly_dashboard_does_not_open_node_message_forms() {
+        let mut app = App::new(AppConfig {
+            readonly: true,
+            ..AppConfig::default()
+        });
+
+        handle_ui_event(
+            &mut app,
+            UiEvent::Key(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE)),
+        );
+        assert!(app.modal.is_none());
+
+        handle_ui_event(
+            &mut app,
+            UiEvent::Key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE)),
+        );
+        assert!(app.modal.is_none());
+    }
+
+    #[test]
+    fn readonly_blocks_mutating_form_submission() {
+        let mut app = App::new(AppConfig {
+            readonly: true,
+            ..AppConfig::default()
+        });
+        app.modal = Some(ModalKind::Form(FormModal {
+            title: "Broadcast Message".to_string(),
+            fields: vec![FormField {
+                label: "Message".to_string(),
+                value: "hello".to_string(),
+                is_password: false,
+            }],
+            active_field: 0,
+        }));
+
+        handle_ui_event(&mut app, UiEvent::Confirm);
+
+        match app.modal {
+            Some(ModalKind::Info(ref modal)) => {
+                assert_eq!(modal.title, "Read Only");
+                assert!(modal.message.contains("Broadcast Message"));
+            }
+            _ => panic!("expected read-only info modal"),
+        }
+    }
+
+    #[test]
+    fn readonly_blocks_mutating_confirm_submission() {
+        let mut app = App::new(AppConfig {
+            readonly: true,
+            ..AppConfig::default()
+        });
+        app.modal = Some(ModalKind::Confirm(ConfirmModal {
+            title: "Delete Message".to_string(),
+            message: "Delete?".to_string(),
+            detail: None,
+            confirm_label: "Delete".to_string(),
+            cancel_label: "Cancel".to_string(),
+        }));
+
+        handle_ui_event(&mut app, UiEvent::Confirm);
+
+        match app.modal {
+            Some(ModalKind::Info(ref modal)) => {
+                assert_eq!(modal.title, "Read Only");
+                assert!(modal.message.contains("Delete Message"));
+            }
+            _ => panic!("expected read-only info modal"),
+        }
+    }
+
+    #[test]
+    fn readonly_allows_quit_confirmation() {
+        let mut app = App::new(AppConfig {
+            readonly: true,
+            ..AppConfig::default()
+        });
         handle_ui_event(&mut app, UiEvent::Quit);
 
         handle_ui_event(&mut app, UiEvent::Confirm);

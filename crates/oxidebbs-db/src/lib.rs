@@ -12,11 +12,12 @@ mod file_repo;
 mod message_repo;
 mod migrations;
 mod network_repo;
+mod oxidenet_repo;
 mod schema;
 mod session_repo;
 mod user_repo;
 
-pub const SCHEMA_VERSION: i64 = 7;
+pub const SCHEMA_VERSION: i64 = 8;
 
 pub use audit_repo::{
     AuditEventRecord, insert_audit_event, insert_audit_event_preserving_record, list_audit_events,
@@ -28,9 +29,10 @@ pub use auth_repo::{
 };
 pub use db_writer::{DbWriteTicket, DbWriter, DbWriterError, DbWriterResult};
 pub use door_repo::{
-    DoorDefinitionRecord, DoorRunFinish, DoorRunRecord, find_door_by_key, find_door_run_by_id,
-    finish_door_run, insert_door_definition, insert_door_run, list_door_definitions,
-    list_door_runs, update_door_definition, update_door_enabled,
+    DoorDefinitionRecord, DoorRunFinish, DoorRunRecord, find_active_door_run_by_door_id,
+    find_door_by_key, find_door_run_by_id, finish_door_run, insert_door_definition,
+    insert_door_run, list_door_definitions, list_door_runs, update_door_definition,
+    update_door_enabled,
 };
 pub use file_repo::{
     FileAreaRecord, FileEntryRecord, FileTransferRecord, find_file_area_by_key,
@@ -61,6 +63,13 @@ pub use network_repo::{
     mark_network_packet_quarantined, replace_network_nodelist_entries, requeue_network_packet,
     set_network_area_subscribed, set_network_profile_enabled, set_network_subscription_status,
     summarize_network_packets,
+};
+pub use oxidenet_repo::{
+    OxideNetApplicationRecord, OxideNetCredentialRecord, OxideNetNodeRecord,
+    find_oxidenet_application_by_id, find_oxidenet_node_by_address, insert_oxidenet_application,
+    insert_oxidenet_credential, insert_oxidenet_node, list_oxidenet_applications,
+    list_oxidenet_credentials_for_node, list_oxidenet_nodes, record_oxidenet_node_poll,
+    revoke_oxidenet_credential, update_oxidenet_application_status, update_oxidenet_node_status,
 };
 pub use schema::schema_version as read_schema_version;
 pub use session_repo::{

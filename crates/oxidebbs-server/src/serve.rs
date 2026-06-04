@@ -85,6 +85,24 @@ const TERMINAL_CAPABILITY_NEGOTIATION_TIMEOUT: Duration = Duration::from_millis(
 #[cfg(unix)]
 const STALE_NODE_SWEEP_INTERVAL: Duration = Duration::from_secs(30);
 
+fn server_start_audit_details(config: &OxideConfig) -> String {
+    match (config.telnet.enabled, config.admin_web.enabled) {
+        (true, true) => format!(
+            "serving {} on {} with {} node(s); admin web status on {}",
+            config.board.name, config.telnet.bind, config.nodes.count, config.admin_web.bind
+        ),
+        (true, false) => format!(
+            "serving {} on {} with {} node(s)",
+            config.board.name, config.telnet.bind, config.nodes.count
+        ),
+        (false, true) => format!(
+            "serving {} admin web status on {} with telnet disabled",
+            config.board.name, config.admin_web.bind
+        ),
+        (false, false) => format!("{} service disabled", config.board.name),
+    }
+}
+
 pub async fn run(config: &OxideConfig, config_path: &Path) -> ServeResult<()> {
     run_until_shutdown(config, config_path, wait_for_shutdown_signal()).await
 }
@@ -106,8 +124,8 @@ pub(crate) async fn run_until_shutdown<S>(
 where
     S: Future<Output = ServeResult<()>> + Send,
 {
-    if !config.telnet.enabled {
-        info!(bind = %config.telnet.bind, "telnet disabled; service not started");
+    if !config.telnet.enabled && !config.admin_web.enabled {
+        info!(bind = %config.telnet.bind, "telnet and admin web disabled; service not started");
         return Ok(());
     }
 
@@ -186,89 +204,111 @@ where
         Option<tokio::task::JoinHandle<()>>,
     ) = (None, None);
 
-    let listener = TcpListener::bind(&config.telnet.bind).await?;
+    let telnet_listener = if config.telnet.enabled {
+        Some(TcpListener::bind(&config.telnet.bind).await?)
+    } else {
+        None
+    };
+
+    let admin_web_handle = if config.admin_web.enabled {
+        Some(
+            crate::admin_web::start_admin_web(
+                Arc::clone(&shared_config),
+                Arc::clone(&db),
+                Arc::clone(&runtime),
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+
     insert_required_startup_audit_event(
         db.as_ref(),
         "server_start",
         None,
         None,
-        format!(
-            "serving {} on {} with {} node(s)",
-            config.board.name, config.telnet.bind, config.nodes.count
-        ),
+        server_start_audit_details(config),
     )?;
-
-    info!(bind = %config.telnet.bind, "listening for telnet callers");
 
     let mut shutdown = Box::pin(shutdown_signal);
     let mut accept_error = None;
 
-    loop {
-        tokio::select! {
-            accept = listener.accept() => {
-                let (stream, peer_addr) = match accept {
-                    Ok(accepted) => accepted,
-                    Err(error) => {
-                        accept_error = Some(ServeError::Network(error));
-                        break;
-                    }
-                };
-                let peer = CallerPeer {
-                    address: peer_addr.to_string(),
-                    ip: peer_addr.ip().to_string(),
-                    port: i64::from(peer_addr.port()),
-                };
+    if let Some(listener) = telnet_listener {
+        info!(bind = %config.telnet.bind, "listening for telnet callers");
 
-                if let Some(allocation) = runtime.try_allocate_node() {
-                    info!(
-                        node = %allocation.node_number,
-                        remote = %peer.address,
-                        remote_ip = %peer.ip,
-                        remote_port = peer.port,
-                        "caller connection accepted"
-                    );
-                    emit_audit_event_with_runtime(
-                        db.as_ref(),
-                        "node_assigned",
-                        None,
-                        Some(i64::from(allocation.node_number)),
-                        format!("node {} assigned to {}", allocation.node_number, peer.address),
-                        Some(runtime.as_ref()),
-                    );
-                    let resources = CallerResources {
-                        db: Arc::clone(&db),
-                        config: Arc::clone(&shared_config),
-                        login_menu: Arc::clone(&login_menu),
-                        main_menu: Arc::clone(&main_menu),
-                        menus: Arc::clone(&menus),
-                        runtime: Arc::clone(&runtime),
+        loop {
+            tokio::select! {
+                accept = listener.accept() => {
+                    let (stream, peer_addr) = match accept {
+                        Ok(accepted) => accepted,
+                        Err(error) => {
+                            accept_error = Some(ServeError::Network(error));
+                            break;
+                        }
+                    };
+                    let peer = CallerPeer {
+                        address: peer_addr.to_string(),
+                        ip: peer_addr.ip().to_string(),
+                        port: i64::from(peer_addr.port()),
                     };
 
-                    tokio::spawn(async move {
-                        if let Err(error) = handle_caller(allocation, stream, peer, resources).await {
-                            warn!("caller session ended with error: {error}");
-                        }
-                    });
-                } else {
-                    warn!(
-                        remote = %peer.address,
-                        remote_ip = %peer.ip,
-                        remote_port = peer.port,
-                        "caller rejected because no node is available"
-                    );
-                    tokio::spawn(async move {
-                        if let Err(error) = reject_connection(stream).await {
-                            warn!("failed to reject caller: {error}");
-                        }
-                    });
+                    if let Some(allocation) = runtime.try_allocate_node() {
+                        info!(
+                            node = %allocation.node_number,
+                            remote = %peer.address,
+                            remote_ip = %peer.ip,
+                            remote_port = peer.port,
+                            "caller connection accepted"
+                        );
+                        emit_audit_event_with_runtime(
+                            db.as_ref(),
+                            "node_assigned",
+                            None,
+                            Some(i64::from(allocation.node_number)),
+                            format!("node {} assigned to {}", allocation.node_number, peer.address),
+                            Some(runtime.as_ref()),
+                        );
+                        let resources = CallerResources {
+                            db: Arc::clone(&db),
+                            config: Arc::clone(&shared_config),
+                            login_menu: Arc::clone(&login_menu),
+                            main_menu: Arc::clone(&main_menu),
+                            menus: Arc::clone(&menus),
+                            runtime: Arc::clone(&runtime),
+                        };
+
+                        tokio::spawn(async move {
+                            if let Err(error) = handle_caller(allocation, stream, peer, resources).await {
+                                warn!("caller session ended with error: {error}");
+                            }
+                        });
+                    } else {
+                        warn!(
+                            remote = %peer.address,
+                            remote_ip = %peer.ip,
+                            remote_port = peer.port,
+                            "caller rejected because no node is available"
+                        );
+                        tokio::spawn(async move {
+                            if let Err(error) = reject_connection(stream).await {
+                                warn!("failed to reject caller: {error}");
+                            }
+                        });
+                    }
+                }
+                shutdown_result = &mut shutdown => {
+                    if let Err(error) = shutdown_result {
+                        accept_error = Some(error);
+                    }
+                    break;
                 }
             }
-            shutdown_result = &mut shutdown => {
-                if let Err(error) = shutdown_result {
-                    accept_error = Some(error);
-                }
-                break;
-            }
+        }
+    } else {
+        info!("telnet disabled; waiting for shutdown with admin web status listener");
+        if let Err(error) = (&mut shutdown).await {
+            accept_error = Some(error);
         }
     }
 
@@ -309,6 +349,9 @@ where
     }
 
     if let Some(handle) = control_listener {
+        handle.abort();
+    }
+    if let Some(handle) = admin_web_handle {
         handle.abort();
     }
 
@@ -373,6 +416,17 @@ async fn handle_caller(
     peer: CallerPeer,
     resources: CallerResources,
 ) -> ServeResult<()> {
+    let transport = TcpTransport::new(stream);
+    handle_caller_transport(allocation, transport, "telnet", peer, resources).await
+}
+
+async fn handle_caller_transport<T: Transport>(
+    allocation: NodeAllocation,
+    mut transport: T,
+    transport_name: &'static str,
+    peer: CallerPeer,
+    resources: CallerResources,
+) -> ServeResult<()> {
     let CallerResources {
         db,
         config,
@@ -385,7 +439,6 @@ async fn handle_caller(
     let node_number = i64::from(node_number_u16);
     let session_id = generated_uuid(&db)?;
     let connected_at = current_timestamp(&db)?;
-    let mut transport = TcpTransport::new(stream);
     let mut input = InputSession::default();
     let idle_timeout = Duration::from_secs(config.telnet.idle_timeout_seconds);
     let mut authenticated_user: Option<User> = None;
@@ -396,7 +449,7 @@ async fn handle_caller(
             id: session_id.clone(),
             node_number,
             user_id: None,
-            transport: "telnet".to_string(),
+            transport: transport_name.to_string(),
             remote_address: peer.address.clone(),
             remote_ip: Some(peer.ip.clone()),
             remote_port: Some(peer.port),
@@ -1083,8 +1136,8 @@ struct DoorFlowState<'a> {
     node_number: u16,
 }
 
-async fn run_login_flow(
-    transport: &mut TcpTransport,
+async fn run_login_flow<T: Transport>(
+    transport: &mut T,
     input: &mut InputSession,
     state: &mut AuthFlowState<'_>,
 ) -> ServeResult<AuthFlowResult> {
@@ -1281,8 +1334,8 @@ async fn run_login_flow(
     Ok(AuthFlowResult::Success)
 }
 
-async fn run_new_user_flow(
-    transport: &mut TcpTransport,
+async fn run_new_user_flow<T: Transport>(
+    transport: &mut T,
     input: &mut InputSession,
     state: &mut AuthFlowState<'_>,
 ) -> ServeResult<AuthFlowResult> {
@@ -1551,7 +1604,7 @@ async fn run_new_user_flow(
 
 async fn run_doors_flow(
     authenticated_user: Option<&User>,
-    transport: &mut TcpTransport,
+    transport: &mut impl Transport,
     input: &mut InputSession,
     state: &mut DoorFlowState<'_>,
 ) -> ServeResult<MenuFlowResult> {
@@ -1726,7 +1779,7 @@ fn door_summary_text(summary: &DoorExecutionSummary) -> String {
 
 async fn run_messages_flow(
     authenticated_user: Option<&User>,
-    transport: &mut TcpTransport,
+    transport: &mut impl Transport,
     input: &mut InputSession,
     state: &mut MessageFlowState<'_>,
 ) -> ServeResult<MenuFlowResult> {
@@ -2064,9 +2117,9 @@ async fn run_messages_flow(
     }
 }
 
-async fn ensure_default_message_area(
+async fn ensure_default_message_area<T: Transport>(
     db: &OxideDb,
-    transport: &mut TcpTransport,
+    transport: &mut T,
 ) -> ServeResult<()> {
     if !list_message_areas(db.db())?.is_empty() {
         return Ok(());
@@ -2142,8 +2195,8 @@ async fn display_message<T: Transport>(
     .await
 }
 
-async fn prompt_for_message_index(
-    transport: &mut TcpTransport,
+async fn prompt_for_message_index<T: Transport>(
+    transport: &mut T,
     input: &mut InputSession,
     idle_timeout: Duration,
     disconnect_reason: &mut String,
@@ -2539,8 +2592,8 @@ fn record_login_failure_scopes(
     Ok(())
 }
 
-async fn send_login_flow(
-    transport: &mut TcpTransport,
+async fn send_login_flow<T: Transport>(
+    transport: &mut T,
     config: &OxideConfig,
     login_menu: &Menu,
     capabilities: &mut TerminalCapabilities,
@@ -2549,8 +2602,8 @@ async fn send_login_flow(
     send_menu_prompt(transport, login_menu).await
 }
 
-async fn send_main_menu(
-    transport: &mut TcpTransport,
+async fn send_main_menu<T: Transport>(
+    transport: &mut T,
     config: &OxideConfig,
     menu: &Menu,
     capabilities: &mut TerminalCapabilities,
@@ -2559,7 +2612,7 @@ async fn send_main_menu(
     send_menu_prompt(transport, menu).await
 }
 
-async fn send_menu_prompt(transport: &mut TcpTransport, menu: &Menu) -> ServeResult<()> {
+async fn send_menu_prompt<T: Transport>(transport: &mut T, menu: &Menu) -> ServeResult<()> {
     let prompt = menu
         .description
         .clone()
@@ -2568,8 +2621,8 @@ async fn send_menu_prompt(transport: &mut TcpTransport, menu: &Menu) -> ServeRes
     Ok(())
 }
 
-async fn show_post_login_screens(
-    transport: &mut TcpTransport,
+async fn show_post_login_screens<T: Transport>(
+    transport: &mut T,
     config: &OxideConfig,
     capabilities: &mut TerminalCapabilities,
 ) -> ServeResult<()> {
@@ -2579,8 +2632,8 @@ async fn show_post_login_screens(
     send_text(transport, MAIN_MENU_POST_LOGIN).await
 }
 
-async fn send_terminal_asset(
-    transport: &mut TcpTransport,
+async fn send_terminal_asset<T: Transport>(
+    transport: &mut T,
     asset_name: &str,
     config: &OxideConfig,
     capabilities: TerminalCapabilities,
@@ -2599,8 +2652,8 @@ async fn send_terminal_asset(
     Ok(())
 }
 
-async fn send_logoff_screen(
-    transport: &mut TcpTransport,
+async fn send_logoff_screen<T: Transport>(
+    transport: &mut T,
     config: &OxideConfig,
     capabilities: TerminalCapabilities,
 ) {
@@ -2707,8 +2760,8 @@ fn plain_terminal_asset_candidates(
     candidates
 }
 
-async fn send_screen(
-    transport: &mut TcpTransport,
+async fn send_screen<T: Transport>(
+    transport: &mut T,
     config: &OxideConfig,
     screen_key: &str,
     capabilities: &mut TerminalCapabilities,
@@ -2815,8 +2868,8 @@ async fn send_text<T: Transport>(transport: &mut T, message: &str) -> ServeResul
     Ok(())
 }
 
-async fn process_runtime_commands(
-    transport: &mut TcpTransport,
+async fn process_runtime_commands<T: Transport>(
+    transport: &mut T,
     commands: RuntimeNodeCommands,
     disconnect_reason: &mut String,
 ) -> ServeResult<bool> {
@@ -4472,6 +4525,49 @@ mod tests {
         assert!(missing.contains(INVALID_LOGIN_MESSAGE.trim()));
         assert!(wrong.contains(INVALID_LOGIN_MESSAGE.trim()));
         assert_eq!(failure_line(&missing), failure_line(&wrong));
+
+        let _ = std::fs::remove_dir_all(base_dir);
+    }
+
+    #[tokio::test]
+    async fn login_flow_runs_over_loopback_transport() {
+        let db = OxideDb::open_memory().expect("open db");
+        let base_dir = temp_dir("auth-loopback-transport");
+        let config = smoke_config(free_loopback_addr(), &base_dir, &base_dir.join("auth.ddb"));
+        seed_login_user(&db, &config, "Alice", "secret");
+
+        let (mut transport, mut client) = LoopbackTransport::new();
+        client
+            .write_bytes(b"Alice\rsecret\r")
+            .expect("write credentials");
+
+        let mut input = InputSession::default();
+        let mut authenticated_user = None;
+        let mut disconnect_reason = "test".to_string();
+        let runtime = ServerRuntime::new("test".to_string(), 1, 1, 60);
+        let mut state = AuthFlowState {
+            db: &db,
+            config: &config,
+            runtime: &runtime,
+            node_number: 1,
+            remote_ip: "127.0.0.1",
+            session_id: "00000000-0000-4000-8000-000000000779",
+            authenticated_user: &mut authenticated_user,
+            idle_timeout: Duration::from_secs(1),
+            disconnect_reason: &mut disconnect_reason,
+        };
+
+        let result = run_login_flow(&mut transport, &mut input, &mut state)
+            .await
+            .expect("login flow");
+        let output = String::from_utf8_lossy(&client.read_output_bytes()).into_owned();
+
+        assert!(matches!(result, AuthFlowResult::Success));
+        assert!(output.contains("Login successful. Welcome back."));
+        assert_eq!(
+            authenticated_user.as_ref().map(|user| user.alias.as_str()),
+            Some("Alice")
+        );
 
         let _ = std::fs::remove_dir_all(base_dir);
     }

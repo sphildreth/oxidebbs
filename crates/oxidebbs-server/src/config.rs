@@ -421,12 +421,18 @@ pub struct FileTransfersConfig {
 pub struct AdminWebConfig {
     #[serde(default)]
     pub enabled: bool,
+    #[serde(default)]
+    pub public_status_enabled: bool,
     #[serde(default = "default_admin_web_bind")]
     pub bind: String,
     #[serde(default = "default_true")]
     pub require_tls: bool,
     #[serde(default = "default_true")]
     pub read_only: bool,
+    #[serde(default)]
+    pub allowed_origins: Vec<String>,
+    #[serde(default)]
+    pub behind_reverse_proxy: bool,
     #[serde(default = "default_admin_web_session_timeout_seconds")]
     pub session_timeout_seconds: u64,
     #[serde(default = "default_admin_web_csrf_token_ttl_seconds")]
@@ -664,15 +670,29 @@ impl OxideConfig {
                 "admin_web.rate_limit_per_minute must be greater than 0".into(),
             ));
         }
+        for origin in &self.admin_web.allowed_origins {
+            validate_admin_web_origin(origin)?;
+        }
         if self.admin_web.enabled {
             if !self.admin_web.read_only {
                 return Err(ConfigError::Validation(
                     "admin_web.read_only must remain true until remote admin mutations are implemented".into(),
                 ));
             }
-            if !ip_is_loopback(bind.ip()) && !self.admin_web.require_tls {
+            if self.admin_web.behind_reverse_proxy && !ip_is_loopback(bind.ip()) {
                 return Err(ConfigError::Validation(
-                    "admin_web.require_tls must be true for non-loopback binds".into(),
+                    "admin_web.behind_reverse_proxy requires a loopback admin_web.bind".into(),
+                ));
+            }
+            if self.admin_web.behind_reverse_proxy && !self.admin_web.require_tls {
+                return Err(ConfigError::Validation(
+                    "admin_web.require_tls must be true when admin_web.behind_reverse_proxy = true"
+                        .into(),
+                ));
+            }
+            if !ip_is_loopback(bind.ip()) {
+                return Err(ConfigError::Validation(
+                    "admin_web.bind must remain loopback-only until native remote-admin TLS is implemented".into(),
                 ));
             }
         }
@@ -1149,6 +1169,74 @@ fn ip_is_loopback(ip: IpAddr) -> bool {
     ip.is_loopback()
 }
 
+fn validate_admin_web_origin(origin: &str) -> Result<(), ConfigError> {
+    let trimmed = origin.trim();
+    if trimmed.is_empty() || trimmed != origin {
+        return Err(ConfigError::Validation(
+            "admin_web.allowed_origins entries must not be blank or padded".into(),
+        ));
+    }
+    if origin == "*" {
+        return Err(ConfigError::Validation(
+            "admin_web.allowed_origins must not contain wildcard origins".into(),
+        ));
+    }
+    if origin.chars().any(char::is_whitespace) {
+        return Err(ConfigError::Validation(
+            "admin_web.allowed_origins entries must not contain whitespace".into(),
+        ));
+    }
+
+    let (scheme, rest) = if let Some(rest) = origin.strip_prefix("https://") {
+        ("https", rest)
+    } else if let Some(rest) = origin.strip_prefix("http://") {
+        ("http", rest)
+    } else {
+        return Err(ConfigError::Validation(
+            "admin_web.allowed_origins entries must start with https:// or http://".into(),
+        ));
+    };
+
+    if rest.is_empty() || rest.contains('/') || rest.contains('?') || rest.contains('#') {
+        return Err(ConfigError::Validation(
+            "admin_web.allowed_origins entries must be origins without paths".into(),
+        ));
+    }
+    if rest.contains('@') {
+        return Err(ConfigError::Validation(
+            "admin_web.allowed_origins entries must not contain userinfo".into(),
+        ));
+    }
+    if scheme == "http" && !origin_host_is_loopback(rest) {
+        return Err(ConfigError::Validation(
+            "admin_web.allowed_origins http origins must be loopback-only".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn origin_host_is_loopback(authority: &str) -> bool {
+    let host = if let Some(rest) = authority.strip_prefix('[') {
+        let Some((host, remainder)) = rest.split_once(']') else {
+            return false;
+        };
+        if !remainder.is_empty() && !remainder.starts_with(':') {
+            return false;
+        }
+        host
+    } else {
+        authority.split(':').next().unwrap_or(authority)
+    };
+
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    match host.parse::<IpAddr>() {
+        Ok(ip) => ip_is_loopback(ip),
+        Err(_) => false,
+    }
+}
+
 fn validate_config_key(section: &str, key: &str) -> Result<(), ConfigError> {
     if key.trim().is_empty() {
         return Err(ConfigError::Validation(format!(
@@ -1483,9 +1571,12 @@ impl Default for AdminWebConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            public_status_enabled: false,
             bind: default_admin_web_bind(),
             require_tls: default_true(),
             read_only: default_true(),
+            allowed_origins: Vec::new(),
+            behind_reverse_proxy: false,
             session_timeout_seconds: default_admin_web_session_timeout_seconds(),
             csrf_token_ttl_seconds: default_admin_web_csrf_token_ttl_seconds(),
             replay_window_seconds: default_admin_web_replay_window_seconds(),
@@ -1617,8 +1708,11 @@ name = "Minimal"
         assert!(!config.ftn.enabled);
         assert!(!config.admin_web.enabled);
         assert_eq!(config.admin_web.bind, "127.0.0.1:8080");
+        assert!(!config.admin_web.public_status_enabled);
         assert!(config.admin_web.require_tls);
         assert!(config.admin_web.read_only);
+        assert!(config.admin_web.allowed_origins.is_empty());
+        assert!(!config.admin_web.behind_reverse_proxy);
     }
 
     #[test]
@@ -1735,6 +1829,9 @@ enabled = false
             .validate_admin_web()
             .expect("disabled admin web validates");
         assert!(!config.admin_web.enabled);
+        assert!(!config.admin_web.public_status_enabled);
+        assert!(config.admin_web.allowed_origins.is_empty());
+        assert!(!config.admin_web.behind_reverse_proxy);
         assert_eq!(config.admin_web.session_timeout_seconds, 900);
         assert_eq!(config.admin_web.csrf_token_ttl_seconds, 900);
         assert_eq!(config.admin_web.replay_window_seconds, 300);
@@ -1742,7 +1839,112 @@ enabled = false
     }
 
     #[test]
-    fn rejects_admin_web_non_loopback_without_tls() {
+    fn accepts_admin_web_safe_loopback_origin() {
+        let toml = r#"
+[board]
+name = "Admin Web Origin"
+
+[admin_web]
+enabled = true
+allowed_origins = ["http://localhost:5173", "https://admin.example.test"]
+"#;
+        let config: OxideConfig = toml::from_str(toml).expect("parse");
+
+        config.validate_admin_web().expect("safe origins validate");
+    }
+
+    #[test]
+    fn rejects_admin_web_wildcard_origin() {
+        let toml = r#"
+[board]
+name = "Bad Admin Web Origin"
+
+[admin_web]
+enabled = true
+allowed_origins = ["*"]
+"#;
+        let config: OxideConfig = toml::from_str(toml).expect("parse");
+        let error = config
+            .validate_admin_web()
+            .expect_err("wildcard origin rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("admin_web.allowed_origins must not contain wildcard")
+        );
+    }
+
+    #[test]
+    fn rejects_admin_web_http_origin_unless_loopback() {
+        let toml = r#"
+[board]
+name = "Bad Admin Web Http Origin"
+
+[admin_web]
+enabled = true
+allowed_origins = ["http://admin.example.test"]
+"#;
+        let config: OxideConfig = toml::from_str(toml).expect("parse");
+        let error = config
+            .validate_admin_web()
+            .expect_err("non-loopback http origin rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("admin_web.allowed_origins http origins must be loopback-only")
+        );
+    }
+
+    #[test]
+    fn rejects_admin_web_reverse_proxy_on_non_loopback_bind() {
+        let toml = r#"
+[board]
+name = "Bad Admin Web Reverse Proxy"
+
+[admin_web]
+enabled = true
+bind = "0.0.0.0:8080"
+behind_reverse_proxy = true
+"#;
+        let config: OxideConfig = toml::from_str(toml).expect("parse");
+        let error = config
+            .validate_admin_web()
+            .expect_err("reverse proxy bind rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("admin_web.behind_reverse_proxy requires a loopback")
+        );
+    }
+
+    #[test]
+    fn rejects_admin_web_reverse_proxy_without_tls_requirement() {
+        let toml = r#"
+[board]
+name = "Bad Admin Web Reverse Proxy"
+
+[admin_web]
+enabled = true
+require_tls = false
+behind_reverse_proxy = true
+"#;
+        let config: OxideConfig = toml::from_str(toml).expect("parse");
+        let error = config
+            .validate_admin_web()
+            .expect_err("reverse proxy without TLS requirement rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("admin_web.require_tls must be true when admin_web.behind_reverse_proxy")
+        );
+    }
+
+    #[test]
+    fn rejects_admin_web_non_loopback_bind_until_native_tls_exists() {
         let toml = r#"
 [board]
 name = "Bad Admin Web"
@@ -1750,17 +1952,16 @@ name = "Bad Admin Web"
 [admin_web]
 enabled = true
 bind = "0.0.0.0:8080"
-require_tls = false
 "#;
         let config: OxideConfig = toml::from_str(toml).expect("parse");
         let error = config
             .validate_admin_web()
-            .expect_err("public admin web without TLS rejected");
+            .expect_err("non-loopback admin web rejected");
 
         assert!(
             error
                 .to_string()
-                .contains("admin_web.require_tls must be true")
+                .contains("admin_web.bind must remain loopback-only")
         );
     }
 

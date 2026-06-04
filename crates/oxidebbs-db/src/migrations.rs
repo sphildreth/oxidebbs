@@ -19,6 +19,7 @@ pub fn migrate_to_current(db: &Db) -> decentdb::Result<()> {
             4 => migrate_4_to_5(db)?,
             5 => migrate_5_to_6(db)?,
             6 => migrate_6_to_7(db)?,
+            7 => migrate_7_to_8(db)?,
             unknown => {
                 return Err(DbError::sql(format!(
                     "Unsupported migration source schema version {unknown}; expected {SCHEMA_VERSION} or older known versions"
@@ -125,6 +126,24 @@ fn migrate_6_to_7(db: &Db) -> decentdb::Result<()> {
     }
 }
 
+fn migrate_7_to_8(db: &Db) -> decentdb::Result<()> {
+    match existing_schema_version(db)? {
+        Some(7) => {
+            run_migration_transaction(db, || {
+                create_oxidenet_registry_tables(db)?;
+                set_schema_version(db, 8)
+            })?;
+            Ok(())
+        }
+        Some(other) => Err(DbError::sql(format!(
+            "Cannot apply migration 7 -> 8 from schema version {other}"
+        ))),
+        None => Err(DbError::sql(
+            "Cannot apply migration 7 -> 8 because schema_version marker is missing",
+        )),
+    }
+}
+
 fn create_file_tables(db: &Db) -> decentdb::Result<()> {
     db.execute_batch(
         "CREATE TABLE IF NOT EXISTS file_areas (
@@ -184,6 +203,90 @@ fn create_file_tables(db: &Db) -> decentdb::Result<()> {
         CREATE INDEX IF NOT EXISTS idx_file_entries_approved ON file_entries (approved);
         CREATE INDEX IF NOT EXISTS idx_file_transfers_user_id ON file_transfers (user_id);
         CREATE INDEX IF NOT EXISTS idx_file_transfers_started_at ON file_transfers (started_at);",
+    )?;
+    Ok(())
+}
+
+fn create_oxidenet_registry_tables(db: &Db) -> decentdb::Result<()> {
+    db.execute_batch(
+        "CREATE TABLE IF NOT EXISTS network_applications (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            submitted_at TIMESTAMPTZ,
+            reviewed_at TIMESTAMPTZ,
+            status TEXT NOT NULL DEFAULT 'submitted'
+                CHECK (status = 'draft' OR status = 'submitted' OR status = 'needs-info' OR status = 'approved' OR status = 'config-generated' OR status = 'first-poll-pending' OR status = 'active' OR status = 'probation' OR status = 'suspended' OR status = 'retired' OR status = 'rejected' OR status = 'withdrawn' OR status = 'needs-review-hold'),
+            applicant_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+            board_name TEXT NOT NULL CHECK (LENGTH(TRIM(board_name)) > 0),
+            sysop_alias TEXT NOT NULL CHECK (LENGTH(TRIM(sysop_alias)) > 0),
+            contact_email TEXT NOT NULL CHECK (LENGTH(TRIM(contact_email)) > 0),
+            host TEXT NOT NULL CHECK (LENGTH(TRIM(host)) > 0),
+            binkp_port INT NOT NULL DEFAULT 24554 CHECK (binkp_port > 0 AND binkp_port <= 65535),
+            telnet_host TEXT,
+            telnet_port INT CHECK (telnet_port IS NULL OR (telnet_port > 0 AND telnet_port <= 65535)),
+            software TEXT NOT NULL DEFAULT 'OxideBBS' CHECK (LENGTH(TRIM(software)) > 0),
+            software_version TEXT NOT NULL DEFAULT '',
+            timezone TEXT NOT NULL DEFAULT 'UTC' CHECK (LENGTH(TRIM(timezone)) > 0),
+            region TEXT NOT NULL DEFAULT '',
+            description TEXT NOT NULL DEFAULT '',
+            reason TEXT NOT NULL DEFAULT '',
+            policy_version TEXT NOT NULL DEFAULT '',
+            policy_accepted_at TIMESTAMPTZ,
+            admin_notes TEXT NOT NULL DEFAULT '',
+            reviewed_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+            assigned_address TEXT UNIQUE
+        );
+
+        CREATE TABLE IF NOT EXISTS network_nodes (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            application_id UUID REFERENCES network_applications(id) ON DELETE SET NULL,
+            network_key TEXT NOT NULL DEFAULT 'oxidenet' CHECK (LENGTH(TRIM(network_key)) > 0),
+            address TEXT NOT NULL UNIQUE CHECK (LENGTH(TRIM(address)) > 0),
+            zone INT NOT NULL CHECK (zone > 0),
+            net INT NOT NULL CHECK (net > 0),
+            node INT NOT NULL CHECK (node > 0),
+            point INT NOT NULL DEFAULT 0 CHECK (point >= 0),
+            hub_address TEXT NOT NULL CHECK (LENGTH(TRIM(hub_address)) > 0),
+            board_name TEXT NOT NULL CHECK (LENGTH(TRIM(board_name)) > 0),
+            sysop_alias TEXT NOT NULL CHECK (LENGTH(TRIM(sysop_alias)) > 0),
+            contact_email TEXT NOT NULL CHECK (LENGTH(TRIM(contact_email)) > 0),
+            host TEXT NOT NULL CHECK (LENGTH(TRIM(host)) > 0),
+            binkp_port INT NOT NULL DEFAULT 24554 CHECK (binkp_port > 0 AND binkp_port <= 65535),
+            telnet_host TEXT,
+            telnet_port INT CHECK (telnet_port IS NULL OR (telnet_port > 0 AND telnet_port <= 65535)),
+            software TEXT NOT NULL DEFAULT 'OxideBBS' CHECK (LENGTH(TRIM(software)) > 0),
+            software_version TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'first-poll-pending'
+                CHECK (status = 'first-poll-pending' OR status = 'config-generated' OR status = 'active' OR status = 'probation' OR status = 'suspended' OR status = 'retired'),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            activated_at TIMESTAMPTZ,
+            suspended_at TIMESTAMPTZ,
+            retired_at TIMESTAMPTZ,
+            last_poll_at TIMESTAMPTZ,
+            last_successful_poll_at TIMESTAMPTZ,
+            flags TEXT NOT NULL DEFAULT ''
+        );
+
+        CREATE TABLE IF NOT EXISTS network_credentials (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            node_id UUID NOT NULL REFERENCES network_nodes(id) ON DELETE CASCADE,
+            credential_kind TEXT NOT NULL
+                CHECK (credential_kind = 'binkp_session' OR credential_kind = 'invite_token'),
+            secret_hash TEXT NOT NULL CHECK (LENGTH(TRIM(secret_hash)) > 0),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            rotated_at TIMESTAMPTZ,
+            expires_at TIMESTAMPTZ,
+            status TEXT NOT NULL DEFAULT 'active'
+                CHECK (status = 'active' OR status = 'revoked' OR status = 'expired')
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_network_applications_status ON network_applications (status);
+        CREATE INDEX IF NOT EXISTS idx_network_applications_assigned_address ON network_applications (assigned_address);
+        CREATE INDEX IF NOT EXISTS idx_network_nodes_network_key_status ON network_nodes (network_key, status);
+        CREATE INDEX IF NOT EXISTS idx_network_nodes_address ON network_nodes (address);
+        CREATE INDEX IF NOT EXISTS idx_network_credentials_node_status ON network_credentials (node_id, status);",
     )?;
     Ok(())
 }
@@ -995,6 +1098,7 @@ mod tests {
         assert_eq!(schema::schema_version(&db).expect("schema after 4->5"), 5);
         migrate_5_to_6(&db).expect("apply migration 5->6");
         migrate_6_to_7(&db).expect("apply migration 6->7");
+        migrate_7_to_8(&db).expect("apply migration 7->8");
 
         assert_eq!(
             schema::schema_version(&db).expect("schema version"),
@@ -1243,6 +1347,40 @@ mod tests {
             assert!(file_tables.iter().any(|t| t.name == "file_areas"));
             assert!(file_tables.iter().any(|t| t.name == "file_entries"));
             assert!(file_tables.iter().any(|t| t.name == "file_transfers"));
+        }
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn migration_schema_7_to_8_adds_oxidenet_registry_tables() {
+        let path = std::env::temp_dir().join(format!(
+            "oxidebbs-migration-7-to-8-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time should be valid")
+                .as_nanos()
+        ));
+        {
+            let db = Db::open_or_create(&path, DbConfig::default()).expect("create DecentDB");
+            create_full_schema_at_version_6(&db).expect("create v6 schema");
+            migrate_6_to_7(&db).expect("migrate 6->7");
+            assert_eq!(
+                schema::existing_schema_version(&db).expect("version"),
+                Some(7)
+            );
+        }
+        {
+            let db = Db::open_or_create(&path, DbConfig::default()).expect("reopen DecentDB");
+            migrate_7_to_8(&db).expect("migrate 7->8");
+            assert_eq!(
+                schema::schema_version(&db).expect("version after migration"),
+                8
+            );
+
+            let tables = db.list_tables().expect("list tables");
+            assert!(tables.iter().any(|t| t.name == "network_applications"));
+            assert!(tables.iter().any(|t| t.name == "network_nodes"));
+            assert!(tables.iter().any(|t| t.name == "network_credentials"));
         }
         let _ = std::fs::remove_file(path);
     }

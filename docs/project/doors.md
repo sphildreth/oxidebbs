@@ -13,6 +13,8 @@ Current capabilities:
 - Drop-file writers cover `DOOR.SYS`, `DORINFO1.DEF`, `CHAIN.TXT`,
   `DOORFILE.SR`, `PCBOARD.SYS`, and `CALLINFO.BBS` with CRLF byte-output tests.
 - Live caller door validation accepts the same supported drop-file formats.
+- Doors marked `exclusive = true` cannot be launched a second time while an
+  unfinished run for that same door exists in DecentDB.
 - Remote door-provider abstractions, BBSLink-style dry runs, DoorParty-style dry
   runs, and secret redaction primitives exist.
 

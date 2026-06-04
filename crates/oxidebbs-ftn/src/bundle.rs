@@ -6,7 +6,10 @@ use std::{
 };
 
 use thiserror::Error;
-use zip::ZipArchive;
+use zip::{
+    CompressionMethod, ZipArchive, ZipWriter,
+    write::{FileOptions, SimpleFileOptions},
+};
 
 /// FTN inbound file category selected from the filename extension.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,6 +78,21 @@ pub enum BundleError {
 
     #[error("extracted packet already exists for {path}: {output_path}")]
     ExtractedPacketExists { path: PathBuf, output_path: PathBuf },
+
+    #[error("bundle creation received no packet inputs for {output_path}")]
+    NoPacketInputs { output_path: PathBuf },
+
+    #[error("packet input path has no filename: {path}")]
+    PacketMissingFilename { path: PathBuf },
+
+    #[error("unsupported packet input {path}: {reason}")]
+    UnsupportedPacketInput { path: PathBuf, reason: &'static str },
+
+    #[error("duplicate packet input filename {entry:?} for {output_path}")]
+    DuplicatePacketInputName { output_path: PathBuf, entry: String },
+
+    #[error("bundle output already exists: {output_path}")]
+    BundleOutputExists { output_path: PathBuf },
 }
 
 /// Classify a raw FTN packet or arcmail bundle by filename extension.
@@ -156,10 +174,143 @@ impl BundleExtractor {
     }
 }
 
+/// Creation boundary for outbound arcmail bundles.
+pub struct BundleCreator;
+
+impl BundleCreator {
+    /// Create a ZIP arcmail bundle containing top-level `.pkt` entries.
+    ///
+    /// Packet paths may live in any directory, but each ZIP entry is written
+    /// using only the packet file name. The output file is created with
+    /// `create_new` semantics so an existing bundle is never overwritten.
+    ///
+    /// # Errors
+    ///
+    /// Returns typed errors for empty input, non-packet filenames, duplicate
+    /// output names, existing bundle output, and I/O or ZIP writer failures.
+    pub fn create_zip_bundle(
+        packet_paths: &[PathBuf],
+        output_path: impl AsRef<Path>,
+    ) -> Result<PathBuf, BundleError> {
+        let output_path = output_path.as_ref();
+        if packet_paths.is_empty() {
+            return Err(BundleError::NoPacketInputs {
+                output_path: output_path.to_path_buf(),
+            });
+        }
+
+        let packet_entries = collect_packet_inputs_for_zip(packet_paths, output_path)?;
+        if let Some(parent) = output_path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            fs::create_dir_all(parent)
+                .map_err(|error| bundle_io_error(parent, "create bundle directory", error))?;
+        }
+
+        let file = File::options()
+            .write(true)
+            .create_new(true)
+            .open(output_path)
+            .map_err(|error| {
+                if error.kind() == io::ErrorKind::AlreadyExists {
+                    BundleError::BundleOutputExists {
+                        output_path: output_path.to_path_buf(),
+                    }
+                } else {
+                    bundle_io_error(output_path, "create ZIP bundle", error)
+                }
+            })?;
+
+        let mut writer = ZipWriter::new(file);
+        let options: FileOptions<'_, ()> =
+            SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+
+        for packet_entry in packet_entries {
+            writer
+                .start_file(&packet_entry.name, options)
+                .map_err(|error| zip_error(output_path, error))?;
+            let mut packet = File::open(&packet_entry.path)
+                .map_err(|error| bundle_io_error(&packet_entry.path, "open packet input", error))?;
+            io::copy(&mut packet, &mut writer).map_err(|error| {
+                bundle_io_error(output_path, "write packet into ZIP bundle", error)
+            })?;
+        }
+
+        writer
+            .finish()
+            .map_err(|error| zip_error(output_path, error))?;
+        Ok(output_path.to_path_buf())
+    }
+}
+
 #[derive(Debug, Clone)]
 struct ZipPacketEntry {
     index: usize,
     name: String,
+}
+
+#[derive(Debug, Clone)]
+struct PacketInputEntry {
+    path: PathBuf,
+    name: String,
+}
+
+fn collect_packet_inputs_for_zip(
+    packet_paths: &[PathBuf],
+    output_path: &Path,
+) -> Result<Vec<PacketInputEntry>, BundleError> {
+    let mut packet_entries = Vec::with_capacity(packet_paths.len());
+    let mut output_names = HashSet::new();
+
+    for packet_path in packet_paths {
+        let name = validate_packet_input_path(packet_path)?;
+        let output_key = name.to_ascii_lowercase();
+        if !output_names.insert(output_key) {
+            return Err(BundleError::DuplicatePacketInputName {
+                output_path: output_path.to_path_buf(),
+                entry: name,
+            });
+        }
+        packet_entries.push(PacketInputEntry {
+            path: packet_path.clone(),
+            name,
+        });
+    }
+
+    packet_entries.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(packet_entries)
+}
+
+fn validate_packet_input_path(packet_path: &Path) -> Result<String, BundleError> {
+    let path = packet_path.to_path_buf();
+    let file_name = packet_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| BundleError::PacketMissingFilename { path: path.clone() })?;
+    if file_name.is_empty() {
+        return Err(BundleError::PacketMissingFilename { path });
+    }
+    if file_name.contains('\0') {
+        return Err(BundleError::UnsupportedPacketInput {
+            path,
+            reason: "filename contains a null byte",
+        });
+    }
+
+    let extension = Path::new(file_name)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if extension != "pkt" {
+        return Err(BundleError::UnsupportedPacketInput {
+            path,
+            reason: "only .pkt packet inputs are supported",
+        });
+    }
+
+    Ok(file_name.to_string())
 }
 
 fn extract_zip_packets(input_path: &Path, output_dir: &Path) -> Result<Vec<PathBuf>, BundleError> {
@@ -586,6 +737,123 @@ mod tests {
                 format: BundleFormat::ArjArcmail,
             }
         );
+    }
+
+    #[test]
+    fn bundle_creator_writes_extractable_zip_bundle_deterministically() {
+        let temp_dir = unique_temp_dir("zip-create");
+        let packet_dir = temp_dir.join("packets");
+        let output_dir = temp_dir.join("out");
+        fs::create_dir_all(&packet_dir).expect("create packet dir");
+        let second_packet = packet_dir.join("00000002.pkt");
+        let first_packet = packet_dir.join("00000001.pkt");
+        fs::write(&second_packet, b"second").expect("write second packet");
+        fs::write(&first_packet, b"first").expect("write first packet");
+        let bundle_path = temp_dir.join("00112233.zip");
+
+        let created = BundleCreator::create_zip_bundle(
+            &[second_packet.clone(), first_packet.clone()],
+            &bundle_path,
+        )
+        .expect("create zip bundle");
+
+        assert_eq!(created, bundle_path);
+        let packets = BundleExtractor::extract_packets(&bundle_path, &output_dir)
+            .expect("extract created bundle");
+        assert_eq!(
+            packets,
+            vec![
+                output_dir.join("00000001.pkt"),
+                output_dir.join("00000002.pkt"),
+            ]
+        );
+        assert_eq!(fs::read(&packets[0]).expect("read first"), b"first");
+        assert_eq!(fs::read(&packets[1]).expect("read second"), b"second");
+        fs::remove_dir_all(temp_dir).expect("remove temp dir");
+    }
+
+    #[test]
+    fn bundle_creator_rejects_empty_packet_list() {
+        let temp_dir = unique_temp_dir("zip-create-empty");
+        let bundle_path = temp_dir.join("00112233.zip");
+
+        let error = BundleCreator::create_zip_bundle(&[], &bundle_path)
+            .expect_err("empty packet list rejected");
+
+        assert_eq!(
+            error,
+            BundleError::NoPacketInputs {
+                output_path: bundle_path,
+            }
+        );
+        fs::remove_dir_all(temp_dir).expect("remove temp dir");
+    }
+
+    #[test]
+    fn bundle_creator_rejects_duplicate_packet_filenames() {
+        let temp_dir = unique_temp_dir("zip-create-duplicate");
+        let left_dir = temp_dir.join("left");
+        let right_dir = temp_dir.join("right");
+        fs::create_dir_all(&left_dir).expect("create left dir");
+        fs::create_dir_all(&right_dir).expect("create right dir");
+        let left_packet = left_dir.join("same.pkt");
+        let right_packet = right_dir.join("SAME.PKT");
+        fs::write(&left_packet, b"left").expect("write left packet");
+        fs::write(&right_packet, b"right").expect("write right packet");
+        let bundle_path = temp_dir.join("00112233.zip");
+
+        let error = BundleCreator::create_zip_bundle(&[left_packet, right_packet], &bundle_path)
+            .expect_err("duplicate names rejected");
+
+        assert_eq!(
+            error,
+            BundleError::DuplicatePacketInputName {
+                output_path: bundle_path,
+                entry: "SAME.PKT".to_string(),
+            }
+        );
+        fs::remove_dir_all(temp_dir).expect("remove temp dir");
+    }
+
+    #[test]
+    fn bundle_creator_rejects_non_packet_inputs() {
+        let temp_dir = unique_temp_dir("zip-create-non-packet");
+        let input = temp_dir.join("README.TXT");
+        fs::write(&input, b"not a packet").expect("write input");
+        let bundle_path = temp_dir.join("00112233.zip");
+
+        let error = BundleCreator::create_zip_bundle(std::slice::from_ref(&input), &bundle_path)
+            .expect_err("non-packet input rejected");
+
+        assert_eq!(
+            error,
+            BundleError::UnsupportedPacketInput {
+                path: input,
+                reason: "only .pkt packet inputs are supported",
+            }
+        );
+        fs::remove_dir_all(temp_dir).expect("remove temp dir");
+    }
+
+    #[test]
+    fn bundle_creator_refuses_to_overwrite_existing_bundle() {
+        let temp_dir = unique_temp_dir("zip-create-existing");
+        let input = temp_dir.join("00000001.pkt");
+        let bundle_path = temp_dir.join("00112233.zip");
+        fs::write(&input, b"packet").expect("write packet");
+        fs::write(&bundle_path, b"existing").expect("write existing bundle");
+
+        let error = BundleCreator::create_zip_bundle(std::slice::from_ref(&input), &bundle_path)
+            .expect_err("existing bundle rejected");
+
+        assert_eq!(
+            error,
+            BundleError::BundleOutputExists {
+                output_path: bundle_path.clone(),
+            }
+        );
+        assert_eq!(fs::read(&bundle_path).expect("read existing"), b"existing");
+        fs::remove_dir_all(temp_dir).expect("remove temp dir");
     }
 
     fn unique_temp_dir(name: &str) -> PathBuf {

@@ -21,5 +21,5 @@ pub use server::BinkpServer;
 pub use session_guard::{LinkSessionPermit, LinkSessionRegistry};
 pub use transfer::{
     BinkpInboundFile, BinkpOutboundFile, receive_batch, receive_next_file, send_batch,
-    send_end_of_batch, send_file,
+    send_batch_with_acknowledgements, send_end_of_batch, send_file,
 };

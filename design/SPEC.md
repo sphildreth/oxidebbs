@@ -469,9 +469,10 @@ standard formatter fields plus event fields such as caller address, node,
 session, menu key, user id/alias, audit event type, door key/name, message area,
 message id, and outcome fields when applicable.
 
-All active sysop control is local in v1.2. `[admin_web]` configuration exists
-and is disabled by default, but there is no remote admin API or remote
-interactive interface in this phase.
+All mutating sysop control is local in v1.2. `[admin_web]` configuration exists
+and is disabled by default. When explicitly enabled, it may expose a loopback
+read-only `/status` endpoint; there is no authenticated remote admin API or
+remote interactive interface in this phase.
 
 When a live control socket is unavailable, node disconnect/message/broadcast
 commands preserve the previous audit intent behavior and report that live delivery

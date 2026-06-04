@@ -30,19 +30,19 @@ Status values:
 | P1 | Release hygiene and stale-future sweep | Complete | All docs and examples name v1.2 scope accurately before coding starts. |
 | P2 | Schema, config, and DbWriter foundation | Complete | Schema migration, shared config, DbWriter code, schema docs, release notes, and acceptance tests are current for the P2 foundation scope. |
 | P3 | Caller authorization and flow polish | Complete | Runtime menu security, caller sysop submenu, logoff rendering, starter docs/assets, release notes, and acceptance tests are current. |
-| P4 | Serial/modem transport and file transfers | Partial | Config, file-area schema, repository APIs, XMODEM-CRC fallback, and ZMODEM frame primitives exist; physical serial/modem transport, full ZMODEM send/receive, and caller file-area workflows are not implemented. |
-| P5 | Door ecosystem expansion | Partial | Mutable door CLI, DecentDB door sync, all current drop-file writers/tests, BBSLink/DoorParty dry-run adapters, and provider secret redaction primitives exist; live connectors and CLI/TUI/storage/export credential coverage are incomplete. |
+| P4 | Serial/modem transport and file transfers | Partial | Config, file-area schema, repository APIs, caller-session transport-generic helpers, XMODEM-CRC fallback, and ZMODEM frame primitives exist; physical serial/modem transport, full ZMODEM send/receive, and caller file-area workflows are not implemented. |
+| P5 | Door ecosystem expansion | Partial | Mutable door CLI, DecentDB door sync, exclusive local-door run enforcement, all current drop-file writers/tests, BBSLink/DoorParty dry-run adapters, and provider secret redaction primitives exist; live connectors and CLI/TUI/storage/export credential coverage are incomplete. |
 | P6 | Database maintenance operations | Complete | Audit purge, db verify, export, import, and output-file `db compact --output <path> [--overwrite]` exist; active database replacement remains an explicit offline operator step. |
-| P7 | Sysop CLI completion | Partial | Deferred user, message, ANSI, config, door, file-transfer, network state, subscription metadata, and write-audit CLI coverage exist; toss, scan, real BinkP poll, and AreaFix commands remain incomplete. |
-| P8 | Sysop TUI completion | Partial | Base TUI screens, read-only network status, and several mutations exist; required advanced database/config/ANSI workflows and OxideNet operational screens are missing. |
+| P7 | Sysop CLI completion | Partial | Deferred user, message, ANSI, config, door, file-transfer, network state, toss, scan, plaintext BinkP poll, local AreaFix subscription execution, subscription metadata, and write-audit CLI coverage exist; inbound AreaFix netmail, reply netmail, rescan queueing, and remaining advanced CLI coverage are incomplete. |
+| P8 | Sysop TUI completion | Partial | Base TUI screens, read-only network status, readonly mutation guards, and several mutations exist; required advanced database/config/ANSI workflows and OxideNet operational screens are missing. |
 | P9 | Shared network foundation | Complete | `oxidebbs-network` provides planned shared types/conversions; shared `network_*` tables and repository APIs exist; docs and tests cover the foundation. |
 | P10 | Legacy FTN packet and message engine | Complete | Type-2 packet I/O, kludge parsing/composition, duplicate-key policy, DecentDB-backed duplicate detection, docs, and tests exist. |
-| P11 | FTN toss, scan, and bundles | Partial | Network tables, packet scaffolding, raw/ZIP/ARJ bundle classification, raw pass-through, and safe ZIP packet extraction exist; tosser, scanner, ARJ extraction, bundle creation, and end-to-end cycle are not implemented. |
-| P12 | FTN routing, nodelist, and AreaFix | Partial | Nodelist table, full-list parser, atomic import/apply-diff, lookup, pure netmail routing decisions, and AreaFix command parsing exist; AreaFix runtime processing, routing integration, CRC hardening, and activity logging are incomplete. |
-| P13 | BinkP transport | Partial | BinkP crate has frame constants, tested frame I/O, address/password handshake primitives, file offer/data-frame helpers, batch exchange helpers, retry backoff policy, transport-security preflight policy, and one-link-session guard primitives; full client/server loops, TLS sessions, retry execution, and poll logging are not implemented. |
-| P14 | FTN operations, hardening, and docs | Partial | `net` status/list/log/queue/packet/subscription/nodelist commands read or update real DecentDB state, including packet summary/show/retry/quarantine state controls; toss, scan, real poll, AreaFix runtime, retention, and stress coverage remain incomplete. |
-| P15 | OxideNet implementation | Partial | OxideNet crate has constants and data structs; application, admin, token, config-package, hub/member, public-network, and TUI workflows are not implemented. |
-| P16 | Remote admin and status surface | Partial | Security ADR, disabled `[admin_web]` config, validation, and docs exist; HTTP surface, auth, CSRF/replay implementation, and rate-limit runtime are absent. |
+| P11 | FTN toss, scan, and bundles | Partial | Network tables, packet scaffolding, raw/ZIP/ARJ bundle classification, raw pass-through, safe ZIP packet extraction, outbound ZIP bundle creation, inbound raw/ZIP echomail tossing, and outbound echomail packet scanning exist; ARJ extraction, bundle naming/integration, netmail delivery/forwarding, and end-to-end cycle are not implemented. |
+| P12 | FTN routing, nodelist, and AreaFix | Partial | Nodelist table, full-list parser, atomic import/apply-diff, lookup, pure netmail routing decisions, AreaFix command parsing, and local authenticated AreaFix subscription execution exist; inbound AreaFix netmail processing, reply netmail, rescan queueing, routing integration, CRC hardening, and full activity coverage are incomplete. |
+| P13 | BinkP transport | Partial | BinkP crate has frame constants, tested frame I/O, address/password handshake primitives, file offer/data-frame helpers, batch exchange helpers, plaintext-legacy client polling, retry backoff policy, transport-security preflight policy, and one-link-session guard primitives; TLS sessions, inbound listener loops, retry execution, and guard integration are not implemented. |
+| P14 | FTN operations, hardening, and docs | Partial | `net` status/toss/scan/poll/list/log/queue/packet/subscription/nodelist and local AreaFix commands read, import, export, transport, or update real DecentDB state, including packet summary/show/retry/quarantine state controls; inbound AreaFix netmail, retention, and stress coverage remain incomplete. |
+| P15 | OxideNet implementation | Partial | OxideNet crate has constants, PRD lifecycle/status structs, address classification/allocation helpers, validated config-package structs, schema-8 registry storage/repository APIs, and foundation docs; application, admin, token, config-package generation/import, hub/member, public-network, and TUI workflows are not implemented. |
+| P16 | Remote admin and status surface | Partial | Security ADR, disabled `[admin_web]` config, public-status/origin/loopback-only reverse-proxy validation, reusable read-only status payload, and opt-in loopback `/status` HTTP surface exist; auth, CSRF/replay implementation, rate-limit runtime, and mutations are absent. |
 | P17 | Repository and release automation | Complete | Version metadata is aligned through `scripts/bump-version.sh`; Codeberg mirror dry-run automation, optional DOSEMU2 smoke workflow, and release package smoke checks exist. |
 | P18 | Final integration and release readiness | Partial | Rust gate and docs build pass; stale docs remain and required smoke matrix cannot pass because major features are incomplete. |
 
@@ -183,11 +183,13 @@ Coverage audit update 2026-06-04:
   primitives are implemented, documented, and tested.
 - Partial: P11-P15 networking workflows, full BinkP sessions, and OxideNet
   coverage remain incomplete. Nodelist import/apply-diff/lookup, read-only
-  network CLI coverage, and BinkP file-frame helpers exist, but toss/scan,
-  routing, AreaFix, BinkP dial/listen loops, and OxideNet flows are not
+  network CLI coverage, inbound raw/ZIP echomail toss, and BinkP file-frame
+  helpers and plaintext-legacy BinkP client poll exist, but netmail routing
+  runtime, AreaFix, TLS BinkP/listener loops, and OxideNet flows are not
   implemented.
-- Partial: P16 remote admin/status coverage has disabled config validation and
-  docs only; the remote HTTP surface and runtime security controls are absent.
+- Partial: P16 remote admin/status coverage has disabled config validation,
+  docs, and an opt-in loopback read-only `/status` endpoint; authenticated
+  remote admin and runtime security controls are absent.
 - Complete: P17 release automation now has aligned version metadata, a bump
   script, Codeberg mirror dry-run automation, optional DOSEMU2 smoke automation,
   and packaged-binary smoke checks.
@@ -272,9 +274,9 @@ Status: Complete
 
 Audit update 2026-06-04:
 
-- Done: schema version is now `7`; schema migrations, shared `network_*` tables,
-  the `[network]` config model, the deprecated `[ftn]` alias, and `DbWriter`
-  tests exist.
+- Done: schema version is now `8`; schema migrations, shared `network_*` tables,
+  OxideNet registry tables, the `[network]` config model, the deprecated `[ftn]`
+  alias, and `DbWriter` tests exist.
 - Done: `design/DECENTDB_SCHEMA.md`, `design/FTN_PLAN.md`, and
   `docs/about/changelog.md` reflect the current schema/version state without
   claiming later file-transfer protocol work as complete.
@@ -429,6 +431,10 @@ Audit update 2026-06-04:
 - Done: disabled-by-default `[serial]` config, disabled-by-default
   `[file_transfers]` config, file-area DecentDB tables, file repository APIs, and
   the `oxidebbs-transfer` crate scaffolding exist.
+- Done: caller-session helpers are now generic over the byte-oriented
+  `Transport` trait, with a loopback login-flow regression test. TCP/telnet
+  remains the only runtime listener, but the login/menu helper path no longer
+  requires `TcpTransport` directly.
 - Not done: `SerialTransport` is an in-memory channel transport used by tests,
   not a physical serial/modem device implementation that opens configured TTYs.
 - Done: CRC-16/XMODEM, XMODEM-CRC send/receive fallback, ZMODEM binary/hex
@@ -532,6 +538,9 @@ Audit update 2026-06-04:
   coverage in `oxidebbs-door`.
 - Done: live caller door validation now accepts every drop-file format that
   `oxidebbs-door` can render.
+- Done: exclusive local doors now reject a second launch while an unfinished
+  run exists for the same door, using persisted `door_runs` state; finished run
+  history does not block a later launch.
 - Not done: live remote provider connectors, remote provider fake-server tests,
   provider credential secret-reference storage, and credential redaction across
   CLI, TUI, logs, backups, and exports are not implemented.
@@ -687,13 +696,15 @@ Audit update 2026-06-04:
   file-area mutations, imports, and removals.
 - Done: network CLI commands for P9-P14 now expose network status, link
   list/show, area list, queue, packet lists, poll logs, nodelist import,
-  nodelist listing, nodelist lookup, poll dry-run preflight, and manual
-  subscription metadata updates.
+  nodelist listing, nodelist lookup, inbound raw/ZIP echomail toss, outbound
+  echomail packet scan, plaintext-legacy BinkP poll, poll dry-run preflight,
+  local AreaFix subscription execution, and manual subscription metadata
+  updates.
 - Done: user, message, message-area, door, file-area, file-entry, nodelist, and
   manual network subscription write commands now audit successful mutations
   where DecentDB audit storage is available.
-- Not done: operational network CLI commands still do not perform toss, scan,
-  real BinkP poll execution, or AreaFix workflows.
+- Not done: inbound AreaFix netmail processing, reply netmail queueing, and
+  AreaFix rescan queueing are still incomplete.
 
 Objective: Implement every CLI command previously documented as "can wait" or
 kept out of v1.1.
@@ -763,6 +774,10 @@ Audit update 2026-06-04:
   list, navigation, and the command palette. It summarizes profiles, links,
   areas, packets, messages, poll logs, duplicate events, packet statuses, and
   nodelist counts from DecentDB.
+- Done: readonly mode now blocks Dashboard send/broadcast shortcuts and applies
+  a central fail-closed guard for mutating form, confirmation, and command
+  palette submissions while still allowing navigation, filters, refresh, and
+  quit confirmation.
 - Not done: OxideNet operational screens are absent, including application
   review, node registry, packet queues, quarantine, subscriptions, poll logs,
   nodelist generation, and config-package generation.
@@ -999,16 +1014,31 @@ Audit update 2026-06-04:
 - Done: raw `.pkt`, ZIP arcmail, and ARJ arcmail inputs are classified by
   `oxidebbs-ftn`; raw packets pass through the extraction boundary and ZIP
   bundles extract top-level `.pkt` entries into the requested output directory.
+- Done: `oxidebbs-ftn` can create outbound ZIP bundles from one or more `.pkt`
+  files with deterministic entry ordering and overwrite/duplicate guards.
 - Done: ZIP extraction rejects nested paths, absolute/traversal-style names,
   non-packet entries, duplicate output names, corrupt archives, empty archives,
-  and output-file collisions before handing packet paths to a future tosser.
+  and output-file collisions before handing packet paths to the tosser.
+- Done: `Tosser` scans `paths.runtime/network/<profile>/inbound/drop`, imports
+  mapped echomail from raw `.pkt` files and ZIP bundles, validates packet
+  origin/password against enabled links, records `network_packets` and
+  `network_messages`, stores SEEN-BY/PATH nodes, skips duplicate messages,
+  archives successful inputs, and quarantines malformed, unauthorized, netmail,
+  and unknown-area inputs.
+- Done: `Scanner` writes Type-2+ outbound `.pkt` files for subscribed echomail
+  links under `paths.runtime/network/<profile>/outbound/<link>/ready`, records
+  pending outbound `network_packets`, records exported `network_messages`, and
+  avoids exporting the same local message to the same link twice.
 - Decision: ZIP arcmail extraction accepts only top-level `.pkt` entries. This
   keeps extraction deterministic and avoids silently ignoring suspicious archive
   contents or writing outside the controlled temp directory.
-- Not done: inbound tosser, outbound scanner, packet routing into local message
-  areas, packet archive/quarantine behavior, ARJ extraction, outbound bundle
-  creation, arcmail naming, and end-to-end scan/read/toss cycles are not
-  implemented.
+- Decision: until `[network.paths]` lands, the tosser uses the profile-scoped
+  default spool root `paths.runtime/network/<profile>/`. This avoids adding a
+  partial config schema while keeping manual/external-mailer operation
+  deterministic.
+- Not done: netmail delivery/forwarding, ARJ extraction, outbound bundle
+  creation, arcmail naming, advanced SEEN-BY/PATH loop prevention, and
+  end-to-end scan/read/toss cycles are not implemented.
 
 Objective: Implement inbound and outbound legacy FTN packet workflows.
 
@@ -1085,9 +1115,15 @@ Audit update 2026-06-04:
   link checks fail.
 - Done: pure AreaFix command parsing exists in `oxidebbs-ftn` for `%LIST`,
   `%QUERY`, `%HELP`, subscribe, unsubscribe, and rescan request command forms.
-- Not done: nodediff CRC validation, AreaFix password authentication, DecentDB
-  subscription mutation, reply netmail generation, routing runtime integration
-  with scanner/tosser queues, and activity logging are not implemented.
+- Done: `net areafix send` authenticates the supplied password against the
+  configured link password, executes AreaFix list/query/help/subscribe/
+  unsubscribe/rescan-request command text, mutates
+  `network_area_subscriptions`, updates the area subscribed aggregate, emits
+  reply text, and audits authentication failures, subscription changes, and
+  processed command batches.
+- Not done: nodediff CRC validation, inbound AreaFix netmail processing, reply
+  netmail generation, rescan queueing, and routing runtime integration with
+  scanner/tosser queues are not implemented.
 - Not done: the nodelist parser does not yet capture every full row field
   (flags, sysop, location, phone, speed) into structured columns; those remain
   preserved only in `raw_entry`.
@@ -1161,17 +1197,22 @@ Audit update 2026-06-04:
   session-level filename validation exist.
 - Done: batch send/receive helpers handle empty polls, ordered multi-file
   exchange, large file data-frame chunking/reassembly, and per-file `M_GOT`
-  acknowledgements at the stream layer.
+  acknowledgements at the stream layer. A send-with-acknowledgements helper
+  supports sequential send-then-receive sessions.
 - Done: transport-security preflight policy exists for `tls_required`,
   `tls_opportunistic`, and `plaintext_legacy`, and `net poll --dry-run` reports
   the resulting TLS/plaintext plan and warnings.
+- Done: `net poll <link>` and `net poll --all` perform plaintext-legacy BinkP
+  client polling, send pending outbound packet files, receive remote files into
+  the selected profile's inbound drop directory, mark acknowledged outbound
+  packet rows processed, and record `network_poll_log` rows.
 - Done: exponential retry backoff policy calculation exists with validation,
   retry eligibility, and capped delays.
 - Done: in-process one-active-session-per-link guard primitive exists and
   releases permits on drop.
-- Not done: full command session loops, filesystem spool integration,
-  TLS socket/session implementation, retry execution, guard integration into
-  poll/listener loops, and `network_poll_log` integration are not implemented.
+- Not done: TLS socket/session implementation, retry execution, guard
+  integration into poll/listener loops, and inbound BinkP listener loops are not
+  implemented.
 
 Objective: Implement BinkP client/server polling for legacy FTN, private
 networks, and OxideNet transport.
@@ -1243,20 +1284,22 @@ Status: Partial
 Audit update 2026-06-04:
 
 - Done: a top-level `oxidebbs-server net` command group exists, and `status`,
-  `links list`, `links show`, `areas list`, `areas subscribe`, `areas
+  `toss`, `links list`, `links show`, `areas list`, `areas subscribe`, `areas
   unsubscribe`, `queue`, `packets summary/show/retry/mark-quarantined`,
   `packets inbound/outbound/quarantine`, `logs`, `poll --dry-run`,
-  `nodelist import`, `nodelist apply-diff`, `nodelist list`, and
+  `poll`, `nodelist import`, `nodelist apply-diff`, `nodelist list`, and
   `nodelist lookup` use real DecentDB network state.
 - Done: packet retry/quarantine controls are intentionally DecentDB-state only:
   retry resets failed or quarantined rows to pending, and mark-quarantined
-  records the reason without moving files until the spool/tosser runtime exists.
-- Not done: `toss`, `scan`, real `poll` execution, and AreaFix return or remain
-  behind explicit not-implemented boundaries because the FTN tosser/scanner and
-  BinkP session engine are not complete.
-- Not done: real tosser quarantine file movement, poll failure dashboard data,
-  packet retention policy, stats collection, stress tests, and operational FTN
-  behavior are not implemented.
+  records the reason without moving files. File movement happens during
+  `net toss` processing, not during packet state-control commands.
+- Done: `net areafix send <link-name> <command>` authenticates local command
+  execution for a configured link, updates subscriptions, prints reply text, and
+  audits activity.
+- Not done: inbound AreaFix netmail processing, AreaFix reply netmail queueing,
+  AreaFix rescan queueing, poll failure dashboard data, packet retention
+  policy, stats collection, stress tests, and full operational FTN behavior are
+  not implemented.
 - Not done: required FTN docs pages such as setup, sysop guide, CLI,
   configuration, packet format, tosser, scanner, bundles, nodelist, AreaFix,
   BinkP, troubleshooting, testing, and performance are missing.
@@ -1342,8 +1385,15 @@ Status: Partial
 
 Audit update 2026-06-04:
 
-- Done: `oxidebbs-oxidenet` exists with default constants and basic
-  application/node/config-package data structs.
+- Done: `oxidebbs-oxidenet` exists with default constants, PRD application
+  lifecycle status variants, application/node/config-package data structs,
+  OxideNet address classification/allocation helpers, and validation for the
+  planned TOML config-package sections.
+- Done: DecentDB schema `8` adds OxideNet application, node, and credential-hash
+  registry tables with repository APIs, migration tests, backup/restore support,
+  and database verification coverage.
+- Done: foundation docs now cover OxideNet overview, addressing ranges,
+  registry storage, and config-package validation boundaries.
 - Not done: BBS-native application flow, admin review, token-based join, config
   package import, filesystem simulation, BinkP polling, first hub/member flow,
   operational hardening, public experimental network support, backup/multi-hub
@@ -1481,13 +1531,19 @@ Audit update 2026-06-04:
 
 - Done: ADR 0029 defines the required security model.
 - Done: disabled-by-default `[admin_web]` config exists with validation for IP
-  socket bind syntax, non-loopback TLS requirement, read-only enforcement,
+  socket bind syntax, loopback-only enabled binds, public-status opt-in, origin
+  allowlists, reverse-proxy loopback/TLS policy, read-only enforcement,
   CSRF/replay timing settings, positive rate-limit settings, example config, and
   remote-admin docs.
-- Not done: there is no remote admin/status HTTP module or crate, no read-only
-  status endpoint, no authenticated browser/API admin views, no CSRF token
-  runtime handling, no replay nonce/timestamp runtime handling, no remote login
-  rate limiting implementation, and no remote-admin security test suite.
+- Done: reusable read-only admin status JSON payload extraction exists for the
+  existing CLI status command and HTTP status routing.
+- Done: an `admin_web` server module starts only when `[admin_web].enabled =
+  true` and serves `GET /status` only when `public_status_enabled = true`; the
+  public payload omits database paths, caller addresses, secrets, and audit rows.
+- Not done: authenticated browser/API admin views, mutating HTTP routes, CSRF
+  token runtime handling, replay nonce/timestamp runtime handling, remote login
+  rate limiting implementation, and the full remote-admin security test suite
+  are absent.
 
 Objective: Implement the future remote web admin/status dashboard with the full
 security model required by existing docs.
@@ -1499,8 +1555,12 @@ Implementation tasks:
   - `enabled`
   - `bind`
   - `public_status_enabled`
-  - `readonly`
-  - `session_timeout_minutes`
+  - `require_tls`
+  - `read_only`
+  - `session_timeout_seconds`
+  - `csrf_token_ttl_seconds`
+  - `replay_window_seconds`
+  - `rate_limit_per_minute`
   - `allowed_origins`
   - `behind_reverse_proxy`
 - Add a separate crate or server module for remote admin HTTP.

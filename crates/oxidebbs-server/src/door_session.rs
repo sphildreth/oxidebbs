@@ -29,8 +29,8 @@ use oxidebbs_core::door::DoorDefinition;
 use oxidebbs_core::user::User;
 use oxidebbs_db::{
     AuditEventRecord, DoorDefinitionRecord, DoorRunFinish, DoorRunRecord, OxideDb,
-    find_door_by_key, finish_door_run, insert_audit_event, insert_door_definition, insert_door_run,
-    list_door_definitions, update_door_definition,
+    find_active_door_run_by_door_id, find_door_by_key, finish_door_run, insert_audit_event,
+    insert_door_definition, insert_door_run, list_door_definitions, update_door_definition,
 };
 #[cfg(test)]
 use oxidebbs_door::DoorRunner;
@@ -265,6 +265,12 @@ impl<'a> DoorService<'a> {
         if !door.enabled {
             return Err(format!("Door {} is disabled.", door.key));
         }
+        if let Some(message) = self
+            .exclusive_door_unavailable_message(door)
+            .map_err(|error| format!("Door {} exclusive status check failed: {error}", door.key))?
+        {
+            return Err(message);
+        }
         if !(1..=240).contains(&door.time_limit_minutes) {
             return Err(format!(
                 "Door {} time limit must be between 1 and 240 minutes.",
@@ -366,6 +372,7 @@ impl<'a> DoorService<'a> {
     ) -> ServeResult<DoorExecutionSummary> {
         self.validate_door(door, node_number)
             .map_err(ServeError::Runtime)?;
+        self.ensure_exclusive_door_available(door)?;
         let mut runtime_guard =
             DoorRuntimeDirectoryGuard::prepare(&self.config.paths.runtime, node_number)?;
         let request = self.build_request(user, node_number, door)?;
@@ -433,6 +440,7 @@ impl<'a> DoorService<'a> {
     ) -> ServeResult<DoorExecutionSummary> {
         self.validate_door(door, node_number)
             .map_err(ServeError::Runtime)?;
+        self.ensure_exclusive_door_available(door)?;
         let _runtime_guard =
             DoorRuntimeDirectoryGuard::prepare(&self.config.paths.runtime, node_number)?;
         let request = self.build_request(user, node_number, door)?;
@@ -672,6 +680,32 @@ impl<'a> DoorService<'a> {
             node_number,
             runtime_dir: node_runtime_dir(&self.config.paths.runtime, node_number),
         })
+    }
+
+    fn ensure_exclusive_door_available(&self, door: &DoorDefinitionRecord) -> ServeResult<()> {
+        if let Some(message) = self.exclusive_door_unavailable_message(door)? {
+            return Err(ServeError::Runtime(message));
+        }
+
+        Ok(())
+    }
+
+    fn exclusive_door_unavailable_message(
+        &self,
+        door: &DoorDefinitionRecord,
+    ) -> ServeResult<Option<String>> {
+        if !door.exclusive {
+            return Ok(None);
+        }
+
+        let active_run = find_active_door_run_by_door_id(self.db.db(), &door.id)
+            .map_err(ServeError::Database)?;
+        Ok(active_run.map(|active_run| {
+            format!(
+                "Door {} is exclusive and is already running on node {} as run {}.",
+                door.key, active_run.node_number, active_run.id
+            )
+        }))
     }
 
     fn insert_started_run(
@@ -1930,6 +1964,90 @@ mod tests {
         assert_eq!(run.bytes_out, 0);
 
         let _ = fs::remove_dir_all(runtime);
+    }
+
+    #[test]
+    fn exclusive_door_blocks_second_unfinished_run() {
+        let runtime = temp_dir("exclusive-block-runtime");
+        let working_dir = temp_dir("exclusive-block-working");
+        let config = test_config(runtime.clone(), working_dir.clone());
+        let db = OxideDb::open_memory().expect("open db");
+        insert_test_user(&db);
+        let service = DoorService::new(&db, &config);
+        let mut door = service
+            .list_enabled_doors()
+            .expect("list doors")
+            .pop()
+            .expect("door");
+        door.exclusive = true;
+        insert_door_run(
+            db.db(),
+            &DoorRunRecord {
+                id: "00000000-0000-4000-8000-000000000901".to_string(),
+                door_id: door.id.clone(),
+                user_id: USER_ID.to_string(),
+                node_number: 2,
+                started_at: "2026-01-01T00:00:00.000000Z".to_string(),
+                ended_at: None,
+                exit_code: None,
+                timed_out: false,
+                disconnect_forced: false,
+                bytes_in: 0,
+                bytes_out: 0,
+            },
+        )
+        .expect("insert active run");
+
+        let result = service.execute_with_runner(&DryRunDoorRunner, &test_user(), 1, &door, false);
+
+        let error = result.expect_err("exclusive run should block");
+        assert!(error.to_string().contains("already running on node 2"));
+        assert!(!runtime.join("node-001").exists());
+
+        let _ = fs::remove_dir_all(runtime);
+        let _ = fs::remove_dir_all(working_dir);
+    }
+
+    #[test]
+    fn exclusive_door_allows_finished_run_history() {
+        let runtime = temp_dir("exclusive-finished-runtime");
+        let working_dir = temp_dir("exclusive-finished-working");
+        let config = test_config(runtime.clone(), working_dir.clone());
+        let db = OxideDb::open_memory().expect("open db");
+        insert_test_user(&db);
+        let service = DoorService::new(&db, &config);
+        let mut door = service
+            .list_enabled_doors()
+            .expect("list doors")
+            .pop()
+            .expect("door");
+        door.exclusive = true;
+        insert_door_run(
+            db.db(),
+            &DoorRunRecord {
+                id: "00000000-0000-4000-8000-000000000902".to_string(),
+                door_id: door.id.clone(),
+                user_id: USER_ID.to_string(),
+                node_number: 2,
+                started_at: "2026-01-01T00:00:00.000000Z".to_string(),
+                ended_at: Some("2026-01-01T00:01:00.000000Z".to_string()),
+                exit_code: Some(0),
+                timed_out: false,
+                disconnect_forced: false,
+                bytes_in: 0,
+                bytes_out: 0,
+            },
+        )
+        .expect("insert finished run");
+
+        let summary = service
+            .execute_with_runner(&DryRunDoorRunner, &test_user(), 1, &door, false)
+            .expect("finished history should not block");
+
+        assert_eq!(summary.exit_code, Some(0));
+
+        let _ = fs::remove_dir_all(runtime);
+        let _ = fs::remove_dir_all(working_dir);
     }
 
     #[test]

@@ -51,13 +51,13 @@ cargo run -p oxidebbs-server -- status
 cargo run -p oxidebbs-server -- nodes list
 ```
 
-`oxidebbs-server setup` and `db init` create schema `4`. When an existing
-DecentDB uses supported older schema versions `2` or `3`, startup runs the
+`oxidebbs-server setup` and `db init` create schema `8`. When an existing
+DecentDB uses supported older schema versions `2` through `7`, startup runs the
 upgrade before serving callers. The migration chain preserves local users,
-messages, replies, sessions, doors, runs, and audit rows while adding
-`message_areas.enabled`, `users.alias_normalized`, and persistent
-`auth_attempts`. Renamed pre-upgrade tables remain as `oxidebbs_schema*_*`
-archives and are not used by runtime queries. Databases with a future marker,
+messages, replies, sessions, doors, runs, audit rows, shared network rows, file
+areas, and OxideNet registry rows while adding the intervening schema
+foundations. Renamed pre-upgrade tables remain as `oxidebbs_schema*_*` archives
+and are not used by runtime queries. Databases with a future marker,
 missing marker, or unmarked existing tables are refused with a clear error and
 should be opened only with compatible OxideBBS software.
 

@@ -163,6 +163,21 @@ pub fn find_door_run_by_id(db: &Db, id: &str) -> decentdb::Result<Option<DoorRun
     Ok(result.rows().first().map(row_to_run))
 }
 
+pub fn find_active_door_run_by_door_id(
+    db: &Db,
+    door_id: &str,
+) -> decentdb::Result<Option<DoorRunRecord>> {
+    let result = db.execute_with_params(
+        "SELECT UUID_TO_STRING(id), UUID_TO_STRING(door_id), UUID_TO_STRING(user_id), node_number, CAST(started_at AS TEXT), CAST(ended_at AS TEXT), exit_code, timed_out, disconnect_forced, bytes_in, bytes_out
+         FROM door_runs
+         WHERE door_id = UUID_PARSE($1) AND ended_at IS NULL
+         ORDER BY started_at DESC
+         LIMIT 1",
+        &[Value::Text(door_id.to_string())],
+    )?;
+    Ok(result.rows().first().map(row_to_run))
+}
+
 fn row_to_door(row: &decentdb::QueryRow) -> DoorDefinitionRecord {
     let values = row.values();
     DoorDefinitionRecord {
@@ -354,6 +369,36 @@ mod tests {
         let found = find_door_run_by_id(&db, RUN_1).expect("find");
 
         assert_eq!(found, Some(sample_run()));
+    }
+
+    #[test]
+    fn finds_active_door_run_by_door_id_until_finished() {
+        let db = test_db();
+        insert_test_user(&db);
+        insert_door_definition(&db, &sample_door()).expect("insert door");
+        insert_door_run(&db, &sample_run()).expect("insert run");
+
+        let active = find_active_door_run_by_door_id(&db, DOOR_LORD)
+            .expect("find active")
+            .expect("active run");
+        assert_eq!(active.id, RUN_1);
+
+        finish_door_run(
+            &db,
+            RUN_1,
+            &DoorRunFinish {
+                ended_at: "2026-01-01T00:05:00.000000Z".to_string(),
+                exit_code: Some(0),
+                timed_out: false,
+                disconnect_forced: false,
+                bytes_in: 12,
+                bytes_out: 34,
+            },
+        )
+        .expect("finish run");
+
+        let active = find_active_door_run_by_door_id(&db, DOOR_LORD).expect("find active");
+        assert!(active.is_none());
     }
 
     #[test]

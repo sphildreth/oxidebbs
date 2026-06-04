@@ -6,12 +6,15 @@ pub mod kludge;
 pub mod nodelist;
 pub mod packet;
 pub mod route;
+pub mod scanner;
+pub mod tosser;
 
 pub use areafix::{
     AreaFixCommand, AreaFixParseError, parse_areafix_command, parse_areafix_commands,
 };
 pub use bundle::{
-    BundleClassification, BundleError, BundleExtractor, BundleFormat, classify_bundle_path,
+    BundleClassification, BundleCreator, BundleError, BundleExtractor, BundleFormat,
+    classify_bundle_path,
 };
 pub use duplicate::{
     DecentDbDuplicateDetector, DuplicateDetector, NullDuplicateDetector, duplicate_key,
@@ -28,3 +31,5 @@ pub use packet::{
     FtnPacket, MessageAttribute, PacketHeader, PacketMessage, PacketReader, PacketWriter,
 };
 pub use route::{FtnRouteLink, HubRouteScope, NetmailRouter, RoutingDecision};
+pub use scanner::{ScanResult, Scanner, ScannerPaths};
+pub use tosser::{TossResult, Tosser, TosserPaths};

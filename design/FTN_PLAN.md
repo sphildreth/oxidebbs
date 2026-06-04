@@ -36,7 +36,7 @@ What exists today:
   and unit tests.
 - `oxidebbs-core/src/network.rs` — re-exports the protocol-neutral network types during the transition.
 - `oxidebbs-core/src/message.rs` — `AreaKind` enum with `Local`, `EchoMail`, `NetMail` variants. `MessageArea` has `network_id: Option<String>`. `Message` has `network_message_id: Option<String>`.
-- `oxidebbs-db` schema version 7 — the shared network foundation landed in
+- `oxidebbs-db` schema version 8 — the shared network foundation landed in
   schema `5`: `message_areas.kind` CHECK includes `'echomail'` and `'netmail'`;
   `messages` has first-class local/network/system author metadata; shared
   `network_*` tables and repository APIs exist for profiles, links, areas,
@@ -300,7 +300,7 @@ Configuration validation must reject:
 All shared network state and legacy FTN adapter state is stored in DecentDB.
 v1.2 made the final naming decision: shared protocol-neutral state uses
 `network_*` tables. Those tables were implemented in the schema `5` migration
-and remain part of the current schema `7` documented in
+and remain part of the current schema `8` documented in
 `design/DECENTDB_SCHEMA.md`. Reserve `ftn_*` table names only for future
 adapter-private FTN state that cannot be shared with OxideNet or private packet
 profiles.
@@ -1580,7 +1580,7 @@ enum BundleCompression {
 ### Definition of done
 
 - [ ] `BundleNamer` generates correct arcmail filenames for all address types
-- [ ] `BundleCreator` creates ZIP bundles from packet files
+- [x] `BundleCreator` creates ZIP bundles from packet files
 - [x] `BundleExtractor` handles raw packet pass-through and classifies ZIP/ARJ
   inputs
 - [x] `BundleExtractor` extracts packets from ZIP bundles
@@ -1953,9 +1953,11 @@ Already subscribed: AREA.ALREADY
 ### Definition of done
 
 - [x] AreaFix command parser handles all command forms (%LIST, %QUERY, %HELP, +AREA, -AREA, rescan)
-- [ ] `AreaFixProcessor` authenticates and executes all commands
-- [ ] Password authentication works
-- [ ] Subscriptions are created and removed in DecentDB
+- [~] Local `net areafix send` authenticates and executes all commands; inbound
+  netmail processing is not wired yet
+- [x] Password authentication works for local AreaFix command execution
+- [x] Subscriptions are created and removed in DecentDB by local AreaFix command
+  execution
 - [ ] Rescan sends recent messages
 - [ ] Reply netmail is generated correctly
 - [ ] All tests pass
@@ -2210,7 +2212,10 @@ oxidebbs net logs <link-name>
 
 - [ ] All CLI commands are implemented and functional
 - [x] Implemented commands have `--help` output through Clap
-- [ ] Commands integrate with tosser, scanner, nodelist, and BinkP
+- [~] Commands integrate with tosser, scanner, nodelist, BinkP, and local
+  AreaFix execution. `net toss`, `net scan`, `net poll`, `net areafix send`,
+  and nodelist commands are wired to real DecentDB-backed behavior; TLS-capable
+  BinkP sessions and inbound AreaFix netmail processing remain incomplete.
 - [x] Status, link list, area list, poll logs, nodelist import, nodelist list,
   and nodelist lookup integrate with DecentDB network tables
 - [ ] Error messages are clear
