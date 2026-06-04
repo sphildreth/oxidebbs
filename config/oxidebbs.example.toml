@@ -142,6 +142,28 @@ exclusive = false
 time_limit_minutes = 5
 enabled = false
 
-[ftn]
+[network]
 enabled = false
-reserved_network_name = "OxideNet"
+
+[network.profiles.fidonet]
+name = "FidoNet"
+enabled = false
+adapter = "legacy-ftn"
+
+[network.profiles.fidonet.local_address]
+zone = 1
+net = 105
+node = 42
+point = 0
+
+[network.links.fidonet_hub]
+network = "fidonet"
+address = "1:105/0"
+host = "fidonet.example.net"
+binkp_port = 24554
+password = ""
+poll_schedule_minutes = 60
+enabled = false
+compression = "zip"
+transport_security = "plaintext_legacy"
+legacy_compatible = true

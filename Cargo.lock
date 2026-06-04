@@ -1118,6 +1118,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 name = "oxidebbs-core"
 version = "1.1.0"
 dependencies = [
+ "oxidebbs-network",
  "serde",
  "thiserror 2.0.18",
 ]
@@ -1137,6 +1138,14 @@ dependencies = [
  "serde",
  "thiserror 2.0.18",
  "toml",
+]
+
+[[package]]
+name = "oxidebbs-network"
+version = "1.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

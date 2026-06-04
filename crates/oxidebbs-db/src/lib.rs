@@ -8,12 +8,14 @@ mod audit_repo;
 mod auth_repo;
 mod door_repo;
 mod message_repo;
+mod db_writer;
+mod network_repo;
 mod migrations;
 mod schema;
 mod session_repo;
 mod user_repo;
 
-pub const SCHEMA_VERSION: i64 = 4;
+pub const SCHEMA_VERSION: i64 = 5;
 
 pub use audit_repo::{
     AuditEventRecord, insert_audit_event, insert_audit_event_preserving_record, list_audit_events,
@@ -33,6 +35,26 @@ pub use message_repo::{
     insert_message_area, list_message_areas, list_messages, list_messages_in_area,
     list_visible_messages_in_area, move_message_to_area, update_message_area_enabled,
     update_message_area_levels, update_message_visibility,
+};
+pub use db_writer::{
+    DbWriter,
+    DbWriterError,
+    DbWriterResult,
+    DbWriteTicket,
+};
+pub use network_repo::{
+    NetworkAreaRecord, NetworkDuplicateLogRecord, NetworkLinkRecord, NetworkMessageRecord,
+    NetworkNodelistRecord, NetworkPacketRecord, NetworkPathNode, NetworkPollLogRecord,
+    NetworkProfileRecord, NetworkSeenByNode, NetworkSubscriptionRecord,
+    find_network_area_by_tag_and_profile, find_network_link_by_key,
+    find_network_profile_by_key, insert_network_area, insert_network_duplicate_log,
+    insert_network_link, insert_network_message, insert_network_nodelist_entry,
+    insert_network_packet, insert_network_path_node, insert_network_profile,
+    insert_network_seen_by_node, insert_network_subscription, insert_network_path,
+    insert_network_seen_by, list_network_areas, list_network_duplicates, list_network_links,
+    list_network_messages, list_network_nodelist_entries, list_network_packets,
+    list_network_profiles, list_network_poll_logs, list_network_seen_by,
+    list_network_subscriptions, finish_network_packet, finish_network_poll, set_network_profile_enabled,
 };
 pub use migrations::migrate_to_current;
 pub use schema::schema_version as read_schema_version;

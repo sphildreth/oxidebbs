@@ -8,6 +8,7 @@ members = [
     "crates/oxidebbs-db",
     "crates/oxidebbs-door",
     "crates/oxidebbs-sysop",
+    "crates/oxidebbs-network",
 ]
 
 [workspace.package]

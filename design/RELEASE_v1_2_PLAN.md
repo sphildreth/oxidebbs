@@ -25,7 +25,7 @@ Status values:
 | Phase | Title | Status | Exit Gate |
 | --- | --- | --- | --- |
 | P0 | Scope freeze and ADR baseline | Complete | This plan and ADRs 0018 through 0032 exist. |
-| P1 | Release hygiene and stale-future sweep | Planned | All docs and examples name v1.2 scope accurately before coding starts. |
+| P1 | Release hygiene and stale-future sweep | Complete | All docs and examples name v1.2 scope accurately before coding starts. |
 | P2 | Schema, config, and DbWriter foundation | Planned | Schema migration, shared config, and ordered write service are in place. |
 | P3 | Caller authorization and flow polish | Planned | Menu security, caller sysop submenu, and logoff assets work. |
 | P4 | Serial/modem transport and file transfers | Planned | Serial callers, ZMODEM caller transfers, and XMODEM-CRC fallback transfers pass integration tests. |

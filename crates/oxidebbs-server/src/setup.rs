@@ -208,7 +208,7 @@ struct GeneratedConfig {
     screens: BTreeMap<String, GeneratedScreenConfig>,
     menus: BTreeMap<String, GeneratedMenuConfig>,
     doors: GeneratedDoorsConfig,
-    ftn: GeneratedFtnConfig,
+    network: GeneratedNetworkConfig,
 }
 
 #[derive(Serialize)]
@@ -347,9 +347,8 @@ struct GeneratedDoorDefinitionConfig {
 }
 
 #[derive(Serialize)]
-struct GeneratedFtnConfig {
+struct GeneratedNetworkConfig {
     enabled: bool,
-    reserved_network_name: String,
 }
 
 pub fn build_setup_toml(answers: &SetupAnswers) -> io::Result<String> {
@@ -541,9 +540,8 @@ pub fn build_setup_toml(answers: &SetupAnswers) -> io::Result<String> {
         screens,
         menus,
         doors,
-        ftn: GeneratedFtnConfig {
+        network: GeneratedNetworkConfig {
             enabled: false,
-            reserved_network_name: "OxideNet".to_string(),
         },
     };
 

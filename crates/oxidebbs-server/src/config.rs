@@ -58,6 +58,8 @@ pub struct OxideConfig {
     #[serde(default)]
     pub doors: DoorsConfig,
     #[serde(default)]
+    pub network: NetworkConfig,
+    #[serde(default)]
     pub ftn: FtnConfig,
 }
 
@@ -302,6 +304,61 @@ pub struct DoorDefConfig {
     pub enabled: bool,
 }
 
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NetworkConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub profiles: HashMap<String, NetworkProfileConfig>,
+    #[serde(default)]
+    pub links: HashMap<String, NetworkLinkConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NetworkProfileConfig {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_network_adapter")]
+    pub adapter: String,
+    pub local_address: NetworkLocalAddressConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NetworkLocalAddressConfig {
+    pub zone: u16,
+    pub net: u16,
+    pub node: u16,
+    #[serde(default)]
+    pub point: u16,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NetworkLinkConfig {
+    pub network: String,
+    pub address: String,
+    pub host: String,
+    #[serde(default = "default_binkp_port")]
+    pub binkp_port: u16,
+    #[serde(default)]
+    pub password: String,
+    #[serde(default = "default_poll_schedule_minutes")]
+    pub poll_schedule_minutes: u32,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_bundle_compression")]
+    pub compression: String,
+    #[serde(default = "default_transport_security")]
+    pub transport_security: String,
+    #[serde(default)]
+    pub legacy_compatible: bool,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct FtnConfig {
     #[serde(default)]
@@ -417,6 +474,7 @@ impl OxideConfig {
         self.validate_flow()?;
         self.validate_screens()?;
         self.validate_menus()?;
+        self.validate_network()?;
         Ok(())
     }
 
@@ -519,6 +577,92 @@ impl OxideConfig {
                 }
             }
         }
+        Ok(())
+    }
+
+    fn validate_network(&self) -> Result<(), ConfigError> {
+        for (key, profile) in &self.network.profiles {
+            validate_config_key("network.profiles", key)?;
+            validate_network_adapter(&profile.adapter).map_err(ConfigError::Validation)?;
+            if profile.local_address.zone == 0 {
+                return Err(ConfigError::Validation(format!(
+                    "network.profiles.{key}.local_address.zone must be greater than 0"
+                )));
+            }
+            if profile.local_address.net == 0 {
+                return Err(ConfigError::Validation(format!(
+                    "network.profiles.{key}.local_address.net must be greater than 0"
+                )));
+            }
+            if profile.local_address.node == 0 {
+                return Err(ConfigError::Validation(format!(
+                    "network.profiles.{key}.local_address.node must be greater than 0"
+                )));
+            }
+        }
+
+        for (key, link) in &self.network.links {
+            validate_config_key("network.links", key)?;
+            if link.network.trim().is_empty() {
+                return Err(ConfigError::Validation(format!(
+                    "network.links.{key}.network must not be blank"
+                )));
+            }
+            let Some(profile) = self.network.profiles.get(&link.network) else {
+                return Err(ConfigError::Validation(format!(
+                    "network.links.{key}.network references unknown profile {:?}",
+                    link.network
+                )));
+            };
+            if link.address.trim().is_empty() {
+                return Err(ConfigError::Validation(format!(
+                    "network.links.{key}.address must not be blank"
+                )));
+            }
+            if link.host.trim().is_empty() {
+                return Err(ConfigError::Validation(format!(
+                    "network.links.{key}.host must not be blank"
+                )));
+            }
+            if link.binkp_port == 0 {
+                return Err(ConfigError::Validation(format!(
+                    "network.links.{key}.binkp_port must be between 1 and 65535"
+                )));
+            }
+            if link.poll_schedule_minutes == 0 {
+                return Err(ConfigError::Validation(format!(
+                    "network.links.{key}.poll_schedule_minutes must be greater than 0"
+                )));
+            }
+
+            let compression =
+                validate_bundle_compression(&link.compression).map_err(ConfigError::Validation)?;
+            let transport_security = validate_transport_security(&link.transport_security)
+                .map_err(ConfigError::Validation)?;
+            let adapter = profile.adapter.trim().to_ascii_lowercase();
+
+            if transport_security == "plaintext_legacy" && adapter != "legacy-ftn" {
+                return Err(ConfigError::Validation(format!(
+                    "network.links.{key}.transport_security plaintext_legacy is allowed only for legacy-ftn profiles"
+                )));
+            }
+            if transport_security == "tls_opportunistic" && !link.legacy_compatible {
+                return Err(ConfigError::Validation(format!(
+                    "network.links.{key}.transport_security tls_opportunistic requires legacy_compatible = true"
+                )));
+            }
+            if link.legacy_compatible && adapter != "legacy-ftn" {
+                return Err(ConfigError::Validation(format!(
+                    "network.links.{key}.legacy_compatible is allowed only for legacy-ftn profiles"
+                )));
+            }
+            if compression == "arj" && adapter != "legacy-ftn" {
+                return Err(ConfigError::Validation(format!(
+                    "network.links.{key}.compression arj is allowed only for legacy-ftn profiles"
+                )));
+            }
+        }
+
         Ok(())
     }
 
@@ -680,6 +824,67 @@ fn default_door_time_limit() -> u32 {
 }
 fn default_network_name() -> String {
     "OxideNet".into()
+}
+fn default_network_adapter() -> String {
+    "legacy-ftn".into()
+}
+fn default_binkp_port() -> u16 {
+    24_554
+}
+fn default_poll_schedule_minutes() -> u32 {
+    60
+}
+fn default_bundle_compression() -> String {
+    "zip".into()
+}
+fn default_transport_security() -> String {
+    "tls_required".into()
+}
+
+fn validate_config_key(section: &str, key: &str) -> Result<(), ConfigError> {
+    if key.trim().is_empty() {
+        return Err(ConfigError::Validation(format!(
+            "{section} keys must not be blank"
+        )));
+    }
+    if key.chars().any(char::is_whitespace) {
+        return Err(ConfigError::Validation(format!(
+            "{section}.{key} keys must not contain whitespace"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_network_adapter(adapter: &str) -> Result<&'static str, String> {
+    match adapter.trim().to_ascii_lowercase().as_str() {
+        "legacy-ftn" => Ok("legacy-ftn"),
+        "oxidenet" => Ok("oxidenet"),
+        other => Err(format!(
+            "network profile adapter must be one of legacy-ftn or oxidenet, got {other:?}"
+        )),
+    }
+}
+
+fn validate_bundle_compression(compression: &str) -> Result<&'static str, String> {
+    match compression.trim().to_ascii_lowercase().as_str() {
+        "none" => Ok("none"),
+        "zip" => Ok("zip"),
+        "arj" => Ok("arj"),
+        other => Err(format!(
+            "network link compression must be one of none, zip, or arj, got {other:?}"
+        )),
+    }
+}
+
+fn validate_transport_security(transport_security: &str) -> Result<&'static str, String> {
+    match transport_security.trim().to_ascii_lowercase().as_str() {
+        "tls_required" => Ok("tls_required"),
+        "tls_opportunistic" => Ok("tls_opportunistic"),
+        "plaintext_legacy" => Ok("plaintext_legacy"),
+        other => Err(format!(
+            "network link transport_security must be one of tls_required, tls_opportunistic, or plaintext_legacy, got {other:?}"
+        )),
+    }
 }
 
 pub(crate) fn validate_logging_level(level: &str) -> Result<(), String> {
@@ -1012,6 +1217,9 @@ name = "Minimal"
         assert_eq!(config.database.path, PathBuf::from("./data/oxidebbs.ddb"));
         assert_eq!(config.nodes.count, 4);
         assert_eq!(config.terminal.default_encoding, "cp437");
+        assert!(!config.network.enabled);
+        assert!(config.network.profiles.is_empty());
+        assert!(config.network.links.is_empty());
         assert!(!config.ftn.enabled);
     }
 
@@ -1155,6 +1363,153 @@ time_limit_minutes = 30
             Some("menus/main/main.ans")
         );
         assert_eq!(config.menus["main"].items[0].key, "D");
+    }
+
+    #[test]
+    fn parses_multiple_network_profiles_with_independent_addresses() {
+        let toml = r#"
+[board]
+name = "Network BBS"
+
+[network]
+enabled = true
+
+[network.profiles.fidonet]
+name = "FidoNet"
+adapter = "legacy-ftn"
+
+[network.profiles.fidonet.local_address]
+zone = 1
+net = 105
+node = 42
+point = 0
+
+[network.profiles.oxidenet]
+name = "OxideNet"
+adapter = "oxidenet"
+
+[network.profiles.oxidenet.local_address]
+zone = 42
+net = 1
+node = 7
+point = 0
+
+[network.links.fidonet_hub]
+network = "fidonet"
+address = "1:105/0"
+host = "fidonet.example.net"
+transport_security = "plaintext_legacy"
+legacy_compatible = true
+
+[network.links.oxide_hub]
+network = "oxidenet"
+address = "42:1/0"
+host = "hub.oxidebbs.net"
+compression = "none"
+transport_security = "tls_required"
+"#;
+        let config: OxideConfig = toml::from_str(toml).expect("parse network config");
+
+        config.validate().expect("validate network config");
+        assert!(config.network.enabled);
+        assert_eq!(
+            config.network.profiles["fidonet"].local_address.zone,
+            1
+        );
+        assert_eq!(
+            config.network.profiles["oxidenet"].local_address.zone,
+            42
+        );
+    }
+
+    #[test]
+    fn rejects_network_link_with_unknown_profile_key() {
+        let toml = r#"
+[board]
+name = "Network BBS"
+
+[network.links.unknown_hub]
+network = "missing"
+address = "1:105/0"
+host = "fidonet.example.net"
+"#;
+        let config: OxideConfig = toml::from_str(toml).expect("parse network config");
+        let error = config
+            .validate()
+            .expect_err("unknown network profile rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("network.links.unknown_hub.network references unknown profile")
+        );
+    }
+
+    #[test]
+    fn rejects_plaintext_legacy_on_non_legacy_network_profile() {
+        let toml = r#"
+[board]
+name = "Network BBS"
+
+[network.profiles.oxidenet]
+adapter = "oxidenet"
+
+[network.profiles.oxidenet.local_address]
+zone = 42
+net = 1
+node = 7
+
+[network.links.oxide_hub]
+network = "oxidenet"
+address = "42:1/0"
+host = "hub.oxidebbs.net"
+transport_security = "plaintext_legacy"
+"#;
+        let config: OxideConfig = toml::from_str(toml).expect("parse network config");
+        let error = config
+            .validate()
+            .expect_err("plaintext legacy rejected on OxideNet");
+
+        assert!(
+            error
+                .to_string()
+                .contains("plaintext_legacy is allowed only for legacy-ftn profiles")
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_network_link_fields() {
+        let toml = r#"
+[board]
+name = "Network BBS"
+
+[network.links.bad]
+network = "fidonet"
+address = "1:105/0"
+host = "fidonet.example.net"
+unknown_key = true
+"#;
+        let error = toml::from_str::<OxideConfig>(toml).expect_err("unknown field rejected");
+
+        assert!(error.to_string().contains("unknown field `unknown_key`"));
+    }
+
+    #[test]
+    fn parses_deprecated_ftn_compatibility_alias() {
+        let toml = r#"
+[board]
+name = "Legacy"
+
+[ftn]
+enabled = true
+reserved_network_name = "FidoNet"
+"#;
+        let config: OxideConfig = toml::from_str(toml).expect("parse ftn alias");
+
+        config.validate().expect("validate ftn alias");
+        assert!(config.ftn.enabled);
+        assert_eq!(config.ftn.reserved_network_name, "FidoNet");
+        assert!(!config.network.enabled);
     }
 
     #[test]
