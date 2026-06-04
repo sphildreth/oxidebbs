@@ -10,7 +10,7 @@ on:
       tag_name:
         description: Existing release tag to build and upload artifacts for
         required: true
-        default: v1.1.0
+        default: v1.2.0
       source_ref:
         description: Git ref to build; defaults to tag_name
         required: false
@@ -157,6 +157,21 @@ jobs:
           else
             shasum -a 256 "${archive}" > "${archive}.sha256"
           fi
+
+      - name: Smoke packaged binary
+        shell: pwsh
+        run: |
+          $package = "${{ steps.release.outputs.package }}"
+          $archive = "dist/$package.${{ matrix.archive }}"
+          $smoke = "dist/smoke-$package"
+          New-Item -ItemType Directory -Force -Path $smoke | Out-Null
+          if ("${{ matrix.archive }}" -eq "zip") {
+            Expand-Archive -Path $archive -DestinationPath $smoke -Force
+          } else {
+            tar -C $smoke -xzf $archive
+          }
+          $binary = Join-Path $smoke "$package/oxidebbs-server${{ matrix.exe_suffix }}"
+          & $binary --version
 
       - name: Upload release asset
         env:

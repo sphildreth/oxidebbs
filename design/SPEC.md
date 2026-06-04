@@ -13,6 +13,7 @@ It should ship as one primary server binary with internal crates for domain boun
 - `oxidebbs-db`
 - `oxidebbs-door`
 - `oxidebbs-sysop`
+- `oxidebbs-network`
 
 This keeps the system easy to run while keeping the codebase clean.
 
@@ -345,9 +346,10 @@ The runtime sends `terminal.welcome_screen` from the configured ANSI asset path
 on connect. ANSI callers receive the configured asset; plain text callers first
 probe sibling `.asc` and `.txt` assets before falling back to stripped ANSI
 text. The runtime then uses `flow.login_screen`, `flow.post_login_screens`, and
-`flow.main_menu` for caller screen routing. The `terminal.logoff_screen` field
-remains configuration metadata for future dedicated logoff rendering; logoff
-currently sends a plain goodbye line.
+`flow.main_menu` for caller screen routing. Normal caller logoff renders
+`terminal.logoff_screen`: ANSI callers receive the configured ANSI asset, plain
+callers first probe sibling `.asc` and `.txt` assets, and missing assets log
+context before falling back to a plain goodbye line.
 
 ## 10. Users and authentication
 
@@ -384,10 +386,13 @@ The server exposes CLI-first local sysop command groups:
 - `messages` for local area administration and message moderation
 - `doors` for configured door inspection, checks, dry-run testing, drop-file
   generation, run history, and runtime cleanup
+- `files` for local file-area administration, file import/safe removal, and
+  transfer-history inspection
 - `ansi` for screen listing, validation, preview, conversion, and inspection
 - `db` for DecentDB initialization, doctor/stats, backup, verify, read-only JSON
   export, and JSON import restore
-- `logs`, `audit`, and `config` for local troubleshooting
+- `logs`, `audit`, `config`, and `net` for local troubleshooting and deferred
+  network operations
 
 ### Logging
 
@@ -425,7 +430,8 @@ standard formatter fields plus event fields such as caller address, node,
 session, menu key, user id/alias, audit event type, door key/name, message area,
 message id, and outcome fields when applicable.
 
-All sysop control is local in v1. There is no remote admin API or remote
+All active sysop control is local in v1.2. `[admin_web]` configuration exists
+and is disabled by default, but there is no remote admin API or remote
 interactive interface in this phase.
 
 When a live control socket is unavailable, node disconnect/message/broadcast
@@ -460,10 +466,17 @@ UI only.
 
 ## 13. FTN/OxideNet boundary
 
-FTN/OxideNet support starts with core domain types for FTN addresses,
-echomail-area mappings, netmail messages, duplicate-detection keys, and packet
-import/export boundaries. Packet parsing, bundling, compression, and transport
-remain future infrastructure behind this boundary.
+FTN/OxideNet support starts with `oxidebbs-network` protocol-neutral types for
+FTN-style addresses, network profiles and links, echomail-area mappings,
+netmail messages, local/network message envelopes, duplicate-detection keys,
+queue states, and packet import/export boundaries. `oxidebbs-core` re-exports
+those types during the v1.2 transition.
+
+Legacy FTN packet and kludge primitives live in `oxidebbs-ftn`; BinkP frame
+primitives live in `oxidebbs-binkp`; OxideNet profile data lives in
+`oxidebbs-oxidenet`. Toss/scan workflows, bundle compression, nodelist
+processing, AreaFix, BinkP sessions, and full OxideNet onboarding remain behind
+those crate boundaries.
 
 ## 14. Observability
 

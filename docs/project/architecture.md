@@ -39,7 +39,8 @@ PTY/COM1 Bridge
 
 - Use Rust.
 - Use DecentDB as the only system database.
-- Keep v1 telnet-only.
+- Keep the current caller runtime telnet-first until the v1.2 serial/modem
+  phase is fully implemented and validated.
 - Treat ANSI/CP437 as a first-class byte-oriented terminal format.
 - Do not use Ratatui for the remote caller UI.
 - Keep door execution isolated from core session logic.

@@ -95,6 +95,39 @@ pub fn find_file_area_by_key(db: &Db, key: &str) -> decentdb::Result<Option<File
     Ok(result.rows().first().map(row_to_file_area))
 }
 
+pub fn update_file_area(db: &Db, record: &FileAreaRecord) -> decentdb::Result<()> {
+    db.execute_with_params(
+        "UPDATE file_areas
+         SET key = $2,
+             name = $3,
+             description = $4,
+             root_path = $5,
+             read_security_level = $6,
+             download_security_level = $7,
+             upload_security_level = $8,
+             max_upload_bytes = $9,
+             enabled = $10,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = UUID_PARSE($1)",
+        &[
+            Value::Text(record.id.clone()),
+            Value::Text(record.key.clone()),
+            Value::Text(record.name.clone()),
+            Value::Text(record.description.clone()),
+            Value::Text(record.root_path.clone()),
+            Value::Int64(record.read_security_level),
+            Value::Int64(record.download_security_level),
+            Value::Int64(record.upload_security_level),
+            record
+                .max_upload_bytes
+                .map(Value::Int64)
+                .unwrap_or(Value::Null),
+            Value::Bool(record.enabled),
+        ],
+    )?;
+    Ok(())
+}
+
 pub fn insert_file_entry(db: &Db, record: &FileEntryRecord) -> decentdb::Result<()> {
     db.execute_with_params(
         "INSERT INTO file_entries (area_id, storage_name, display_name, original_name, size_bytes, content_crc32, description, uploader_user_id, approved)
@@ -141,6 +174,14 @@ pub fn find_file_entry_by_id(db: &Db, id: &str) -> decentdb::Result<Option<FileE
         &[Value::Text(id.to_string())],
     )?;
     Ok(result.rows().first().map(row_to_file_entry))
+}
+
+pub fn update_file_entry_approved(db: &Db, id: &str, approved: bool) -> decentdb::Result<()> {
+    db.execute_with_params(
+        "UPDATE file_entries SET approved = $2, updated_at = CURRENT_TIMESTAMP WHERE id = UUID_PARSE($1)",
+        &[Value::Text(id.to_string()), Value::Bool(approved)],
+    )?;
+    Ok(())
 }
 
 pub fn insert_file_transfer(db: &Db, record: &FileTransferRecord) -> decentdb::Result<()> {

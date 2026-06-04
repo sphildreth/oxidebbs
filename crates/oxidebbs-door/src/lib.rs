@@ -1,6 +1,7 @@
 //! Door definitions, drop files, and runners.
 
 use std::collections::HashMap;
+use std::fmt;
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -485,10 +486,254 @@ fn default_enabled() -> bool {
     true
 }
 
+pub const BBSLINK_PROVIDER_KEY: &str = "bbslink";
+pub const DOORPARTY_PROVIDER_KEY: &str = "doorparty";
+pub const REDACTED_PROVIDER_SECRET: &str = "[redacted]";
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct RemoteDoorSecret {
+    value: String,
+}
+
+impl RemoteDoorSecret {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self {
+            value: value.into(),
+        }
+    }
+
+    #[must_use]
+    pub fn expose_secret(&self) -> &str {
+        &self.value
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.value.trim().is_empty()
+    }
+
+    #[must_use]
+    pub fn redacted(&self) -> &'static str {
+        if self.value.is_empty() {
+            ""
+        } else {
+            REDACTED_PROVIDER_SECRET
+        }
+    }
+}
+
+impl fmt::Debug for RemoteDoorSecret {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_tuple("RemoteDoorSecret")
+            .field(&self.redacted())
+            .finish()
+    }
+}
+
+impl fmt::Display for RemoteDoorSecret {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.redacted())
+    }
+}
+
+impl From<String> for RemoteDoorSecret {
+    fn from(value: String) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<&str> for RemoteDoorSecret {
+    fn from(value: &str) -> Self {
+        Self::new(value)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RedactedRemoteDoorProviderConfig {
+    pub provider_key: String,
+    pub endpoint: String,
+    pub account: String,
+    pub secret: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BbsLinkConfig {
+    pub system_id: String,
+    pub auth_code: RemoteDoorSecret,
+    pub endpoint: String,
+}
+
+impl BbsLinkConfig {
+    pub fn new(
+        system_id: impl Into<String>,
+        auth_code: impl Into<RemoteDoorSecret>,
+        endpoint: impl Into<String>,
+    ) -> Self {
+        Self {
+            system_id: system_id.into(),
+            auth_code: auth_code.into(),
+            endpoint: endpoint.into(),
+        }
+    }
+
+    #[must_use]
+    pub fn redacted(&self) -> RedactedRemoteDoorProviderConfig {
+        RedactedRemoteDoorProviderConfig {
+            provider_key: BBSLINK_PROVIDER_KEY.to_string(),
+            endpoint: self.endpoint.clone(),
+            account: self.system_id.clone(),
+            secret: self.auth_code.redacted().to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct BbsLinkProvider {
+    config: BbsLinkConfig,
+}
+
+impl BbsLinkProvider {
+    pub fn new(config: BbsLinkConfig) -> Self {
+        Self { config }
+    }
+
+    #[must_use]
+    pub fn config(&self) -> &BbsLinkConfig {
+        &self.config
+    }
+
+    #[must_use]
+    pub fn redacted_config(&self) -> RedactedRemoteDoorProviderConfig {
+        self.config.redacted()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DoorPartyConfig {
+    pub account: String,
+    pub password: RemoteDoorSecret,
+    pub endpoint: String,
+}
+
+impl DoorPartyConfig {
+    pub fn new(
+        account: impl Into<String>,
+        password: impl Into<RemoteDoorSecret>,
+        endpoint: impl Into<String>,
+    ) -> Self {
+        Self {
+            account: account.into(),
+            password: password.into(),
+            endpoint: endpoint.into(),
+        }
+    }
+
+    #[must_use]
+    pub fn redacted(&self) -> RedactedRemoteDoorProviderConfig {
+        RedactedRemoteDoorProviderConfig {
+            provider_key: DOORPARTY_PROVIDER_KEY.to_string(),
+            endpoint: self.endpoint.clone(),
+            account: self.account.clone(),
+            secret: self.password.redacted().to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct DoorPartyProvider {
+    config: DoorPartyConfig,
+}
+
+impl DoorPartyProvider {
+    pub fn new(config: DoorPartyConfig) -> Self {
+        Self { config }
+    }
+
+    #[must_use]
+    pub fn config(&self) -> &DoorPartyConfig {
+        &self.config
+    }
+
+    #[must_use]
+    pub fn redacted_config(&self) -> RedactedRemoteDoorProviderConfig {
+        self.config.redacted()
+    }
+}
+
 pub trait RemoteDoorProvider: Send + Sync {
     fn validate_config(&self) -> Result<(), DoorError>;
 
     fn dry_run_session(&self, caller: &DoorCaller) -> Result<DoorRunResult, DoorError>;
+}
+
+impl RemoteDoorProvider for BbsLinkProvider {
+    fn validate_config(&self) -> Result<(), DoorError> {
+        validate_required_field("BBSLink system_id", &self.config.system_id)?;
+        validate_required_secret("BBSLink", "auth_code", &self.config.auth_code)?;
+        validate_remote_endpoint("BBSLink", &self.config.endpoint)
+    }
+
+    fn dry_run_session(&self, caller: &DoorCaller) -> Result<DoorRunResult, DoorError> {
+        self.validate_config()?;
+        validate_required_field("caller alias", &caller.alias)?;
+        Ok(DoorRunResult {
+            exit_code: Some(0),
+            timed_out: false,
+        })
+    }
+}
+
+impl RemoteDoorProvider for DoorPartyProvider {
+    fn validate_config(&self) -> Result<(), DoorError> {
+        validate_required_field("DoorParty account", &self.config.account)?;
+        validate_required_secret("DoorParty", "password", &self.config.password)?;
+        validate_remote_endpoint("DoorParty", &self.config.endpoint)
+    }
+
+    fn dry_run_session(&self, caller: &DoorCaller) -> Result<DoorRunResult, DoorError> {
+        self.validate_config()?;
+        validate_required_field("caller alias", &caller.alias)?;
+        Ok(DoorRunResult {
+            exit_code: Some(0),
+            timed_out: false,
+        })
+    }
+}
+
+fn validate_required_field(label: &str, value: &str) -> Result<(), DoorError> {
+    if value.trim().is_empty() {
+        return Err(DoorError::InvalidConfig(format!("{label} is required")));
+    }
+    Ok(())
+}
+
+fn validate_required_secret(
+    provider_name: &str,
+    field_name: &str,
+    value: &RemoteDoorSecret,
+) -> Result<(), DoorError> {
+    if value.is_empty() {
+        return Err(DoorError::InvalidConfig(format!(
+            "{provider_name} {field_name} is required"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_remote_endpoint(provider_name: &str, endpoint: &str) -> Result<(), DoorError> {
+    let trimmed = endpoint.trim();
+    if trimmed.is_empty() {
+        return Err(DoorError::InvalidConfig(format!(
+            "{provider_name} endpoint is required"
+        )));
+    }
+    if trimmed.chars().any(char::is_control) || trimmed.split_whitespace().count() > 1 {
+        return Err(DoorError::InvalidConfig(format!(
+            "{provider_name} endpoint must be a single host, host:port, or URI value"
+        )));
+    }
+    Ok(())
 }
 
 #[derive(Default)]
@@ -645,18 +890,44 @@ command = "LORD.EXE"
     }
 
     #[test]
-    fn renders_door_sys_with_caller_context() {
+    fn renders_door_sys_with_exact_bytes() {
         let contents = render_door_sys(&caller(), 1, 38_400);
 
-        assert!(contents.contains("Alice\r\n"));
-        assert!(contents.contains("38400\r\n"));
+        assert_eq!(
+            contents,
+            concat!(
+                "COM1:\r\n",
+                "38400\r\n",
+                "8\r\n",
+                "1\r\n",
+                "30\r\n",
+                "Alice\r\n",
+                "Alice Sysop\r\n",
+                "Localhost\r\n",
+                "50\r\n"
+            )
+        );
     }
 
     #[test]
-    fn renders_dorinfo1_def_with_split_name() {
+    fn renders_dorinfo1_def_with_exact_bytes() {
         let contents = render_dorinfo1_def("Oxide", "Sysop", &caller());
 
-        assert!(contents.contains("Alice\r\nSysop\r\n"));
+        assert_eq!(
+            contents,
+            concat!(
+                "Oxide\r\n",
+                "Sysop\r\n",
+                "COM1\r\n",
+                "38400 BAUD,N,8,1\r\n",
+                "0\r\n",
+                "Alice\r\n",
+                "Sysop\r\n",
+                "Localhost\r\n",
+                "50\r\n",
+                "30\r\n"
+            )
+        );
     }
 
     #[test]
@@ -900,32 +1171,260 @@ command = "LORD.EXE"
     }
 
     #[test]
-    fn renders_chain_txt_with_caller_context() {
+    fn prepare_door_run_writes_each_supported_drop_file_with_exact_bytes() {
+        let base = temp_path("runtime-supported-drop-files");
+        let _ = cleanup_node_runtime_dir(&base);
+        let runtime_dir = prepare_node_runtime_dir(&base, 3).expect("runtime");
+        let working_dir = base.join("door-files");
+        write_command_fixture(&working_dir, "LORD.EXE");
+        let expected_drop_files = [
+            (
+                "DOOR.SYS",
+                concat!(
+                    "COM1:\r\n",
+                    "38400\r\n",
+                    "8\r\n",
+                    "3\r\n",
+                    "30\r\n",
+                    "Alice\r\n",
+                    "Alice Sysop\r\n",
+                    "Localhost\r\n",
+                    "50\r\n"
+                ),
+            ),
+            (
+                "DORINFO1.DEF",
+                concat!(
+                    "Test Board\r\n",
+                    "Test Sysop\r\n",
+                    "COM1\r\n",
+                    "38400 BAUD,N,8,1\r\n",
+                    "0\r\n",
+                    "Alice\r\n",
+                    "Sysop\r\n",
+                    "Localhost\r\n",
+                    "50\r\n",
+                    "30\r\n"
+                ),
+            ),
+            ("CHAIN.TXT", "3 38400 COM1\r\n"),
+            (
+                "DOORFILE.SR",
+                concat!(
+                    "Test Board\r\n",
+                    "Test Sysop\r\n",
+                    "COM1\r\n",
+                    "38400\r\n",
+                    "8N1\r\n",
+                    "3\r\n",
+                    "Alice\r\n",
+                    "Alice Sysop\r\n",
+                    "Localhost\r\n",
+                    "50\r\n",
+                    "30\r\n",
+                    "N\r\n",
+                    "0\r\n"
+                ),
+            ),
+            (
+                "PCBOARD.SYS",
+                concat!(
+                    "Test Board\r\n",
+                    "Alice\r\n",
+                    "Alice Sysop\r\n",
+                    "COM1\r\n",
+                    "38400\r\n",
+                    "8N1\r\n",
+                    "3\r\n",
+                    "50\r\n",
+                    "30\r\n"
+                ),
+            ),
+            (
+                "CALLINFO.BBS",
+                concat!(
+                    "Alice\r\n",
+                    "3\r\n",
+                    "38400\r\n",
+                    "COM1\r\n",
+                    "Y\r\n",
+                    "Localhost\r\n"
+                ),
+            ),
+        ];
+
+        for (drop_file, expected_contents) in expected_drop_files {
+            let request = DoorRunRequest {
+                door: door_with_working_dir(drop_file, &working_dir),
+                caller: caller(),
+                board_name: "Test Board".to_string(),
+                sysop_name: "Test Sysop".to_string(),
+                node_number: 3,
+                runtime_dir: runtime_dir.clone(),
+            };
+
+            prepare_door_run(&request).expect("prepare door run");
+            let actual_contents = fs::read(runtime_dir.join(drop_file)).expect("drop file");
+
+            assert_eq!(
+                actual_contents.as_slice(),
+                expected_contents.as_bytes(),
+                "drop file {drop_file}"
+            );
+        }
+
+        cleanup_node_runtime_dir(&base).expect("cleanup");
+    }
+
+    #[test]
+    fn renders_chain_txt_with_exact_bytes() {
         let contents = render_chain_txt(&caller(), 3, 38_400);
         assert_eq!(contents, "3 38400 COM1\r\n");
     }
 
     #[test]
-    fn renders_doorfile_sr_with_caller_context() {
+    fn renders_doorfile_sr_with_exact_bytes() {
         let contents = render_doorfile_sr(&caller(), 1, 38_400, "Oxide", "Sysop");
-        assert!(contents.starts_with("Oxide\r\nSysop\r\n"));
-        assert!(contents.contains("Alice\r\nAlice Sysop\r\n"));
-        assert!(contents.ends_with("\r\n"));
+        assert_eq!(
+            contents,
+            concat!(
+                "Oxide\r\n",
+                "Sysop\r\n",
+                "COM1\r\n",
+                "38400\r\n",
+                "8N1\r\n",
+                "1\r\n",
+                "Alice\r\n",
+                "Alice Sysop\r\n",
+                "Localhost\r\n",
+                "50\r\n",
+                "30\r\n",
+                "N\r\n",
+                "0\r\n"
+            )
+        );
     }
 
     #[test]
-    fn renders_pcboard_sys_with_caller_context() {
+    fn renders_pcboard_sys_with_exact_bytes() {
         let contents = render_pcboard_sys(&caller(), 2, 57_600, "Oxide");
-        assert!(contents.starts_with("Oxide\r\nAlice\r\n"));
-        assert!(contents.contains("57600\r\n"));
+        assert_eq!(
+            contents,
+            concat!(
+                "Oxide\r\n",
+                "Alice\r\n",
+                "Alice Sysop\r\n",
+                "COM1\r\n",
+                "57600\r\n",
+                "8N1\r\n",
+                "2\r\n",
+                "50\r\n",
+                "30\r\n"
+            )
+        );
     }
 
     #[test]
-    fn renders_callinfo_bbs_with_caller_context() {
+    fn renders_callinfo_bbs_with_exact_bytes() {
         let contents = render_callinfo_bbs(&caller(), 1, 38_400);
-        assert!(contents.starts_with("Alice\r\n1\r\n38400\r\n"));
-        assert!(contents.contains("Y\r\n"));
-        assert!(contents.ends_with("Localhost\r\n"));
+        assert_eq!(
+            contents,
+            concat!(
+                "Alice\r\n",
+                "1\r\n",
+                "38400\r\n",
+                "COM1\r\n",
+                "Y\r\n",
+                "Localhost\r\n"
+            )
+        );
+    }
+
+    #[test]
+    fn bbslink_provider_dry_run_validates_config_without_network() {
+        let provider = BbsLinkProvider::new(BbsLinkConfig::new(
+            "oxide-system",
+            "bbslink-auth-code",
+            "bbslink.example:23",
+        ));
+
+        let result = provider.dry_run_session(&caller()).expect("dry run");
+
+        assert_eq!(
+            result,
+            DoorRunResult {
+                exit_code: Some(0),
+                timed_out: false,
+            }
+        );
+    }
+
+    #[test]
+    fn doorparty_provider_dry_run_validates_config_without_network() {
+        let provider = DoorPartyProvider::new(DoorPartyConfig::new(
+            "oxide-account",
+            "doorparty-password",
+            "telnet://doorparty.example:23",
+        ));
+
+        let result = provider.dry_run_session(&caller()).expect("dry run");
+
+        assert_eq!(
+            result,
+            DoorRunResult {
+                exit_code: Some(0),
+                timed_out: false,
+            }
+        );
+    }
+
+    #[test]
+    fn remote_provider_validation_rejects_missing_required_fields() {
+        let missing_bbslink_auth =
+            BbsLinkProvider::new(BbsLinkConfig::new("oxide-system", "", "bbslink.example:23"));
+        let missing_doorparty_endpoint =
+            DoorPartyProvider::new(DoorPartyConfig::new("oxide-account", "secret", " "));
+
+        let bbslink_error = missing_bbslink_auth
+            .validate_config()
+            .expect_err("missing auth should fail");
+        let doorparty_error = missing_doorparty_endpoint
+            .validate_config()
+            .expect_err("missing endpoint should fail");
+
+        match bbslink_error {
+            DoorError::InvalidConfig(message) => assert!(message.contains("auth_code")),
+            _ => panic!("unexpected error variant"),
+        }
+        match doorparty_error {
+            DoorError::InvalidConfig(message) => assert!(message.contains("endpoint")),
+            _ => panic!("unexpected error variant"),
+        }
+    }
+
+    #[test]
+    fn remote_provider_secrets_are_redacted_by_default() {
+        let provider = DoorPartyProvider::new(DoorPartyConfig::new(
+            "oxide-account",
+            "doorparty-password",
+            "doorparty.example:23",
+        ));
+
+        let config_debug = format!("{:?}", provider.config());
+        let redacted = provider.redacted_config();
+
+        assert_eq!(
+            provider.config().password.expose_secret(),
+            "doorparty-password"
+        );
+        assert_eq!(
+            provider.config().password.to_string(),
+            REDACTED_PROVIDER_SECRET
+        );
+        assert!(!config_debug.contains("doorparty-password"));
+        assert!(config_debug.contains(REDACTED_PROVIDER_SECRET));
+        assert_eq!(redacted.provider_key, DOORPARTY_PROVIDER_KEY);
+        assert_eq!(redacted.secret, REDACTED_PROVIDER_SECRET);
     }
 
     #[test]

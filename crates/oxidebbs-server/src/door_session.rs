@@ -1485,10 +1485,10 @@ mod tests {
 
     use super::*;
     use crate::config::{
-        AuditConfig, AuthConfig, BoardConfig, DatabaseConfig, DoorDefConfig, DoorsConfig,
-        FileTransfersConfig, FlowConfig, FtnConfig, LoggingConfig, MenuConfig, NetworkConfig,
-        NodesConfig, PathsConfig, ScreenConfig, SerialConfig, SysopConfig, TelnetConfig,
-        TerminalConfig,
+        AdminWebConfig, AuditConfig, AuthConfig, BoardConfig, DatabaseConfig, DoorDefConfig,
+        DoorsConfig, FileTransfersConfig, FlowConfig, FtnConfig, LoggingConfig, MenuConfig,
+        NetworkConfig, NodesConfig, PathsConfig, ScreenConfig, SerialConfig, SysopConfig,
+        TelnetConfig, TerminalConfig,
     };
 
     const USER_ID: &str = "00000000-0000-4000-8000-000000000701";
@@ -1557,6 +1557,7 @@ mod tests {
             ftn: FtnConfig::default(),
             serial: SerialConfig::default(),
             file_transfers: FileTransfersConfig::default(),
+            admin_web: AdminWebConfig::default(),
         }
     }
 

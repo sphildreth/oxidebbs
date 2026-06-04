@@ -145,4 +145,6 @@ The user-level range is enforced by the core authentication flow and DecentDB
 schema constraints. The default new-user level lives in
 `config/oxidebbs.example.toml` and generated setup configs. Message-area gates
 live in the `message_areas` table as `read_security_level` and
-`post_security_level`.
+`post_security_level`. Caller menu gates live in menu configuration as
+`min_security_level`, and door launch gates live in door definitions as
+`min_security_level`.

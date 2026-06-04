@@ -1556,7 +1556,7 @@ async fn run_doors_flow(
             "caller selected door"
         );
 
-        if user.security_level < door.min_security_level as i32 {
+        if door_access_denied(user.security_level, door.min_security_level) {
             debug!(
                 node = %state.node_number,
                 user_level = user.security_level,
@@ -1623,6 +1623,10 @@ async fn run_doors_flow(
         send_text(transport, &door_summary_text(&summary)).await?;
         return Ok(MenuFlowResult::Continue);
     }
+}
+
+fn door_access_denied(user_security_level: i32, door_min_security_level: i64) -> bool {
+    user_security_level < door_min_security_level as i32
 }
 
 fn door_summary_text(summary: &DoorExecutionSummary) -> String {
@@ -3551,6 +3555,13 @@ mod tests {
     }
 
     #[test]
+    fn door_access_gate_uses_door_min_security_level() {
+        assert!(door_access_denied(10, 50));
+        assert!(!door_access_denied(50, 50));
+        assert!(!door_access_denied(255, 50));
+    }
+
+    #[test]
     fn terminal_asset_payload_loads_from_ansi_path() {
         let base_dir = temp_dir("terminal-asset");
         let db_path = base_dir.join("oxidebbs.ddb");
@@ -3620,6 +3631,62 @@ mod tests {
             load_terminal_asset_payload(&config, "welcome.ans", TerminalCapabilities::plain_text())
                 .expect("load plain welcome");
         assert_eq!(plain_payload, b"ASCII welcome\r\nNext\r\n");
+
+        let _ = std::fs::remove_dir_all(base_dir);
+    }
+
+    #[test]
+    fn logoff_terminal_asset_payload_selects_ansi_or_plain_sibling() {
+        let base_dir = temp_dir("logoff-terminal-asset");
+        let db_path = base_dir.join("oxidebbs.ddb");
+        let bind_addr = free_loopback_addr();
+        let config = smoke_config(bind_addr, &base_dir, &db_path);
+        std::fs::create_dir_all(&config.paths.ansi).expect("create ANSI dir");
+        std::fs::write(config.paths.ansi.join("logoff.ans"), b"\x1b[1mANSI bye\r\n")
+            .expect("write ANSI logoff");
+        std::fs::write(config.paths.ansi.join("logoff.asc"), b"Plain bye\r\n")
+            .expect("write plain logoff");
+
+        let ansi_payload =
+            load_terminal_asset_payload(&config, "logoff.ans", TerminalCapabilities::ansi_80())
+                .expect("load ANSI logoff");
+        assert_eq!(ansi_payload, b"\x1b[1mANSI bye\r\n");
+
+        let plain_payload =
+            load_terminal_asset_payload(&config, "logoff.ans", TerminalCapabilities::plain_text())
+                .expect("load plain logoff");
+        assert_eq!(plain_payload, b"Plain bye\r\n");
+
+        let _ = std::fs::remove_dir_all(base_dir);
+    }
+
+    #[tokio::test]
+    async fn logoff_screen_falls_back_to_goodbye_when_asset_is_missing() {
+        let base_dir = temp_dir("logoff-terminal-missing");
+        let db_path = base_dir.join("oxidebbs.ddb");
+        let bind_addr = free_loopback_addr();
+        let config = smoke_config(bind_addr, &base_dir, &db_path);
+
+        let output = capture_logoff_output(config, TerminalCapabilities::plain_text()).await;
+
+        assert_eq!(output, "Goodbye.\r\n");
+        let _ = std::fs::remove_dir_all(base_dir);
+    }
+
+    #[tokio::test]
+    async fn logoff_screen_is_safe_when_caller_disconnects_early() {
+        let base_dir = temp_dir("logoff-terminal-early-disconnect");
+        let db_path = base_dir.join("oxidebbs.ddb");
+        let bind_addr = free_loopback_addr();
+        let config = smoke_config(bind_addr, &base_dir, &db_path);
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("listener addr");
+        let client = TcpStream::connect(addr).await.expect("connect");
+        let (stream, _) = listener.accept().await.expect("accept");
+        drop(client);
+        let mut transport = TcpTransport::new(stream);
+
+        send_logoff_screen(&mut transport, &config, TerminalCapabilities::plain_text()).await;
 
         let _ = std::fs::remove_dir_all(base_dir);
     }
@@ -3823,6 +3890,21 @@ mod tests {
         }
 
         let _ = std::fs::remove_dir_all(base_dir);
+    }
+
+    #[tokio::test]
+    async fn normal_level_caller_cannot_open_sysop_submenu() {
+        let output = run_sysop_submenu_access_smoke(10, false).await;
+
+        assert!(output.contains(ACCESS_DENIED_MESSAGE.trim()));
+    }
+
+    #[tokio::test]
+    async fn sysop_level_caller_can_open_sysop_submenu() {
+        let output = run_sysop_submenu_access_smoke(255, true).await;
+
+        assert!(output.contains("Sysop? "));
+        assert!(!output.contains(ACCESS_DENIED_MESSAGE.trim()));
     }
 
     #[cfg(unix)]
@@ -4327,6 +4409,17 @@ mod tests {
     }
 
     fn seed_login_user(db: &OxideDb, config: &OxideConfig, alias: &str, password: &str) {
+        seed_login_user_with_level(db, config, alias, password, 10, false);
+    }
+
+    fn seed_login_user_with_level(
+        db: &OxideDb,
+        config: &OxideConfig,
+        alias: &str,
+        password: &str,
+        security_level: i64,
+        is_sysop: bool,
+    ) {
         let now = current_timestamp(db).expect("timestamp");
         let user = UserRecord {
             id: generated_uuid(db).expect("uuid"),
@@ -4334,8 +4427,8 @@ mod tests {
             real_name: format!("{alias} User"),
             email: None,
             password_hash: server_hash_password(password, &config.auth.argon2).expect("hash"),
-            security_level: 10,
-            is_sysop: false,
+            security_level,
+            is_sysop,
             created_at: now,
             last_login_at: None,
             total_calls: 0,
@@ -4498,6 +4591,89 @@ mod tests {
         (result, output)
     }
 
+    async fn capture_logoff_output(
+        config: OxideConfig,
+        capabilities: TerminalCapabilities,
+    ) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("listener addr");
+        let client_task = tokio::spawn(async move {
+            let mut client = TcpStream::connect(addr).await.expect("connect");
+            let mut output = Vec::new();
+            timeout(Duration::from_secs(2), client.read_to_end(&mut output))
+                .await
+                .expect("logoff read timeout")
+                .expect("read logoff output");
+            String::from_utf8_lossy(&output).to_string()
+        });
+        let (stream, _) = listener.accept().await.expect("accept");
+        let mut transport = TcpTransport::new(stream);
+
+        send_logoff_screen(&mut transport, &config, capabilities).await;
+        drop(transport);
+
+        client_task.await.expect("client task")
+    }
+
+    async fn run_sysop_submenu_access_smoke(security_level: i64, is_sysop: bool) -> String {
+        let base_dir = temp_dir("sysop-submenu-access");
+        let db_path = base_dir.join("oxidebbs.ddb");
+        let config_path = base_dir.join("oxidebbs.toml");
+        let bind_addr = free_loopback_addr();
+        let config = sysop_submenu_smoke_config(bind_addr, &base_dir, &db_path);
+        write_sysop_submenu_smoke_screens(&config);
+        {
+            let db = OxideDb::open_or_create(&db_path).expect("open db");
+            seed_login_user_with_level(
+                &db,
+                &config,
+                "AccessUser",
+                "secret",
+                security_level,
+                is_sysop,
+            );
+        }
+
+        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+        let server_config = config.clone();
+        let server_config_path = config_path.clone();
+        let server = tokio::spawn(async move {
+            run_until_shutdown(&server_config, &server_config_path, async move {
+                let _ = shutdown_rx.await;
+                Ok(())
+            })
+            .await
+        });
+
+        let mut client = connect_with_retry(bind_addr).await;
+        read_until(&mut client, "Login? ").await;
+        client.write_all(b"L\r").await.expect("select login");
+        read_until(&mut client, "Alias: ").await;
+        client.write_all(b"AccessUser\r").await.expect("alias");
+        read_until(&mut client, "Password: ").await;
+        client.write_all(b"secret\r").await.expect("password");
+        read_until(&mut client, "Command? ").await;
+        client.write_all(b"S\r").await.expect("select sysop");
+        let output = if security_level >= 255 {
+            read_until(&mut client, "Sysop? ").await
+        } else {
+            read_until(&mut client, "Command? ").await
+        };
+        client.write_all(b"L\r").await.expect("logoff");
+        read_until(&mut client, "Goodbye.").await;
+        drop(client);
+
+        shutdown_tx.send(()).expect("send shutdown");
+        timeout(Duration::from_secs(5), server)
+            .await
+            .expect("server shutdown timeout")
+            .expect("server join")
+            .expect("server result");
+
+        let _ = std::fs::remove_dir_all(base_dir);
+        output
+    }
+
     async fn read_until_any(client: &mut TcpStream, needles: &[&str]) -> String {
         let mut output = Vec::new();
         timeout(Duration::from_secs(5), async {
@@ -4632,6 +4808,107 @@ action = "logoff"
         config.paths.runtime = base_dir.join("runtime");
         config.paths.logs = base_dir.join("logs");
         config
+    }
+
+    fn sysop_submenu_smoke_config(
+        bind_addr: SocketAddr,
+        base_dir: &Path,
+        db_path: &Path,
+    ) -> OxideConfig {
+        let mut config: OxideConfig = toml::from_str(
+            r#"
+[board]
+name = "Sysop Smoke BBS"
+
+[telnet]
+enabled = true
+bind = "127.0.0.1:0"
+max_connections = 1
+idle_timeout_seconds = 5
+
+[database]
+path = "oxidebbs.ddb"
+
+[paths]
+ansi = "ansi"
+screens = "screens"
+doors = "doors"
+runtime = "runtime"
+logs = "logs"
+
+[flow]
+login_screen = "login"
+login_menu = "login"
+main_menu = "main"
+
+[screens.login]
+text = "login.txt"
+
+[screens.main_menu]
+text = "main.txt"
+
+[screens.sysop_menu]
+text = "sysop.txt"
+
+[menus.login]
+screen = "login"
+prompt = "Login? "
+
+[[menus.login.items]]
+key = "L"
+label = "Logon"
+action = "login"
+
+[[menus.login.items]]
+key = "G"
+label = "Goodbye"
+action = "logoff"
+
+[menus.main]
+screen = "main_menu"
+prompt = "Command? "
+
+[[menus.main.items]]
+key = "S"
+label = "Sysop"
+action = "submenu"
+target = "sysop"
+min_security_level = 255
+
+[[menus.main.items]]
+key = "L"
+label = "Logoff"
+action = "logoff"
+
+[menus.sysop]
+screen = "sysop_menu"
+prompt = "Sysop? "
+
+[[menus.sysop.items]]
+key = "L"
+label = "Goodbye"
+action = "logoff"
+"#,
+        )
+        .expect("parse sysop submenu smoke config");
+        config.telnet.bind = bind_addr.to_string();
+        config.database.path = db_path.to_path_buf();
+        config.paths.ansi = base_dir.join("ansi");
+        config.paths.screens = base_dir.join("screens");
+        config.paths.doors = base_dir.join("doors");
+        config.paths.runtime = base_dir.join("runtime");
+        config.paths.logs = base_dir.join("logs");
+        config
+    }
+
+    fn write_sysop_submenu_smoke_screens(config: &OxideConfig) {
+        std::fs::create_dir_all(&config.paths.screens).expect("create screen dir");
+        std::fs::write(config.paths.screens.join("login.txt"), b"Login\r\n")
+            .expect("write login screen");
+        std::fs::write(config.paths.screens.join("main.txt"), b"Main\r\n")
+            .expect("write main screen");
+        std::fs::write(config.paths.screens.join("sysop.txt"), b"Sysop Menu\r\n")
+            .expect("write sysop screen");
     }
 
     async fn connect_with_retry(addr: SocketAddr) -> TcpStream {

@@ -243,7 +243,9 @@ not expose a safe compaction API contract.
 
 Audit retention is configured with `[audit].retention_days` and defaults to
 `365`. Runtime inserts do not auto-delete old audit rows; scheduled maintenance
-should call the DecentDB repository purge helper or a future CLI wrapper.
+should call `oxidebbs-server audit purge-retention` or
+`oxidebbs-server audit purge-before <timestamp>`. Use `--dry-run` before a live
+purge and `--json` when automation needs stable counts.
 
 ## Load-test note
 

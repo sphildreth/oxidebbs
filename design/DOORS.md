@@ -43,16 +43,18 @@ OxideBBS ships an owned DOS test fixture, not third-party game content:
 
 ## Drop files
 
-Support early:
+Current drop-file renderers:
 
 - `DOOR.SYS`
 - `DORINFO1.DEF`
-
-Support later:
-
 - `CHAIN.TXT`
 - `DOORFILE.SR`
-- Wildcat, PCBoard, and other variants as needed
+- `PCBOARD.SYS`
+- `CALLINFO.BBS`
+
+Every current renderer has exact CRLF byte-output tests in `oxidebbs-door`.
+Additional Wildcat and vendor-specific variants remain future compatibility
+work.
 
 For DOSEMU2 execution:
 
@@ -161,3 +163,19 @@ transport.
 The DOSEMU2 COM1 bridge is host-owned byte transport, not a Rust FOSSIL TSR or
 DOS interrupt driver replacement. DOSEMU2 remains responsible for presenting COM1
 UART semantics to DOS door programs.
+
+## Remote providers
+
+`oxidebbs-door` exposes `RemoteDoorProvider`, `ProviderRegistry`, and first
+local validation adapters for BBSLink and DoorParty-style services. The current
+`BbsLinkProvider` and `DoorPartyProvider` validate required provider config and
+return a successful dry-run result without contacting an external service.
+
+Remote provider secrets use `RemoteDoorSecret`, which redacts by default through
+`Debug`, `Display`, and the provider redacted-config view. Raw access is limited
+to the explicit secret accessor used by connector code.
+
+Current limitation: remote provider credentials are not yet persisted as secret
+references, and the server CLI/TUI/export paths do not launch remote sessions.
+Do not put raw provider secrets into door TOML or door CLI arguments until the
+secret-reference storage and live connector work is implemented.

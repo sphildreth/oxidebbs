@@ -8,15 +8,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `oxidebbs-network` protocol-neutral network foundation types, shared
+  `network_*` DecentDB tables, repository APIs, and the shared `[network]`
+  config model with deprecated `[ftn]` alias compatibility.
+- Network profile/link, queue state, packet boundary, local-message envelope,
+  network-message envelope, and local-to-network conversion types in
+  `oxidebbs-network`.
+- `oxidebbs-db::DbWriter`, a bounded single-writer service with ordered
+  execution, transaction rollback, queue backpressure, and shutdown drain
+  coverage.
 - Menu-level `min_security_level` enforcement for caller menu routing.
 - Per-door `min_security_level` enforcement at door selection time.
 - Caller sysop submenu with `min_security_level = 255` in the default example config.
 - Dedicated logoff screen rendering from `terminal.logoff_screen` configuration.
+- Root `VERSION` source-of-truth workflow with `scripts/bump-version.sh` for aligned release metadata.
+- Codeberg mirror automation that defaults to dry-run and keeps GitHub canonical.
+- Optional DOSEMU2 smoke workflow that skips cleanly when the runner cannot provide DOSEMU2.
+- BBSLink and DoorParty-style remote door provider adapters with local dry-run
+  validation and redacted provider-secret display helpers.
+- Exact CRLF byte-output tests for every currently supported door drop-file
+  format.
+- `files` sysop CLI group for file-area list/add/edit, file list/import/remove,
+  and transfer-history inspection.
+- `oxidebbs-transfer` CRC-16/XMODEM, XMODEM-CRC send/receive fallback, and
+  ZMODEM header framing primitives with protocol tests.
+- `oxidebbs-ftn` Type-2 packet reader/writer, echomail kludge
+  parser/composer, duplicate-key policy, and DecentDB-backed duplicate detector.
+- `oxidebbs-ftn` bundle classification boundary for raw `.pkt`, ZIP arcmail,
+  and ARJ arcmail inputs with explicit unsupported-extraction errors.
+- `oxidebbs-ftn` full-nodelist parser for common Zone/Host/node/point rows.
+- `oxidebbs-server net` read-only status, link, area, poll-log, and nodelist
+  import/list/lookup commands backed by DecentDB network tables.
+- `oxidebbs-server net nodelist apply-diff`, backed by conservative FTS-style
+  `NODEDIFF.xxx` apply support in `oxidebbs-ftn`.
+- `oxidebbs-binkp` command/data frame parser/writer plus client/server
+  handshake primitives with address/password validation.
+- `oxidebbs-binkp` `M_FILE` offer parsing/writing, bounded data-frame
+  send/receive helpers, `M_GOT` acknowledgement, `M_EOB` end-of-batch handling,
+  and session-level filename validation.
+- Read-only Network screen in the local sysop TUI with DecentDB-backed profile,
+  link, area, packet, message, poll-log, duplicate, packet-status, and nodelist
+  counts.
+- Public docs pages for doors, serial/modem transport, caller file-transfer
+  status, and OxideNet status, with navigation entries.
+- Disabled-by-default `[admin_web]` configuration model with validation for
+  loopback/TLS, read-only mode, CSRF/replay timing, and rate-limit settings.
 
 ### Changed
-- Schema version bumped to 6 to add `min_security_level` column on the `doors` table.
+- Schema version bumped to 7; schema `5` added shared network and message-author
+  foundation tables, schema `6` added `doors.min_security_level`, and schema `7`
+  added file-transfer storage tables.
 - Menu items and door definitions now carry `min_security_level` (defaults to 0).
 - The caller menu and door dispatch enforce security levels before executing actions.
+- Release workflow manual dispatch now defaults to the `v1.2.0` release line and smokes packaged binaries before upload.
+- File-entry removal from the sysop CLI is a safe unapprove operation that
+  requires a reason and preserves stored file bytes.
+- `net toss`, `net scan`, and `net poll` now return explicit not-implemented
+  errors until the FTN tosser/scanner/BinkP session engine exists.
+- Remote admin remains config-only and disabled; no HTTP listener is started.
 
 ## [1.1.0] - 2026-06-03
 

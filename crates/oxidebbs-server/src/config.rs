@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use std::collections::{HashMap, HashSet};
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -65,6 +66,8 @@ pub struct OxideConfig {
     pub serial: SerialConfig,
     #[serde(default)]
     pub file_transfers: FileTransfersConfig,
+    #[serde(default)]
+    pub admin_web: AdminWebConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -399,6 +402,27 @@ pub struct FileTransfersConfig {
     pub max_upload_bytes: i64,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AdminWebConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_admin_web_bind")]
+    pub bind: String,
+    #[serde(default = "default_true")]
+    pub require_tls: bool,
+    #[serde(default = "default_true")]
+    pub read_only: bool,
+    #[serde(default = "default_admin_web_session_timeout_seconds")]
+    pub session_timeout_seconds: u64,
+    #[serde(default = "default_admin_web_csrf_token_ttl_seconds")]
+    pub csrf_token_ttl_seconds: u64,
+    #[serde(default = "default_admin_web_replay_window_seconds")]
+    pub replay_window_seconds: u64,
+    #[serde(default = "default_admin_web_rate_limit_per_minute")]
+    pub rate_limit_per_minute: u32,
+}
+
 impl OxideConfig {
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
         let contents = std::fs::read_to_string(path).map_err(|source| ConfigError::ReadFailed {
@@ -507,6 +531,7 @@ impl OxideConfig {
         self.validate_screens()?;
         self.validate_menus()?;
         self.validate_network()?;
+        self.validate_admin_web()?;
         Ok(())
     }
 
@@ -535,6 +560,57 @@ impl OxideConfig {
                 "flow.main_menu references missing menu {:?}",
                 self.flow.main_menu
             )));
+        }
+        Ok(())
+    }
+
+    fn validate_admin_web(&self) -> Result<(), ConfigError> {
+        if self.admin_web.bind.trim().is_empty() {
+            return Err(ConfigError::Validation(
+                "admin_web.bind must not be blank".into(),
+            ));
+        }
+        let bind = self
+            .admin_web
+            .bind
+            .parse::<std::net::SocketAddr>()
+            .map_err(|_| {
+                ConfigError::Validation(format!(
+                    "admin_web.bind must be an IP socket address, got {:?}",
+                    self.admin_web.bind
+                ))
+            })?;
+        if self.admin_web.session_timeout_seconds == 0 {
+            return Err(ConfigError::Validation(
+                "admin_web.session_timeout_seconds must be greater than 0".into(),
+            ));
+        }
+        if self.admin_web.csrf_token_ttl_seconds == 0 {
+            return Err(ConfigError::Validation(
+                "admin_web.csrf_token_ttl_seconds must be greater than 0".into(),
+            ));
+        }
+        if self.admin_web.replay_window_seconds == 0 {
+            return Err(ConfigError::Validation(
+                "admin_web.replay_window_seconds must be greater than 0".into(),
+            ));
+        }
+        if self.admin_web.rate_limit_per_minute == 0 {
+            return Err(ConfigError::Validation(
+                "admin_web.rate_limit_per_minute must be greater than 0".into(),
+            ));
+        }
+        if self.admin_web.enabled {
+            if !self.admin_web.read_only {
+                return Err(ConfigError::Validation(
+                    "admin_web.read_only must remain true until remote admin mutations are implemented".into(),
+                ));
+            }
+            if !ip_is_loopback(bind.ip()) && !self.admin_web.require_tls {
+                return Err(ConfigError::Validation(
+                    "admin_web.require_tls must be true for non-loopback binds".into(),
+                ));
+            }
         }
         Ok(())
     }
@@ -882,6 +958,25 @@ fn default_serial_flow_control() -> String {
 fn default_file_transfers_max_upload_bytes() -> i64 {
     1_048_576
 }
+fn default_admin_web_bind() -> String {
+    "127.0.0.1:8080".into()
+}
+fn default_admin_web_session_timeout_seconds() -> u64 {
+    900
+}
+fn default_admin_web_csrf_token_ttl_seconds() -> u64 {
+    900
+}
+fn default_admin_web_replay_window_seconds() -> u64 {
+    300
+}
+fn default_admin_web_rate_limit_per_minute() -> u32 {
+    30
+}
+
+fn ip_is_loopback(ip: IpAddr) -> bool {
+    ip.is_loopback()
+}
 
 fn validate_config_key(section: &str, key: &str) -> Result<(), ConfigError> {
     if key.trim().is_empty() {
@@ -1154,6 +1249,21 @@ impl Default for FtnConfig {
     }
 }
 
+impl Default for AdminWebConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            bind: default_admin_web_bind(),
+            require_tls: default_true(),
+            read_only: default_true(),
+            session_timeout_seconds: default_admin_web_session_timeout_seconds(),
+            csrf_token_ttl_seconds: default_admin_web_csrf_token_ttl_seconds(),
+            replay_window_seconds: default_admin_web_replay_window_seconds(),
+            rate_limit_per_minute: default_admin_web_rate_limit_per_minute(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1263,6 +1373,10 @@ name = "Minimal"
         assert!(config.network.profiles.is_empty());
         assert!(config.network.links.is_empty());
         assert!(!config.ftn.enabled);
+        assert!(!config.admin_web.enabled);
+        assert_eq!(config.admin_web.bind, "127.0.0.1:8080");
+        assert!(config.admin_web.require_tls);
+        assert!(config.admin_web.read_only);
     }
 
     #[test]
@@ -1361,6 +1475,72 @@ strategy = "weekly"
             error
                 .to_string()
                 .contains("logging.rotation.strategy must be one of never, daily, or size")
+        );
+    }
+
+    #[test]
+    fn parses_disabled_admin_web_defaults() {
+        let toml = r#"
+[board]
+name = "Admin Web Defaults"
+
+[admin_web]
+enabled = false
+"#;
+        let config: OxideConfig = toml::from_str(toml).expect("parse");
+
+        config
+            .validate_admin_web()
+            .expect("disabled admin web validates");
+        assert!(!config.admin_web.enabled);
+        assert_eq!(config.admin_web.session_timeout_seconds, 900);
+        assert_eq!(config.admin_web.csrf_token_ttl_seconds, 900);
+        assert_eq!(config.admin_web.replay_window_seconds, 300);
+        assert_eq!(config.admin_web.rate_limit_per_minute, 30);
+    }
+
+    #[test]
+    fn rejects_admin_web_non_loopback_without_tls() {
+        let toml = r#"
+[board]
+name = "Bad Admin Web"
+
+[admin_web]
+enabled = true
+bind = "0.0.0.0:8080"
+require_tls = false
+"#;
+        let config: OxideConfig = toml::from_str(toml).expect("parse");
+        let error = config
+            .validate_admin_web()
+            .expect_err("public admin web without TLS rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("admin_web.require_tls must be true")
+        );
+    }
+
+    #[test]
+    fn rejects_admin_web_mutation_mode_until_http_surface_exists() {
+        let toml = r#"
+[board]
+name = "Bad Admin Web"
+
+[admin_web]
+enabled = true
+read_only = false
+"#;
+        let config: OxideConfig = toml::from_str(toml).expect("parse");
+        let error = config
+            .validate_admin_web()
+            .expect_err("mutable remote admin rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("admin_web.read_only must remain true")
         );
     }
 

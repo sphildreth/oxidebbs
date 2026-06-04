@@ -25,8 +25,10 @@ export default defineConfig({
       { text: 'FTN', link: '/ftn/architecture' },
       { text: 'Menus', link: '/project/menus' },
       { text: 'Caller Commands', link: '/project/caller-commands' },
+      { text: 'Doors', link: '/project/doors' },
       { text: 'Security Levels', link: '/project/security-levels' },
       { text: 'Sysop CLI', link: '/project/sysop-cli' },
+      { text: 'OxideNet', link: '/oxidenet/overview' },
       { text: 'Sysop Themes', link: '/project/sysop-tui-themes' },
       { text: 'Versioning', link: '/project/versioning' },
       { text: 'Changelog', link: '/about/changelog' }
@@ -43,16 +45,33 @@ export default defineConfig({
           { text: 'Architecture', link: '/project/architecture' },
           { text: 'Menu System', link: '/project/menus' },
           { text: 'Caller Commands', link: '/project/caller-commands' },
+          { text: 'Doors', link: '/project/doors' },
+          { text: 'File Transfers', link: '/project/file-transfers' },
+          { text: 'Serial And Modem', link: '/project/serial' },
           { text: 'User Security Levels', link: '/project/security-levels' },
           { text: 'Sysop CLI', link: '/project/sysop-cli' },
           { text: 'Sysop TUI Themes', link: '/project/sysop-tui-themes' },
+          { text: 'Remote Admin', link: '/project/remote-admin' },
           { text: 'Versioning', link: '/project/versioning' },
           { text: 'Deployment', link: '/project/deployment' }
         ]
       },
       {
         text: 'FTN Networking',
-        items: [{ text: 'Architecture', link: '/ftn/architecture' }]
+        items: [
+          { text: 'Architecture', link: '/ftn/architecture' },
+          { text: 'CLI', link: '/ftn/cli' },
+          { text: 'Nodelists', link: '/ftn/nodelist' },
+          { text: 'Packet Format', link: '/ftn/packet-format' },
+          { text: 'Echomail', link: '/ftn/echomail' },
+          { text: 'Netmail', link: '/ftn/netmail' },
+          { text: 'Bundles', link: '/ftn/bundles' },
+          { text: 'BinkP', link: '/ftn/binkp' }
+        ]
+      },
+      {
+        text: 'OxideNet',
+        items: [{ text: 'Overview', link: '/oxidenet/overview' }]
       },
       {
         text: 'About',

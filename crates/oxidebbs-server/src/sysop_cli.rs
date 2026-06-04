@@ -24,10 +24,11 @@ use crate::config::{
 use crate::serve;
 
 use crate::commands::{
-    AnsiCommand, AuditCommand, ConfigCommand, DbCommand, DoorsCommand, LogsCommand,
+    AnsiCommand, AuditCommand, ConfigCommand, DbCommand, DoorsCommand, FilesCommand, LogsCommand,
     MessagesCommand, NetCommand, NodesCommand, ServeArgs, SetupArgs, UsersCommand, run_ansi,
-    run_audit, run_check, run_config, run_config_set, run_db, run_doors, run_logs, run_messages,
-    run_net, run_nodes, run_serve, run_setup_command, run_status, run_sysop_tui, run_users,
+    run_audit, run_check, run_config, run_config_set, run_db, run_doors, run_files, run_logs,
+    run_messages, run_net, run_nodes, run_serve, run_setup_command, run_status, run_sysop_tui,
+    run_users,
 };
 
 pub(crate) type CliResult<T> = Result<T, CliError>;
@@ -127,6 +128,12 @@ enum Command {
     Doors {
         #[command(subcommand)]
         command: DoorsCommand,
+    },
+
+    /// Manage caller file areas, files, and transfer history
+    Files {
+        #[command(subcommand)]
+        command: FilesCommand,
     },
 
     /// Read local log files
@@ -239,6 +246,7 @@ pub async fn run() -> CliResult<()> {
         Command::Nodes { command } => run_nodes(command, &ctx),
         Command::Messages { command } => run_messages(command, &ctx),
         Command::Doors { command } => run_doors(command, &ctx),
+        Command::Files { command } => run_files(command, &ctx),
         Command::Ansi { command } => run_ansi(command, &ctx),
         Command::Db { command } => run_db(command, &ctx),
         Command::Logs { command } => run_logs(command, &ctx),
@@ -1026,8 +1034,8 @@ mod tests {
         assert_eq!(
             names,
             vec![
-                "ansi", "audit", "check", "config", "db", "doors", "logs", "messages", "net",
-                "nodes", "serve", "setup", "status", "sysop", "users",
+                "ansi", "audit", "check", "config", "db", "doors", "files", "logs", "messages",
+                "net", "nodes", "serve", "setup", "status", "sysop", "users",
             ]
         );
     }

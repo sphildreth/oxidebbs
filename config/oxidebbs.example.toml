@@ -202,6 +202,16 @@ compression = "zip"
 transport_security = "plaintext_legacy"
 legacy_compatible = true
 
+[admin_web]
+enabled = false
+bind = "127.0.0.1:8080"
+require_tls = true
+read_only = true
+session_timeout_seconds = 900
+csrf_token_ttl_seconds = 900
+replay_window_seconds = 300
+rate_limit_per_minute = 30
+
 [serial]
 enabled = false
 

@@ -36,6 +36,7 @@ pub use file_repo::{
     FileAreaRecord, FileEntryRecord, FileTransferRecord, find_file_area_by_key,
     find_file_entry_by_id, find_file_transfer_by_id, insert_file_area, insert_file_entry,
     insert_file_transfer, list_file_areas, list_file_entries, list_file_transfers,
+    update_file_area, update_file_entry_approved,
 };
 pub use message_repo::{
     MessageAreaRecord, MessageRecord, find_message_area_by_key, find_message_by_id, insert_message,
@@ -48,15 +49,16 @@ pub use network_repo::{
     NetworkAreaRecord, NetworkDuplicateLogRecord, NetworkLinkRecord, NetworkMessageRecord,
     NetworkNodelistRecord, NetworkPacketRecord, NetworkPathNode, NetworkPollLogRecord,
     NetworkProfileRecord, NetworkSeenByNode, NetworkSubscriptionRecord,
-    find_network_area_by_tag_and_profile, find_network_link_by_key, find_network_profile_by_key,
-    finish_network_packet, finish_network_poll, insert_network_area, insert_network_duplicate_log,
-    insert_network_link, insert_network_message, insert_network_nodelist_entry,
-    insert_network_packet, insert_network_path, insert_network_path_node, insert_network_poll_log,
-    insert_network_profile, insert_network_seen_by, insert_network_seen_by_node,
-    insert_network_subscription, list_network_areas, list_network_duplicates, list_network_links,
-    list_network_messages, list_network_nodelist_entries, list_network_packets, list_network_path,
-    list_network_poll_logs, list_network_profiles, list_network_seen_by,
-    list_network_subscriptions, set_network_profile_enabled,
+    find_network_area_by_tag_and_profile, find_network_link_by_key, find_network_nodelist_entry,
+    find_network_profile_by_key, finish_network_packet, finish_network_poll, insert_network_area,
+    insert_network_duplicate_log, insert_network_link, insert_network_message,
+    insert_network_nodelist_entry, insert_network_packet, insert_network_path,
+    insert_network_path_node, insert_network_poll_log, insert_network_profile,
+    insert_network_seen_by, insert_network_seen_by_node, insert_network_subscription,
+    list_network_areas, list_network_duplicates, list_network_links, list_network_messages,
+    list_network_nodelist_entries, list_network_packets, list_network_path, list_network_poll_logs,
+    list_network_profiles, list_network_seen_by, list_network_subscriptions,
+    replace_network_nodelist_entries, set_network_profile_enabled,
 };
 pub use schema::schema_version as read_schema_version;
 pub use session_repo::{

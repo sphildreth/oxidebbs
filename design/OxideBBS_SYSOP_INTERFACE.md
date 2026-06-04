@@ -69,13 +69,17 @@ oxidebbs-server serve
 oxidebbs-server setup
 oxidebbs-server check
 oxidebbs-server status
+oxidebbs-server audit ...
+oxidebbs-server config ...
 oxidebbs-server users ...
 oxidebbs-server nodes ...
 oxidebbs-server messages ...
 oxidebbs-server doors ...
+oxidebbs-server files ...
 oxidebbs-server ansi ...
 oxidebbs-server db ...
 oxidebbs-server logs ...
+oxidebbs-server net ...
 ```
 
 Canonical top-level order is currently:
@@ -87,8 +91,10 @@ check
 config
 db
 doors
+files
 logs
 messages
+net
 nodes
 serve
 setup
@@ -408,6 +414,25 @@ oxidebbs-server doors dropfile lord --user sysop --node 1 --format door.sys
 oxidebbs-server doors dropfile lord --user sysop --node 1 --format dorinfo1.def
 ```
 
+## File commands
+
+File-transfer administration is implemented as a local sysop CLI surface. It
+does not yet imply caller-facing file menus or live ZMODEM/XMODEM workflows.
+
+```bash
+oxidebbs-server files areas list
+oxidebbs-server files areas add <key> --name "Name" --root <path>
+oxidebbs-server files areas edit <key>
+oxidebbs-server files list [--area <key>]
+oxidebbs-server files import <area-key> <path>
+oxidebbs-server files remove <file-id> --reason <reason>
+oxidebbs-server files transfers recent
+```
+
+`files remove` is a safe unapprove operation that preserves stored bytes and
+requires a reason. File-area mutations, imports, and removals write audit
+events.
+
 ## ANSI/screen commands
 
 ### Essential v1
@@ -484,6 +509,8 @@ oxidebbs-server audit user <alias-or-id>
 oxidebbs-server logs search <query>
 oxidebbs-server audit node <node-number>
 oxidebbs-server audit door <door-key>
+oxidebbs-server audit purge-before <timestamp>
+oxidebbs-server audit purge-retention
 ```
 
 ## Config commands
@@ -600,7 +627,8 @@ oxidebbs-server audit recent
 
 ## Commands that can wait
 
-These should not block v1:
+These no longer block the v1.2 CLI surface, but related TUI/network workflows
+remain tracked in the v1.2 plan:
 
 ```bash
 oxidebbs-server users delete
@@ -609,6 +637,8 @@ oxidebbs-server doors add
 oxidebbs-server doors edit
 oxidebbs-server ansi convert
 oxidebbs-server config set
+oxidebbs-server files areas list
+oxidebbs-server files import
 ```
 
 ## Implementation recommendation
@@ -623,13 +653,17 @@ oxidebbs-server/src/commands/setup.rs
 oxidebbs-server/src/commands/check.rs
 oxidebbs-server/src/commands/serve.rs
 oxidebbs-server/src/commands/status.rs
+oxidebbs-server/src/commands/audit.rs
+oxidebbs-server/src/commands/config.rs
 oxidebbs-server/src/commands/users.rs
 oxidebbs-server/src/commands/nodes.rs
 oxidebbs-server/src/commands/messages.rs
 oxidebbs-server/src/commands/doors.rs
+oxidebbs-server/src/commands/files.rs
 oxidebbs-server/src/commands/ansi.rs
 oxidebbs-server/src/commands/db.rs
 oxidebbs-server/src/commands/logs.rs
+oxidebbs-server/src/commands/net.rs
 ```
 
 ## Final recommendation

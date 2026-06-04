@@ -479,6 +479,36 @@ pub fn insert_network_nodelist_entry(
     Ok(())
 }
 
+pub fn replace_network_nodelist_entries(
+    db: &Db,
+    network_id: &str,
+    entries: &[NetworkNodelistRecord],
+) -> decentdb::Result<()> {
+    db.begin_transaction()?;
+    let result = (|| {
+        db.execute_with_params(
+            "DELETE FROM network_nodelist WHERE network_id = UUID_PARSE($1)",
+            &[Value::Text(network_id.to_string())],
+        )?;
+        for entry in entries {
+            insert_network_nodelist_entry(db, entry)?;
+        }
+        Ok(())
+    })();
+
+    match result {
+        Ok(()) => {
+            db.commit_transaction()?;
+        }
+        Err(error) => {
+            let _ = db.rollback_transaction();
+            return Err(error);
+        }
+    }
+
+    Ok(())
+}
+
 pub fn list_network_profiles(db: &Db) -> decentdb::Result<Vec<NetworkProfileRecord>> {
     let result = db.execute(
         "SELECT UUID_TO_STRING(id), key, name, adapter, local_zone, local_net, local_node, local_point, enabled, CAST(created_at AS TEXT), CAST(updated_at AS TEXT)
@@ -581,6 +611,29 @@ pub fn list_network_nodelist_entries(db: &Db) -> decentdb::Result<Vec<NetworkNod
         .iter()
         .map(network_nodelist_from_row)
         .collect())
+}
+
+pub fn find_network_nodelist_entry(
+    db: &Db,
+    network_id: &str,
+    zone: i64,
+    net: i64,
+    node: i64,
+    point: i64,
+) -> decentdb::Result<Option<NetworkNodelistRecord>> {
+    let result = db.execute_with_params(
+        "SELECT UUID_TO_STRING(id), UUID_TO_STRING(network_id), zone, net, node, point, parsed_name, raw_entry, CAST(updated_at AS TEXT)
+         FROM network_nodelist
+         WHERE network_id = UUID_PARSE($1) AND zone = $2 AND net = $3 AND node = $4 AND point = $5",
+        &[
+            Value::Text(network_id.to_string()),
+            Value::Int64(zone),
+            Value::Int64(net),
+            Value::Int64(node),
+            Value::Int64(point),
+        ],
+    )?;
+    Ok(result.rows().first().map(network_nodelist_from_row))
 }
 
 pub fn find_network_profile_by_key(
@@ -1230,6 +1283,36 @@ mod tests {
         assert_eq!(subscriptions.len(), 1);
         assert_eq!(nodes.len(), 1);
         assert_eq!(maybe_profile.as_ref().map(|p| p.enabled), Some(false));
+    }
+
+    #[test]
+    fn replace_nodelist_entries_is_profile_scoped() {
+        let db = test_db();
+        let profile = profile();
+        insert_network_profile(&db, &profile).expect("insert profile");
+        insert_network_nodelist_entry(&db, &nodelist(&profile.id)).expect("insert old nodelist");
+
+        let replacement = NetworkNodelistRecord {
+            id: "00000000-0000-4000-8000-100000000099".to_string(),
+            network_id: profile.id.clone(),
+            zone: 1,
+            net: 2,
+            node: 42,
+            point: 7,
+            parsed_name: Some("Point Node".to_string()),
+            raw_entry: "Point,7,Point_Node".to_string(),
+            updated_at: "2026-01-02T00:00:00.000000Z".to_string(),
+        };
+
+        replace_network_nodelist_entries(&db, &profile.id, std::slice::from_ref(&replacement))
+            .expect("replace nodelist");
+
+        let nodes = list_network_nodelist_entries(&db).expect("list nodelist");
+        let found =
+            find_network_nodelist_entry(&db, &profile.id, 1, 2, 42, 7).expect("find nodelist");
+
+        assert_eq!(nodes, vec![replacement.clone()]);
+        assert_eq!(found, Some(replacement));
     }
 
     #[test]

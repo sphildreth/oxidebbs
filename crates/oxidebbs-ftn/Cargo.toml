@@ -9,3 +9,5 @@ authors.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 oxidebbs-network = { path = "../oxidebbs-network" }
+oxidebbs-db = { path = "../oxidebbs-db" }
+sha2.workspace = true

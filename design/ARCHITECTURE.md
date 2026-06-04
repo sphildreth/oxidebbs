@@ -68,7 +68,27 @@ Owns door execution.
 
 ### `oxidebbs-sysop`
 
-Owns admin tooling and future Ratatui console.
+Owns local admin tooling and the Ratatui sysop console.
+
+### `oxidebbs-network`
+
+Owns protocol-neutral network types such as FTN-style addresses, profiles,
+links, packet boundaries, queue state, duplicate keys, and local/network message
+envelopes.
+
+### `oxidebbs-ftn`
+
+Owns legacy FTN packet and message primitives: Type-2 packet I/O, echomail
+kludges, and duplicate detection policy.
+
+### `oxidebbs-binkp`
+
+Owns BinkP network-mail transport framing and client/server session primitives.
+
+### `oxidebbs-oxidenet`
+
+Owns OxideNet-specific profile data, addressing defaults, applications, node
+registry, and config package structures.
 
 ## Dependency rule
 

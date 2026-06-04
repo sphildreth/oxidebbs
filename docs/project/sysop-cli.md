@@ -30,6 +30,15 @@ JSON outputs are stable objects for `--json`:
 - `users list`
 - `messages areas list`
 - `doors list`
+- `files areas list`
+- `files list`
+- `files transfers recent`
+- `net status`
+- `net links list`
+- `net areas list`
+- `net logs`
+- `net nodelist list`
+- `net nodelist lookup`
 - `db stats`
 
 User security levels are documented in
@@ -353,9 +362,11 @@ Each live row may include heartbeat age in seconds.
 Live `status --json` also includes `audit_write_failures`, the in-memory count
 of best-effort audit writes that failed while the server was running.
 
-Any future web admin interface must add CSRF and replay protection before it is
-enabled; the current admin/control surface remains local CLI plus Unix control
-socket.
+The `[admin_web]` configuration surface is disabled by default and validated,
+but no remote HTTP admin server is started yet. Any enabled remote admin runtime
+must add CSRF, replay protection, audit logging, and rate limiting before it can
+accept mutations; the current admin/control surface remains local CLI plus Unix
+control socket.
 
 ## Doors and caller launch
 
@@ -369,6 +380,8 @@ Door management:
 Meaning:
 
 - `--dry-run` generates drop files and validates input without launching a child.
+- `doors dropfile --format` supports `DOOR.SYS`, `DORINFO1.DEF`, `CHAIN.TXT`,
+  `DOORFILE.SR`, `PCBOARD.SYS`, and `CALLINFO.BBS`.
 - Live interactive DOS door testing requires a caller session. Start `serve`,
   connect over telnet, and launch the door from the caller `Doors` menu.
 - The bundled test door is `oxide-check` (`OXIDECHK.EXE`) for validating the
@@ -377,6 +390,10 @@ Meaning:
 - Live launch writes drop files in the node runtime directory, tracks
   `door_started`/`door_finished`/`door_timed_out` events, and returns the caller
   to the menu on completion or timeout.
+- `doors add` and `doors edit` currently persist local DOS door definitions.
+  BBSLink and DoorParty-style remote provider adapters exist in `oxidebbs-door`
+  for local dry-run validation, but the CLI does not yet accept or persist
+  provider credential references and must not be given raw provider secrets.
 
 Recommended smoke-test flow:
 
@@ -424,6 +441,46 @@ Optional DOSEMU2 smoke script:
 OXIDE_DOOR_INTERACTIVE=1 ./scripts/test-oxide-door-dosemu2.sh
 ```
 
+## File Areas and Transfers
+
+File-area administration is local CLI only in this release. Caller-facing file
+menus and live transfer workflows are still deferred, but sysops can create
+areas, import files, safely remove entries, and inspect transfer history.
+
+Area management:
+
+```bash
+cargo run -p oxidebbs-server -- files areas list
+cargo run -p oxidebbs-server -- files areas add main --name "Main Files" --root files/main --read-level 0 --download-level 10 --upload-level 20
+cargo run -p oxidebbs-server -- files areas edit main --name "General Files" --enabled true
+```
+
+File entries:
+
+```bash
+cargo run -p oxidebbs-server -- files list
+cargo run -p oxidebbs-server -- files list --area main
+cargo run -p oxidebbs-server -- files import main ./uploads/demo.zip --description "Demo archive"
+cargo run -p oxidebbs-server -- files remove <file-id> --reason "duplicate upload"
+```
+
+Transfer history:
+
+```bash
+cargo run -p oxidebbs-server -- files transfers recent --limit 50
+```
+
+Operational notes:
+
+- `files areas add` and `files areas edit` validate security levels in the
+  `0..=255` range.
+- `files import` copies the source file into the area's root directory with a
+  generated storage name. The source file is preserved.
+- `files remove` is a safe removal: it marks the file entry unapproved and
+  requires `--reason`; it does not delete the stored file bytes.
+- `--json` returns stable top-level objects for list and mutation responses.
+- File-area mutations, imports, and removals write audit events.
+
 ## Database operations
 
 ```bash
@@ -431,37 +488,59 @@ cargo run -p oxidebbs-server -- db backup backups/oxidebbs.ddb
 cargo run -p oxidebbs-server -- db export --format json > backups/oxidebbs.json
 cargo run -p oxidebbs-server -- db import --format json backups/oxidebbs.json
 cargo run -p oxidebbs-server -- db compact
+cargo run -p oxidebbs-server -- audit purge-retention --dry-run
 ```
 
 - `db backup` copies the active database file.
 - `db export --format json` is read-only and safe.
 - `db import --format json <path>` performs a full restore only:
-  - requires a schema-4, schema-only target
+  - requires a schema-7, schema-only target
   - validates schema and all foreign-key references before writing
   - preserves UUIDs and load ordering
   - executes in one transaction and fails atomically
 - `db compact` currently returns a hard unsupported error because DecentDB has no
   safe compaction API contract in this release.
 - `[audit].retention_days` defaults to `365`. Runtime audit inserts do not
-  purge old rows automatically; the DecentDB repository exposes a retention
-  purge helper for scheduled maintenance until a CLI wrapper is added.
+  purge old rows automatically; use `audit purge-retention` for scheduled
+  maintenance, or `audit purge-before <timestamp>` for an explicit cutoff.
 
 ## Schema migration notes
 
-- Schema version is currently `4`.
-- Existing schema `2` and `3` databases migrate automatically to `4` on first
-  open.
+- Schema version is currently `7`.
+- Existing schema `2` through `6` databases migrate automatically to `7` on
+  first open.
 - Databases with missing, malformed, or future markers are rejected with explicit
   operator-facing errors.
 - `status`/`nodes` do not attempt to operate on incompatible databases.
+
+## FTN network commands
+
+Implemented `net` commands currently cover read-only status/list/log views and
+full nodelist import/lookup:
+
+```bash
+cargo run -p oxidebbs-server -- net status fidonet
+cargo run -p oxidebbs-server -- net links list --network fidonet
+cargo run -p oxidebbs-server -- net areas list --network fidonet
+cargo run -p oxidebbs-server -- net logs fidonet-hub
+cargo run -p oxidebbs-server -- net nodelist import NODELIST.123 --network fidonet
+cargo run -p oxidebbs-server -- net nodelist lookup 1:105/42 --network fidonet
+```
+
+`net toss`, `net scan`, and `net poll` return explicit not-implemented errors
+until the tosser, scanner, and BinkP session engine are complete.
+
+See [FTN CLI](../ftn/cli.md) and [FTN Nodelists](../ftn/nodelist.md) for the
+current scope and limitations.
 
 ## Local-only boundary
 
 All operations here are local to the current machine:
 
-- no remote TCP admin interface
+- no remote TCP admin interface is started yet; `[admin_web]` is currently
+  validated disabled-by-default configuration only
 - no remote secret/token auth model
 - control socket path must be local filesystem access only
 - local control socket uses Unix peer UID checks plus filesystem permissions
-- any future web admin interface must include CSRF and replay protection before
-  being enabled
+- any remote admin runtime must include CSRF and replay protection before being
+  enabled

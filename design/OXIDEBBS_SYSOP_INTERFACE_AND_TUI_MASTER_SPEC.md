@@ -136,13 +136,17 @@ oxidebbs serve
 oxidebbs init
 oxidebbs check
 oxidebbs status
+oxidebbs audit ...
+oxidebbs config ...
 oxidebbs users ...
 oxidebbs nodes ...
 oxidebbs messages ...
 oxidebbs doors ...
+oxidebbs files ...
 oxidebbs ansi ...
 oxidebbs db ...
 oxidebbs logs ...
+oxidebbs net ...
 ```
 
 ### Essential v1 commands
@@ -710,7 +714,8 @@ For the initial TUI:
 - No editing raw DecentDB internals.
 - No replacing the remote caller menu system.
 - No direct bundling of DOS door binaries.
-- No file-transfer administration until file areas become a real feature.
+- No caller-facing file-transfer workflows in the initial TUI; file-area
+  administration is CLI-backed in v1.2.
 - No full ANSI art editor in the first version.
 
 ### Recommended command
@@ -2042,7 +2047,10 @@ _Note: door config check, drop-file viewer, dry-run, test launch, and runtime cl
 - Delete message with confirmation.
 - Soft-delete via `MessageAdminService`.
 
-_Note: area add/edit, pin/move, and network metadata remain planned for future enhancement._
+_Note: area add/edit, pin/move, and detailed network metadata remain planned for
+future enhancement. The implemented local TUI includes a read-only Network
+screen that summarizes profiles, links, areas, packets, messages, poll logs,
+duplicate events, and nodelist counts from DecentDB._
 
 #### Milestone TUI-5: Database, logs, audit ✅ (v1.1)
 

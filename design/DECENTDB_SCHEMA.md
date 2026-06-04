@@ -4,10 +4,12 @@ OxideBBS uses DecentDB as the only system database. The schema should lean into
 DecentDB's PostgreSQL-like type system instead of treating it as a SQLite-style
 string store.
 
-Current schema version: `5`
+Current schema version: `7`
 
-Schema version `5` is the current v1.2 foundation schema. The initializer upgrades
-supported older development schemas and keeps development upgrades safe:
+Schema version `7` is the current v1.2 development schema. The P2 foundation
+landed in schema `5`; later v1.2 phases added caller door-security storage in
+schema `6` and file-transfer storage tables in schema `7`. The initializer
+upgrades supported older development schemas and keeps development upgrades safe:
 
 - schema `2 -> 3` is migratable. The migration adds `message_areas.enabled` with
   default `TRUE`, preserves message rows and reply links, then updates
@@ -21,6 +23,12 @@ supported older development schemas and keeps development upgrades safe:
   backfills existing local rows with `author_kind = 'local'` and
   `author_display_name` from the referenced user alias, creates the shared
   `network_*` tables, and updates `system_config.schema_version` to `5`.
+- schema `5 -> 6` is migratable. The migration rebuilds `doors` and
+  `door_runs`, adds `doors.min_security_level`, backfills existing doors with
+  `0`, and updates `system_config.schema_version` to `6`.
+- schema `6 -> 7` is migratable. The migration creates `file_areas`,
+  `file_entries`, and `file_transfers`, then updates
+  `system_config.schema_version` to `7`.
 - the pinned DecentDB rejects direct `ALTER TABLE ... ADD COLUMN` on checked
   tables, so migrations use table-rebuild strategies. Renamed pre-upgrade
   tables are retained under `oxidebbs_schema*_` archive names where DecentDB
@@ -44,13 +52,16 @@ Open and startup flow:
 
 ## Restore and Compaction Semantics
 
-- `db import --format json <path>` is a full, whole-database restore. It expects a
-  schema `5` payload and fails fast on schema mismatch or malformed foreign-key
-  references.
+- `db import --format json <path>` is a full restore for the tables currently
+  represented in the JSON import/export payload. It expects a schema `7` payload
+  and fails fast on schema mismatch or malformed foreign-key references.
 - Restore targets must be schema-only: existing rows are only allowed in
   `system_config` for the `schema_version` marker.
-- Restore order is dependency-aware:
+- Restore order is dependency-aware for the covered tables:
   `users -> auth_attempts -> message_areas -> messages -> network_profiles -> network_links -> network_areas -> network_packets -> network_messages -> network_seen_by -> network_path -> network_duplicate_log -> network_poll_log -> network_area_subscriptions -> network_nodelist -> sessions -> doors -> door_runs -> audit_events`.
+- Schema `7` file-transfer tables are initialized and verified by database
+  diagnostics, but transfer import/export rows remain part of the file-transfer
+  implementation work rather than P2 schema/config foundation.
 - Restores are executed inside one DecentDB transaction; validation is complete before
   any rows are written.
 - `db compact` is intentionally unsupported in this phase because DecentDB does not
@@ -484,12 +495,14 @@ drop_file TEXT NOT NULL
 exclusive BOOL NOT NULL DEFAULT FALSE
 time_limit_minutes INT NOT NULL DEFAULT 30
 enabled BOOL NOT NULL DEFAULT TRUE
+min_security_level INT NOT NULL DEFAULT 0
 ```
 
 Constraints:
 
 - key, name, runner, working directory, command, and drop file must not be blank
 - time limits must be positive
+- minimum security levels are `0..255`
 
 ### door_runs
 
@@ -515,6 +528,94 @@ Constraints:
 Indexes:
 
 - `door_id`
+- `user_id`
+- `started_at`
+
+### file_areas
+
+```sql
+id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID()
+key TEXT NOT NULL UNIQUE
+name TEXT NOT NULL
+description TEXT NOT NULL DEFAULT ''
+root_path TEXT NOT NULL
+read_security_level INT NOT NULL DEFAULT 0
+download_security_level INT NOT NULL DEFAULT 10
+upload_security_level INT NOT NULL DEFAULT 0
+max_upload_bytes INT
+enabled BOOL NOT NULL DEFAULT TRUE
+created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+```
+
+Constraints:
+
+- key, name, and root path must not be blank
+- security levels are `0..255`
+- max upload bytes cannot be negative when present
+
+### file_entries
+
+```sql
+id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID()
+area_id UUID NOT NULL REFERENCES file_areas(id) ON DELETE CASCADE
+storage_name TEXT NOT NULL
+display_name TEXT NOT NULL
+original_name TEXT
+size_bytes INT NOT NULL DEFAULT 0
+content_crc32 TEXT
+description TEXT NOT NULL DEFAULT ''
+uploader_user_id UUID REFERENCES users(id) ON DELETE SET NULL
+download_count INT NOT NULL DEFAULT 0
+approved BOOL NOT NULL DEFAULT FALSE
+created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+```
+
+Constraints:
+
+- storage and display names must not be blank
+- size and download counters cannot be negative
+
+Indexes:
+
+- `area_id`
+- `approved`
+
+### file_transfers
+
+```sql
+id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID()
+node_number INT NOT NULL
+user_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT
+area_id UUID REFERENCES file_areas(id) ON DELETE SET NULL
+file_entry_id UUID REFERENCES file_entries(id) ON DELETE SET NULL
+direction TEXT NOT NULL
+protocol TEXT NOT NULL
+requested_name TEXT
+storage_name TEXT
+declared_size_bytes INT
+transferred_payload_bytes INT NOT NULL DEFAULT 0
+committed_size_bytes INT
+started_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+ended_at TIMESTAMPTZ
+duration_ms INT
+outcome TEXT NOT NULL DEFAULT 'started'
+error_code TEXT
+error_message TEXT
+retry_count INT NOT NULL DEFAULT 0
+```
+
+Constraints:
+
+- node numbers are positive
+- direction is `download` or `upload`
+- protocol is `zmodem` or `xmodem_crc`
+- byte counts, durations, and retry counters cannot be negative
+- outcome is `started`, `success`, `cancelled`, or `failed`
+
+Indexes:
+
 - `user_id`
 - `started_at`
 

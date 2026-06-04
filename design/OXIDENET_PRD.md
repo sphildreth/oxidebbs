@@ -69,7 +69,11 @@ OxideNet is not:
 
 OxideBBS should be useful without OxideNet.
 
-OxideNet should be a later milestone built on top of stable OxideBBS primitives.
+OxideNet is implemented in v1.2 as a first-party profile on top of shared
+network primitives. The current foundation includes address/profile/link data,
+application and node structs, and config-package structs; full onboarding,
+hub/member polling, public network operation, and TUI workflows are tracked in
+the v1.2 release plan.
 
 ## Core idea
 
@@ -98,11 +102,15 @@ The signup process itself becomes part of the BBS culture.
 OxideNet should be built using layered crates/modules.
 
 ```text
+oxidebbs-network
+    Protocol-neutral address, profile, link, message-envelope, duplicate-key,
+    queue-state, and packet-boundary types shared by FTN and OxideNet.
+
 oxidebbs-ftn
-    Generic FTN-style message model and packet handling.
+    Legacy FTN packet handling and kludge/duplicate primitives.
 
 oxidebbs-binkp
-    Future BinkP-compatible transport/poller/listener.
+    BinkP-compatible frame primitives and future transport/poller/listener.
 
 oxidebbs-oxidenet
     First-party OxideNet profile: signup, policy, config generation,
@@ -127,19 +135,19 @@ The new crates fit into the existing workspace dependency graph as follows:
 
 ```text
 oxidebbs-server
+  -> oxidebbs-network
   -> oxidebbs-ftn
   -> oxidebbs-oxidenet
-  -> oxidebbs-binkp (future)
+  -> oxidebbs-binkp
 
 oxidebbs-oxidenet
-  -> oxidebbs-ftn
-  -> oxidebbs-db
+  -> oxidebbs-network
 
 oxidebbs-binkp
-  -> oxidebbs-ftn
+  -> no OxideBBS workspace crates
 
 oxidebbs-ftn
-  -> oxidebbs-core
+  -> oxidebbs-network
   -> oxidebbs-db
 ```
 

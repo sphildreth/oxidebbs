@@ -28,30 +28,49 @@ The `oxidebbs-network` crate provides the generic network model. The `oxidebbs-f
 
 What exists today:
 
-- `oxidebbs-network` — protocol-neutral `FtnAddress`, `EchoMailAreaMapping`, `NetMailMessage`, `DuplicateDetectionKey`, `PacketBoundary`, `PacketDirection`. All have serde support and unit tests.
+- `oxidebbs-network` — protocol-neutral `FtnAddress`, `NetworkProfile`,
+  `NetworkLink`, `EchoMailAreaMapping`, `NetMailMessage`,
+  `NetworkMessageEnvelope`, `LocalMessageEnvelope`, `DuplicateDetectionKey`,
+  `PacketBoundary`, `PacketDirection`, `QueueState`, adapter/compression/TLS
+  policy enums, and local-to-network conversion traits. All have serde support
+  and unit tests.
 - `oxidebbs-core/src/network.rs` — re-exports the protocol-neutral network types during the transition.
 - `oxidebbs-core/src/message.rs` — `AreaKind` enum with `Local`, `EchoMail`, `NetMail` variants. `MessageArea` has `network_id: Option<String>`. `Message` has `network_message_id: Option<String>`.
-- `oxidebbs-db` schema version 5 — `message_areas.kind` CHECK includes `'echomail'` and `'netmail'`; `messages` has first-class local/network/system author metadata; shared `network_*` tables and repository APIs exist for profiles, links, areas, packets, messages, duplicate logs, poll logs, area subscriptions, and nodelists.
+- `oxidebbs-db` schema version 7 — the shared network foundation landed in
+  schema `5`: `message_areas.kind` CHECK includes `'echomail'` and `'netmail'`;
+  `messages` has first-class local/network/system author metadata; shared
+  `network_*` tables and repository APIs exist for profiles, links, areas,
+  packets, messages, duplicate logs, poll logs, area subscriptions, and
+  nodelists.
 - `oxidebbs-db::DbWriter` — bounded single-writer foundation with ordered execution, transaction rollback, queue backpressure, and shutdown drain tests.
 - `oxidebbs-server/src/config.rs` — shared `[network]` config model with profiles, local addresses, links, compression, and transport security. Legacy `[ftn]` remains parseable as a deprecated compatibility alias.
 - `config/oxidebbs.example.toml` — disabled `[network]` example with a legacy FTN profile and link.
-- No `oxidebbs-ftn`, `oxidebbs-binkp`, or `oxidebbs-oxidenet` crates exist yet.
-- No FTN packet reading, writing, tossing, scanning, or transport code exists.
+- `oxidebbs-ftn` — Type-2/Type-2+ packet header/message primitives,
+  byte-preserving `PacketReader`/`PacketWriter`, tolerant kludge parsing, strict
+  kludge composition, ADR 0023 SHA-256 duplicate-key construction with
+  five-minute fallback clock-skew candidates, a DecentDB-backed duplicate
+  detector over `network_duplicate_log`, raw/ZIP/ARJ bundle classification with
+  explicit unsupported-extraction errors, and a common full-nodelist parser for
+  Zone/Host/node/point rows.
+- `oxidebbs-binkp` — tested command/data frame parser/writer, command
+  constants, and client/server handshake primitives for `M_ADR`, optional
+  `M_PWD`, `M_OK`, and `M_ERR`.
+- `oxidebbs-oxidenet` — default constants and basic data structs.
+- `oxidebbs-server net` — read-only status, link list, area list, poll-log, and
+  nodelist import/list/lookup commands backed by DecentDB network tables.
 
 What does not exist yet:
 
-- FTN `.pkt` format parser or writer
-- Echomail kludge line parser (AREA, ^MSGID, ^REPLY, INTL, FMPT, TOPT, SEEN-BY, ^PATH, ^Via, ^FLAGS, tear lines, origin lines)
 - Tosser (inbound packet processing)
 - Scanner (outbound message packing)
-- Bundle creation or extraction
-- Nodelist parser
-- Duplicate detection implementation backed by DecentDB
+- Bundle creation and real ZIP/ARJ extraction
+- Differential nodelist updates
 - Seen-by and PATH propagation
 - Netmail routing
 - AreaFix
-- BinkP client or server
-- CLI commands for toss, scan, poll
+- Full BinkP client or server session state beyond initial handshake
+- CLI commands for toss, scan, poll, queue, packets, AreaFix, area
+  subscribe/unsubscribe, and link show
 - FTN adapter runtime code that consumes the shared `network_*` DecentDB tables
 
 ## FTN standards reference
@@ -280,7 +299,8 @@ Configuration validation must reject:
 
 All shared network state and legacy FTN adapter state is stored in DecentDB.
 v1.2 made the final naming decision: shared protocol-neutral state uses
-`network_*` tables, implemented in schema version 5 and documented in
+`network_*` tables. Those tables were implemented in the schema `5` migration
+and remain part of the current schema `7` documented in
 `design/DECENTDB_SCHEMA.md`. Reserve `ftn_*` table names only for future
 adapter-private FTN state that cannot be shared with OxideNet or private packet
 profiles.
@@ -613,7 +633,7 @@ discuss messages first.
 ### Tests required
 
 - Fresh schema initializes with all Phase 0 tables.
-- Existing schema migrates without losing local users, areas, messages, sessions, doors, or audit events.
+- Existing schema migrates without losing local users, auth attempts, areas, messages, sessions, doors, door runs, or audit events.
 - Existing local messages are backfilled with `author_kind = 'local'` and `author_display_name`.
 - Imported-network author rows can be inserted with `author_user_id = NULL`.
 - Config accepts multiple networks with different local addresses.
@@ -809,8 +829,8 @@ The packet header's `prod_code` and `prod_rev` fields should identify OxideBBS:
 
 - [ ] `oxidebbs-ftn` crate compiles and passes `cargo check --workspace --locked`
 - [ ] `PacketHeader`, `PacketMessage`, `MessageAttribute` types are defined and documented
-- [ ] `PacketReader` reads Type-2 and Type-2+ packets from `impl Read`
-- [ ] `PacketWriter` writes Type-2+ packets to `impl Write`
+- [x] `PacketReader` reads Type-2 and Type-2+ packets from `impl Read`
+- [x] `PacketWriter` writes Type-2+ packets to `impl Write`
 - [ ] `PacketError` covers all failure modes
 - [ ] All tests pass (`cargo test --workspace --locked`)
 - [ ] Rustdoc is complete on all public types
@@ -948,7 +968,7 @@ The parser must handle:
 
 ### Definition of done
 
-- [ ] `FtnParsedMessage` parses all echomail kludge types (AREA, MSGID, REPLY, INTL, FMPT, TOPT, FLAGS, SEEN-BY, PATH, Via)
+- [x] `FtnParsedMessage` parses all echomail kludge types (AREA, MSGID, REPLY, INTL, FMPT, TOPT, FLAGS, SEEN-BY, PATH, Via)
 - [ ] `FtnMessageComposer` composes echomail and netmail messages with proper line terminators
 - [ ] `FtnAddressList` parses and sorts SEEN-BY address lists while preserving PATH order
 - [ ] Tear line and origin line parsing and composition work correctly
@@ -1073,7 +1093,7 @@ The fallback hash must tolerate a ±5 minute clock skew window on `created_at` w
 
 - [ ] `DuplicateDetector` trait defined in `oxidebbs-ftn`
 - [ ] `DecentDBDuplicateDetector` implemented in `oxidebbs-ftn` (or `oxidebbs-db`)
-- [ ] `network_duplicate_log` table created in DecentDB schema migration
+- [x] `network_duplicate_log` table created in DecentDB schema migration
 - [ ] MSGID-based dedup works with real `.pkt` data
 - [ ] Fallback hash works when MSGID is absent
 - [ ] Clock skew tolerance is implemented
@@ -1513,9 +1533,13 @@ fn extract_bundle(
 ) -> Result<Vec<PathBuf>, BundleError>
 ```
 
-Extracts all `.pkt` files from a compressed bundle. Must handle:
+Classifies input and extracts all `.pkt` files from a compressed bundle. Current
+code handles raw packet pass-through and returns explicit unsupported errors for
+ZIP and ARJ until decompression support is implemented. Full extraction must
+handle:
 
 - `.zip` bundles
+- `.arj` bundles when the ARJ policy is decided
 - Raw `.pkt` files (pass through)
 - Unknown formats (return error, do not crash)
 
@@ -1533,7 +1557,10 @@ enum BundleCompression {
 - Generate a bundle filename for a known address pair and day — verify it matches expected convention
 - Create a ZIP bundle from a packet file — verify it can be extracted
 - Extract a known-good ZIP bundle — verify .pkt files are recovered
-- Extract a raw .pkt file (no compression) — verify pass-through
+- Classify raw `.pkt`, `.zip`, and `.arj` inputs
+- Extract a raw `.pkt` file (no compression) — verify pass-through
+- Return explicit unsupported-extraction errors for `.zip` and `.arj` until real
+  extraction exists
 - Attempt to extract a corrupt bundle — verify error handling
 - Verify day-of-week extension is correct for each day
 - Verify bundle filenames for same-zone and cross-zone addresses
@@ -1549,10 +1576,13 @@ enum BundleCompression {
 
 - [ ] `BundleNamer` generates correct arcmail filenames for all address types
 - [ ] `BundleCreator` creates ZIP bundles from packet files
-- [ ] `BundleExtractor` extracts packets from ZIP bundles and handles raw packets
+- [x] `BundleExtractor` handles raw packet pass-through and classifies ZIP/ARJ
+  inputs
+- [ ] `BundleExtractor` extracts packets from ZIP bundles
+- [ ] ARJ extraction policy is implemented or explicitly deferred
 - [ ] Day-of-week extensions are correct
-- [ ] All tests pass
-- [ ] Rustdoc complete
+- [x] Focused bundle tests pass
+- [x] Rustdoc exists for the classifier/extraction-boundary APIs
 - [ ] `dev-check.sh` passes cleanly
 
 ---
@@ -1578,12 +1608,13 @@ Parses a standard nodelist file (NODELIST.xxx format). The nodelist format is:
 ; Comment lines start with semicolon
 Zone,1,Worstelen,Horst_Kalverkamp,43-XXXX-XXXX,9600,CM,XA,MO,V34
 Region,1,Region_1_Coordinator,...
-Host,1/1,BBS_Name,Sysop_Name,Location,Phone,Speed,Flags
-Hub,1/1,Hub_Name,Sysop_Name,Location,Phone,Speed,Flags
-Pvt,1/2,Private_Node,Sysop_Name,Location,Phone,Speed,Flags
-Hold,1/3,On_Hold_Node,Sysop_Name,Location,Phone,Speed,Flags
-Down,1/4,Down_Node,Sysop_Name,Location,Phone,Speed,Flags
-,1/100,Normal_Node,Sysop_Name,Location,Phone,Speed,Flags
+Host,105,Local_Net,Sysop_Name,Location,Phone,Speed,Flags
+Hub,10,Hub_Name,Sysop_Name,Location,Phone,Speed,Flags
+Pvt,11,Private_Node,Sysop_Name,Location,Phone,Speed,Flags
+Hold,12,On_Hold_Node,Sysop_Name,Location,Phone,Speed,Flags
+Down,13,Down_Node,Sysop_Name,Location,Phone,Speed,Flags
+,42,Normal_Node,Sysop_Name,Location,Phone,Speed,Flags
+Point,7,Point_Node,Sysop_Name,Location,Phone,Speed,Flags
 ```
 
 The parser must handle:
@@ -1592,10 +1623,12 @@ The parser must handle:
 - Blank lines
 - Entry types: Zone, Region, Host, Hub, Pvt, Hold, Down, and untyped (node entries with no keyword)
 - Keyword lines: `Zone`, `Region`, `Host`, `Hub`, `Pvt`, `Hold`, `Down`
-- Comma-separated fields: keyword, address, name, sysop, location, phone, speed, flags
+- Comma-separated fields: keyword or blank node prefix, address component,
+  name, sysop, location, phone, speed, flags
 - Flags: remaining comma-separated tokens after the speed field, including bare flags (CM, XA, MO, V34, etc.) and value-style flags such as `INA:host.example.net`
-- The address format in nodelist is `zone:net/node` for Zone entries, `net/node` for others, or just `node` for entries within a known net
-- Multi-line entries using continuation lines (a line starting with `,` continues the previous entry)
+- The parser uses `Zone` and `Host` rows as address context; concrete node
+  rows carry node numbers, and `Point` rows attach to the most recent boss node.
+- Comma-prefixed rows are normal node rows within the current host net.
 
 #### `NodelistEntry` struct
 
@@ -1652,37 +1685,38 @@ trait NodelistIndex {
 
 ```sql
 id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID()
+network_id UUID NOT NULL REFERENCES network_profiles(id) ON DELETE CASCADE
 zone INT NOT NULL
 net INT NOT NULL
 node INT NOT NULL
 point INT NOT NULL DEFAULT 0
-keyword TEXT NOT NULL DEFAULT 'normal'
-name TEXT NOT NULL
-sysop TEXT NOT NULL
-location TEXT NOT NULL DEFAULT ''
-phone TEXT NOT NULL DEFAULT ''
-speed INT NOT NULL DEFAULT 0
-flags TEXT NOT NULL DEFAULT ''
-nodelist_file TEXT NOT NULL
-created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+parsed_name TEXT
+raw_entry TEXT NOT NULL
+updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 ```
 
 Constraints:
-- `keyword` is one of `zone`, `region`, `host`, `hub`, `pvt`, `hold`, `down`, `normal`
-- `(zone, net, node, point)` is unique per nodelist file
+- `(network_id, zone, net, node, point)` is unique
 
 Indexes:
-- `(zone, net, node, point)`
-- `(name)`
+- `(network_id, zone, net, node, point)`
 
 ### Technical details
 
-- The nodelist is a text file distributed as a diff series (NODELIST.001, NODELIST.002, ..., NODELIST.xxx where xxx is the day number). For v1, OxideBBS will only support full nodelist files, not incremental diffs.
+- The nodelist is a text file distributed as a diff series (NODELIST.001, NODELIST.002, ..., NODELIST.xxx where xxx is the day number). OxideBBS supports full nodelist import and a conservative plain-text `NODEDIFF.xxx` apply boundary for FTS-style `A<count>`, `C<count>`, and `D<count>` commands. The first diff line must match the first base nodelist line; unsupported commands, invalid counts, add-data underflow, and copy/delete ranges past the base are rejected.
+- `net nodelist apply-diff <file> --base <full-list-file> [--network <profile>]`
+  applies the diff in memory, parses the resulting full nodelist, and atomically
+  replaces DecentDB nodelist rows for the selected profile.
 - Nodelist files may be compressed (e.g., NODELIST.ZIP). The parser should accept a file path, not handle decompression itself — that is the caller's responsibility.
+- Compressed nodelist and nodediff archives must be extracted before import or
+  apply-diff. Nodediff CRC validation remains a later hardening item.
 - The phone field may contain `-` characters and non-numeric prefixes. Do not validate phone format strictly.
 - The speed field is a baud rate as an integer. Common values: 300, 1200, 2400, 9600, 14400, 28800, 33600, 56000.
-- Some nodelist entries use `Pvt` keyword with no phone number — these nodes are private and do not accept direct connections.
-- Flags are comma-separated fields after speed. Some flags have values (e.g. `INA:host.example.net`), others are bare (e.g. `CM`, `XA`). Tolerate semicolon-separated flag fragments only as a non-standard compatibility fallback.
+- Some nodelist entries use `Pvt` keyword with no phone number; these nodes are
+  stored as concrete entries and the complete source row is preserved in
+  `raw_entry`.
+- Flags are currently preserved in `raw_entry`; structured flag columns remain a
+  later P12 enhancement.
 - Building the nodelist index should be an idempotent operation — replacing the existing index with a new one.
 
 ### Tests required
@@ -1690,8 +1724,8 @@ Indexes:
 - Parse a known-good nodelist file with Zone, Host, Hub, and Node entries
 - Parse comment lines and blank lines (skip them)
 - Parse entries with various keywords (Zone, Region, Host, Hub, Pvt, Hold, Down, Normal)
-- Parse entries with flags including key=value pairs and bare flags
-- Parse entries with continuation lines
+- Preserve entries with flags in raw row text until structured flag storage lands
+- Parse comma-prefixed node rows under the current host net
 - Build a nodelist index from parsed entries
 - Look up a node by address — verify correct entry returned
 - Look up a node by name — verify matching entries returned
@@ -1708,12 +1742,15 @@ Indexes:
 
 ### Definition of done
 
-- [ ] `NodelistParser` parses standard nodelist files
-- [ ] `NodelistEntry` struct captures all nodelist fields including flags
-- [ ] `NodelistIndex` trait and DecentDB implementation provide efficient lookup
-- [ ] `network_nodelist` table created in DecentDB schema migration
+- [x] Common full-nodelist parser handles Zone/Host context, node rows,
+  flagged node rows, and points
+- [ ] Nodelist entry model captures all row fields including flags, sysop,
+  location, phone, and speed as structured data
+- [x] DecentDB repository provides profile-scoped insert/list/find/replace
+  helpers for nodelist lookup
+- [x] `network_nodelist` table created in DecentDB schema migration
 - [ ] All tests pass
-- [ ] Rustdoc complete
+- [x] Rustdoc exists for the public parser entry point and parsed entry type
 - [ ] `dev-check.sh` passes cleanly
 
 ---
@@ -2063,11 +2100,13 @@ struct PollResult {
 
 ### Definition of done
 
-- [ ] `oxidebbs-binkp` crate created in workspace
-- [ ] BinkP frame parser and writer implemented
-- [ ] Command frames and data frames use the FSP-1011 high-bit/15-bit-length header
-- [ ] `BinkpClient` connects, authenticates, sends and receives files
-- [ ] `BinkpServer` accepts connections, authenticates, sends and receives files
+- [x] `oxidebbs-binkp` crate created in workspace
+- [x] BinkP frame parser and writer implemented
+- [x] Command frames and data frames use the FSP-1011 high-bit/15-bit-length header
+- [x] Client/server handshake primitives validate address/password and produce
+  `M_OK`/`M_ERR` responses
+- [ ] `BinkpClient` connects, runs full command sessions, and sends and receives files
+- [ ] `BinkpServer` accepts connections, runs full command sessions, and sends and receives files
 - [ ] TLS is enabled by default for OxideNet/private profiles, plaintext legacy FTN requires explicit per-link opt-in
 - [ ] Retry with exponential backoff works
 - [ ] Poll activity logged to `network_poll_log`
@@ -2109,21 +2148,21 @@ oxidebbs net poll --all
 oxidebbs net poll --dry-run <link-name>
 
 # Check status
-oxidebbs net status [network]
+oxidebbs net status <network>
 oxidebbs net queue <link-name>
 
 # Nodelist
-oxidebbs net nodelist import <file>
-oxidebbs net nodelist lookup <address>
-oxidebbs net nodelist count
+oxidebbs net nodelist import <file> [--network <network>]
+oxidebbs net nodelist list [--network <network>] [--limit N]
+oxidebbs net nodelist lookup <address> [--network <network>]
 
 # Area management
-oxidebbs net areas list [network]
+oxidebbs net areas list [--network <network>]
 oxidebbs net areas subscribe <area-tag> <link-name>
 oxidebbs net areas unsubscribe <area-tag> <link-name>
 
 # Link management
-oxidebbs net links list
+oxidebbs net links list [--network <network>]
 oxidebbs net links show <link-name>
 
 # Packets
@@ -2135,12 +2174,12 @@ oxidebbs net packets quarantine
 oxidebbs net areafix send <link-name> <command>
 
 # Logs
-oxidebbs net logs [link-name] [--limit N]
+oxidebbs net logs <link-name>
 ```
 
 ### Tests required
 
-- Each CLI command runs without error
+- Implemented read-only/import commands run without error
 - `net toss` processes inbound packets and logs results
 - `net scan` creates outbound packets
 - `net poll --dry-run` connects and disconnects without transferring
@@ -2148,6 +2187,7 @@ oxidebbs net logs [link-name] [--limit N]
 - `net nodelist import` parses a nodelist file and stores entries
 - `net nodelist lookup` returns correct entries
 - `net areas list` shows subscribed areas
+- `net links list` redacts link passwords in JSON output
 - Error messages are clear and actionable
 
 ### Documentation required
@@ -2158,8 +2198,10 @@ oxidebbs net logs [link-name] [--limit N]
 ### Definition of done
 
 - [ ] All CLI commands are implemented and functional
-- [ ] Each command has `--help` output
+- [x] Implemented commands have `--help` output through Clap
 - [ ] Commands integrate with tosser, scanner, nodelist, and BinkP
+- [x] Status, link list, area list, poll logs, nodelist import, nodelist list,
+  and nodelist lookup integrate with DecentDB network tables
 - [ ] Error messages are clear
 - [ ] All tests pass
 - [ ] Documentation complete

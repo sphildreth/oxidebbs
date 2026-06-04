@@ -1,0 +1,41 @@
+name: Optional DOSEMU2 Smoke
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "20 9 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  oxide-door-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev
+
+      - name: Install DOSEMU2 when available
+        run: |
+          if apt-cache show dosemu2 >/dev/null 2>&1; then
+            sudo apt-get install -y dosemu2
+          else
+            echo "DOSEMU2 package is unavailable on this runner; smoke will skip."
+          fi
+
+      - name: Run optional door smoke
+        run: |
+          set +e
+          OXIDE_DOOR_INTERACTIVE=1 ./scripts/test-oxide-door-dosemu2.sh
+          rc=$?
+          set -e
+          if [[ "$rc" -eq 77 ]]; then
+            echo "DOSEMU2 smoke skipped by environment."
+            exit 0
+          fi
+          exit "$rc"

@@ -18,6 +18,8 @@ Status values:
 
 - `Complete`: the planning artifact exists and no code work remains for that
   planning phase.
+- `Partial`: some foundation, scaffolding, documentation, or narrow behavior
+  exists, but the phase exit gate is not fully satisfied.
 - `Planned`: ready for implementation, no coding started.
 - `Active`: implementation is underway.
 - `Blocked`: implementation cannot proceed until the named dependency changes.
@@ -26,23 +28,23 @@ Status values:
 | --- | --- | --- | --- |
 | P0 | Scope freeze and ADR baseline | Complete | This plan and ADRs 0018 through 0032 exist. |
 | P1 | Release hygiene and stale-future sweep | Complete | All docs and examples name v1.2 scope accurately before coding starts. |
-| P2 | Schema, config, and DbWriter foundation | Complete | Schema migration, shared config, and ordered write service are in place. |
-| P3 | Caller authorization and flow polish | Complete | Menu security, caller sysop submenu, and logoff assets work. |
-| P4 | Serial/modem transport and file transfers | Complete | Serial transport, `oxidebbs-transfer` crate, file-area schema, and config infrastructure are in place. ZMODEM and XMODEM-CRC protocol engines are scaffolded for future implementation. |
-| P5 | Door ecosystem expansion | Complete | Mutable door add/edit CLI, CHAIN.TXT/DOORFILE.SR/PCBOARD.SYS/CALLINFO.BBS drop files, remote provider scaffold. |
-| P6 | Database maintenance operations | Complete | Audit purge CLI, db verify, and db compact behavior are complete. |
-| P7 | Sysop CLI completion | Complete | users delete, messages search, ansi convert, config set, and file-transfer CLI scaffolding are complete. |
-| P8 | Sysop TUI completion | Complete | User edit, door add/edit, message search, database verify, and all mutation confirmations work in TUI. |
-| P9 | Shared network foundation | Complete | `oxidebbs-network` and shared `network_*` tables are complete. |
-| P10 | Legacy FTN packet and message engine | Complete | Type-2/2+ packets, kludges, and duplicate detection work. |
-| P11 | FTN toss, scan, and bundles | Complete | Inbound toss, outbound scan, ZIP, ARJ, and raw packet workflows work. |
-| P12 | FTN routing, nodelist, and AreaFix | Complete | Netmail routing, full/diff nodelists, and AreaFix work. |
-| P13 | BinkP transport | Complete | TLS, plaintext legacy, and opportunistic BinkP client/server work. |
-| P14 | FTN operations, hardening, and docs | Complete | CLI, quarantine, retention, stats, stress tests, and FTN docs are complete. |
-| P15 | OxideNet implementation | Complete | Application, hub/member, config package, public experimental network, and admin flows work. |
-| P16 | Remote admin and status surface | Complete | Disabled-by-default authenticated web admin/status surface passes security tests. |
-| P17 | Repository and release automation | Complete | Codeberg mirror automation and version/release tooling are complete. |
-| P18 | Final integration and release readiness | Complete | Full Rust gate, docs build, Docker, door, network, serial, and transfer smokes pass. |
+| P2 | Schema, config, and DbWriter foundation | Complete | Schema migration, shared config, DbWriter code, schema docs, release notes, and acceptance tests are current for the P2 foundation scope. |
+| P3 | Caller authorization and flow polish | Complete | Runtime menu security, caller sysop submenu, logoff rendering, starter docs/assets, release notes, and acceptance tests are current. |
+| P4 | Serial/modem transport and file transfers | Partial | Config, file-area schema, repository APIs, XMODEM-CRC fallback, and ZMODEM frame primitives exist; physical serial/modem transport, full ZMODEM send/receive, and caller file-area workflows are not implemented. |
+| P5 | Door ecosystem expansion | Partial | Mutable door CLI, DecentDB door sync, all current drop-file writers/tests, BBSLink/DoorParty dry-run adapters, and provider secret redaction primitives exist; live connectors and CLI/TUI/storage/export credential coverage are incomplete. |
+| P6 | Database maintenance operations | Blocked | Audit purge, db verify, export, and import exist; `db compact` is blocked because DecentDB v2.8.0 exposes no safe public compaction API. |
+| P7 | Sysop CLI completion | Partial | Deferred user, message, ANSI, config, door, file-transfer, and read-only network commands exist; operational network commands and full audit coverage remain incomplete. |
+| P8 | Sysop TUI completion | Partial | Base TUI screens, read-only network status, and several mutations exist; required advanced database/config/ANSI workflows and OxideNet operational screens are missing. |
+| P9 | Shared network foundation | Complete | `oxidebbs-network` provides planned shared types/conversions; shared `network_*` tables and repository APIs exist; docs and tests cover the foundation. |
+| P10 | Legacy FTN packet and message engine | Complete | Type-2 packet I/O, kludge parsing/composition, duplicate-key policy, DecentDB-backed duplicate detection, docs, and tests exist. |
+| P11 | FTN toss, scan, and bundles | Partial | Network tables, packet scaffolding, and raw/ZIP/ARJ bundle classification exist; tosser, scanner, real extraction/creation, and end-to-end cycle are not implemented. |
+| P12 | FTN routing, nodelist, and AreaFix | Partial | Nodelist table, full-list parser, atomic import/apply-diff, and lookup exist; netmail routing, AreaFix, CRC hardening, and activity logging are incomplete. |
+| P13 | BinkP transport | Partial | BinkP crate has frame constants, tested frame I/O, address/password handshake primitives, and file offer/data-frame helpers; full client/server loops, TLS modes, retries, and poll logging are not implemented. |
+| P14 | FTN operations, hardening, and docs | Partial | `net` status/list/log/nodelist import/apply-diff commands read real DecentDB state; toss, scan, poll, queue, packet, AreaFix, quarantine, retention, and stress coverage remain incomplete. |
+| P15 | OxideNet implementation | Partial | OxideNet crate has constants and data structs; application, admin, token, config-package, hub/member, public-network, and TUI workflows are not implemented. |
+| P16 | Remote admin and status surface | Partial | Security ADR, disabled `[admin_web]` config, validation, and docs exist; HTTP surface, auth, CSRF/replay implementation, and rate-limit runtime are absent. |
+| P17 | Repository and release automation | Complete | Version metadata is aligned through `scripts/bump-version.sh`; Codeberg mirror dry-run automation, optional DOSEMU2 smoke workflow, and release package smoke checks exist. |
+| P18 | Final integration and release readiness | Partial | Rust gate and docs build pass; stale docs remain and required smoke matrix cannot pass because major features are incomplete. |
 
 ## Reviewed Documentation
 
@@ -155,6 +157,42 @@ declared complete.
 | Root `VERSION` file or bump script | `VERSIONING_GUIDE.md` | P17 |
 | Release artifact workflow evolution docs | `TASKS.md`, `VERSIONING_GUIDE.md` | P17 |
 
+Coverage audit update 2026-06-04:
+
+- Partial/Blocked: P4-P16 and P18 are not release-complete. Some rows have
+  working foundations, but every row tied to a Partial or Blocked phase must be
+  revalidated before v1.2 can be declared complete.
+- Complete: P2 schema/config/DbWriter foundation and P3 caller authorization
+  and flow polish are implemented, documented, and covered by targeted
+  acceptance tests.
+- Partial: P4 file transfer and serial/modem coverage is mostly schema/config
+  and crate scaffolding. Physical serial transport and ZMODEM/XMODEM-CRC engines
+  are incomplete.
+- Partial: P5 door administration, drop-file coverage, remote-provider dry-run
+  adapters, and provider secret redaction primitives are partly implemented, but
+  live connectors and CLI/TUI/storage/export credential coverage are incomplete.
+- Blocked: P6 `db compact` is explicitly unsupported because DecentDB v2.8.0
+  exposes no safe public compaction API. Audit purge, verify, export, and import
+  remain covered by the implemented maintenance commands.
+- Partial: P7-P8 sysop CLI/TUI coverage is incomplete for real network
+  operations, OxideNet operational workflows, exports, external editors, full
+  mutation audit coverage, and several advanced workflows. A read-only TUI
+  network status screen now summarizes DecentDB-backed network state.
+- Complete: P9 shared network foundation and P10 legacy FTN packet/message
+  primitives are implemented, documented, and tested.
+- Partial: P11-P15 networking workflows, full BinkP sessions, and OxideNet
+  coverage remain incomplete. Nodelist import/apply-diff/lookup, read-only
+  network CLI coverage, and BinkP file-frame helpers exist, but toss/scan,
+  routing, AreaFix, BinkP dial/listen loops, and OxideNet flows are not
+  implemented.
+- Partial: P16 remote admin/status coverage has disabled config validation and
+  docs only; the remote HTTP surface and runtime security controls are absent.
+- Complete: P17 release automation now has aligned version metadata, a bump
+  script, Codeberg mirror dry-run automation, optional DOSEMU2 smoke automation,
+  and packaged-binary smoke checks.
+- Partial: P18 release readiness is incomplete because stale documentation
+  remains and required smoke tests cannot pass.
+
 ## Global Implementation Rules
 
 These rules apply to every phase:
@@ -229,7 +267,22 @@ rg -n -i "deferred|future|later|v2|v1.5|can wait|reserved" \
 
 ## P2: Schema, Config, And DbWriter Foundation
 
-Status: Planned
+Status: Complete
+
+Audit update 2026-06-04:
+
+- Done: schema version is now `7`; schema migrations, shared `network_*` tables,
+  the `[network]` config model, the deprecated `[ftn]` alias, and `DbWriter`
+  tests exist.
+- Done: `design/DECENTDB_SCHEMA.md`, `design/FTN_PLAN.md`, and
+  `docs/about/changelog.md` reflect the current schema/version state without
+  claiming later file-transfer protocol work as complete.
+- Done: acceptance tests verify fresh schema tables, schema-marker rejection,
+  schema `4 -> current` preservation for users, auth attempts, areas, messages,
+  sessions, doors, door runs, and audit events, `oxidebbs-network` dependency
+  direction, multi-profile network config, unknown network-link field
+  rejection, non-legacy plaintext rejection, and DbWriter ordered execution,
+  rollback, backpressure, and shutdown drain behavior.
 
 Objective: Add the database and configuration foundation required by the rest
 of v1.2.
@@ -297,7 +350,21 @@ Validation:
 
 ## P3: Caller Authorization And Flow Polish
 
-Status: Planned
+Status: Complete
+
+Audit update 2026-06-04:
+
+- Done: configured menu items carry `min_security_level`, runtime routing rejects
+  inaccessible items, door launches check door-level security, the starter config
+  has a sysop submenu, and `terminal.logoff_screen` is rendered on normal logoff.
+- Done: `docs/project/caller-commands.md`, `docs/project/security-levels.md`,
+  `docs/project/menus.md`, `design/SPEC.md`, and `docs/about/changelog.md` now
+  match the implemented caller behavior.
+- Done: starter config and screen assets include a gated `S` Sysop submenu that
+  does not expose remote admin mutations.
+- Done: targeted tests verify normal-level callers cannot open the sysop
+  submenu, level-255 callers can open it, door-level security checks, and logoff
+  ANSI/plain/missing/early-disconnect behavior.
 
 Objective: Finish deferred caller-visible behavior that depends on menus,
 security levels, and screen asset selection.
@@ -354,7 +421,21 @@ Validation:
 
 ## P4: Serial/Modem Transport And File Transfers
 
-Status: Planned
+Status: Partial
+
+Audit update 2026-06-04:
+
+- Done: disabled-by-default `[serial]` config, disabled-by-default
+  `[file_transfers]` config, file-area DecentDB tables, file repository APIs, and
+  the `oxidebbs-transfer` crate scaffolding exist.
+- Not done: `SerialTransport` is an in-memory channel transport used by tests,
+  not a physical serial/modem device implementation that opens configured TTYs.
+- Done: CRC-16/XMODEM, XMODEM-CRC send/receive fallback, ZMODEM binary/hex
+  header framing primitives, and transfer protocol tests exist.
+- Not done: full ZMODEM send/receive state machines are not implemented.
+- Not done: caller file-area menus/actions, security-gated transfers, transfer
+  protocol handshakes, retries, cancel handling, path sanitization, and telnet
+  IAC escaping coverage are not implemented.
 
 Objective: Add the deferred caller transports and file-transfer subsystem.
 
@@ -435,7 +516,22 @@ available.
 
 ## P5: Door Ecosystem Expansion
 
-Status: Planned
+Status: Partial
+
+Audit update 2026-06-04:
+
+- Done: door definitions are persisted in DecentDB, setup/config sync exists,
+  `doors add`, `doors edit`, and `doors dropfile --format` exist, and
+  `CHAIN.TXT`, `DOORFILE.SR`, `PCBOARD.SYS`, and `CALLINFO.BBS` rendering
+  functions exist.
+- Done: `RemoteDoorProvider`, `ProviderRegistry`, BBSLink and DoorParty-style
+  dry-run adapters, local required-config validation, and provider secret
+  redaction primitives exist.
+- Done: every currently supported drop-file format has exact CRLF byte-output
+  coverage in `oxidebbs-door`.
+- Not done: live remote provider connectors, remote provider fake-server tests,
+  provider credential secret-reference storage, and credential redaction across
+  CLI, TUI, logs, backups, and exports are not implemented.
 
 Objective: Finish all deferred door administration, DOS door compatibility,
 Pascal-based test-door, and remote-provider work.
@@ -517,7 +613,19 @@ oxidebbs-server doors test oxide-check --user sysop --dry-run
 
 ## P6: Database Maintenance Operations
 
-Status: Planned
+Status: Blocked
+
+Audit update 2026-06-04:
+
+- Done: `audit purge-retention`, `audit purge-before`, dry-run/JSON output,
+  `db verify`, `db export --format json`, and `db import --format json` exist.
+- Blocked: `db compact` returns a hard unsupported error because DecentDB v2.8.0
+  does not expose a safe public compaction API. Best-practice decision:
+  preserving database safety is higher priority than implementing an unsafe
+  file-copy or internal-storage workaround, so P6 remains Blocked until DecentDB
+  exposes an explicit compaction contract.
+- Not done: docs still contain stale statements saying audit purge needs a future
+  CLI wrapper, and schema docs are stale relative to schema version `7`.
 
 Objective: Finish database maintenance behavior that was deferred or kept CLI
 only.
@@ -565,7 +673,23 @@ Validation:
 
 ## P7: Sysop CLI Completion
 
-Status: Planned
+Status: Partial
+
+Audit update 2026-06-04:
+
+- Done: `users delete` safe-disable behavior, `messages search`,
+  `ansi convert`, `config set`, and door add/edit commands exist.
+- Done: file-transfer CLI surfaces (`files areas list/add/edit`,
+  `files list/import/remove`, and `files transfers recent`) exist with stable
+  JSON list output, safe unapprove-on-remove behavior, and audit events for
+  file-area mutations, imports, and removals.
+- Done: read-only network CLI commands for P9-P14 now expose network status,
+  link lists, area lists, poll logs, nodelist import, nodelist listing, and
+  nodelist lookup.
+- Not done: operational network CLI commands still do not perform toss, scan,
+  poll, queue, packet, AreaFix, subscribe, unsubscribe, or link-show operations.
+- Not done: destructive/write command audit coverage has not been proven for all
+  commands named in the phase.
 
 Objective: Implement every CLI command previously documented as "can wait" or
 kept out of v1.1.
@@ -624,7 +748,25 @@ Validation:
 
 ## P8: Sysop TUI Completion
 
-Status: Planned
+Status: Partial
+
+Audit update 2026-06-04:
+
+- Done: the local Ratatui sysop console exists with dashboard, nodes, users,
+  messages, network, doors, ANSI, config, database, doctor, logs, audit, and
+  help screens. Several user, door, database, and message workflows exist.
+- Done: a read-only Network screen is wired into `ScreenId`, the screen module
+  list, navigation, and the command palette. It summarizes profiles, links,
+  areas, packets, messages, poll logs, duplicate events, packet statuses, and
+  nodelist counts from DecentDB.
+- Not done: OxideNet operational screens are absent, including application
+  review, node registry, packet queues, quarantine, subscriptions, poll logs,
+  nodelist generation, and config-package generation.
+- Not done: required workflows such as database backup/export/progress,
+  config-set integration, external editor launches, default screen installation,
+  log/audit export, advanced message-area/network metadata workflows, door
+  runtime cleanup/log workflows, and full mutation confirmation/audit coverage
+  are incomplete or unverified.
 
 Objective: Finish every TUI action that was marked future, later, V1.5, V2, or
 CLI-only in v1.1.
@@ -714,6 +856,21 @@ oxidebbs-server sysop
 
 Status: Complete
 
+Audit update 2026-06-04:
+
+- Done: `oxidebbs-network` exists, has no dependency on higher-level crates, and
+  provides FTN address, network profile/link, area mapping, netmail, local and
+  network message envelope, duplicate-key, packet boundary, queue state, adapter,
+  compression, and transport-security types.
+- Done: shared `network_*` DecentDB tables and repository APIs exist in
+  `oxidebbs-db`.
+- Done: `oxidebbs-core` re-exports the shared network surface during the
+  transition, and the network crate remains independent from higher-level
+  OxideBBS crates.
+- Done: docs and tests cover profile/link label parsing, local-to-network
+  envelope conversion, dependency direction, disabled network config, and
+  `legacy-ftn`/`oxidenet` profile validation.
+
 Objective: Build the protocol-neutral network layer required by legacy FTN and
 OxideNet.
 
@@ -760,6 +917,21 @@ Validation:
 ## P10: Legacy FTN Packet And Message Engine
 
 Status: Complete
+
+Audit update 2026-06-04:
+
+- Done: `oxidebbs-ftn` exists with packet, kludge, duplicate, and error modules.
+- Done: `PacketReader` and `PacketWriter` read and write Type-2/Type-2+
+  compatible packets, preserve raw/non-UTF-8 message bytes, and reject malformed
+  packet types.
+- Done: `EchomailKludge`, `FtnParsedMessage`, and `FtnMessageComposer` cover
+  AREA, MSGID, REPLY, INTL, FMPT, TOPT, FLAGS, SEEN-BY, PATH, Via, tear, and
+  origin lines.
+- Done: duplicate-key construction uses ADR 0023 SHA-256 MSGID-primary hashes
+  and fallback body hashes with five-minute clock-skew candidates;
+  `DecentDbDuplicateDetector` checks `network_duplicate_log` and fails closed on
+  database read errors.
+- Done: required packet, echomail, netmail, and FTN plan docs are updated.
 
 Objective: Implement the byte-level legacy FTN packet and message primitives.
 
@@ -814,7 +986,19 @@ Validation:
 
 ## P11: FTN Toss, Scan, And Bundles
 
-Status: Complete
+Status: Partial
+
+Audit update 2026-06-04:
+
+- Done: lower-level schema and repository scaffolding for network packets,
+  messages, duplicate logs, poll logs, seen-by/path, and subscriptions exists.
+- Done: raw `.pkt`, ZIP arcmail, and ARJ arcmail inputs are classified by
+  `oxidebbs-ftn`; raw packets pass through the extraction boundary and ZIP/ARJ
+  return explicit unsupported-extraction errors.
+- Not done: inbound tosser, outbound scanner, packet routing into local message
+  areas, packet archive/quarantine behavior, real ZIP/ARJ extraction, outbound
+  bundle creation, arcmail naming, and end-to-end scan/read/toss cycles are not
+  implemented.
 
 Objective: Implement inbound and outbound legacy FTN packet workflows.
 
@@ -873,7 +1057,23 @@ Validation:
 
 ## P12: FTN Routing, Nodelist, And AreaFix
 
-Status: Complete
+Status: Partial
+
+Audit update 2026-06-04:
+
+- Done: `network_nodelist` schema, repository insert/list/find/replace
+  operations, common full-nodelist parser, atomic full-list import, and
+  node/point lookup exist.
+- Done: conservative plain-text `NODEDIFF.xxx` apply support exists for
+  FTS-style `A<count>`, `C<count>`, and `D<count>` commands, and
+  `net nodelist apply-diff <file> --base <full-list-file>` uses the existing
+  atomic DecentDB replacement path.
+- Not done: nodediff CRC validation, netmail routing decisions, AreaFix command
+  processing, reply netmail generation, and activity logging are not
+  implemented.
+- Not done: the nodelist parser does not yet capture every full row field
+  (flags, sysop, location, phone, speed) into structured columns; those remain
+  preserved only in `raw_entry`.
 
 Objective: Add routing and network-management protocols around the packet
 engine.
@@ -931,7 +1131,21 @@ Validation:
 
 ## P13: BinkP Transport
 
-Status: Complete
+Status: Partial
+
+Audit update 2026-06-04:
+
+- Done: `oxidebbs-binkp` exists and defines BinkP command constants, tested
+  command/data frame parsing and writing, and client/server handshake
+  primitives for `M_ADR`, optional `M_PWD`, address/password validation, and
+  `M_OK`/`M_ERR` responses.
+- Done: `M_FILE` offer parsing/writing, bounded data-frame send/receive
+  helpers, `M_GOT` acknowledgement, `M_EOB` end-of-batch handling, and
+  session-level filename validation exist.
+- Not done: full command session loops, filesystem spool integration,
+  TLS-required/plaintext-legacy/opportunistic policy, retries,
+  one-connection-per-link guard, and `network_poll_log` integration are not
+  implemented.
 
 Objective: Implement BinkP client/server polling for legacy FTN, private
 networks, and OxideNet transport.
@@ -998,7 +1212,22 @@ Validation:
 
 ## P14: FTN Operations, Hardening, And Docs
 
-Status: Complete
+Status: Partial
+
+Audit update 2026-06-04:
+
+- Done: a top-level `oxidebbs-server net` command group exists, and `status`,
+  `links list`, `areas list`, `logs`, `nodelist import`, `nodelist apply-diff`,
+  `nodelist list`, and `nodelist lookup` use real DecentDB network state.
+- Not done: `toss`, `scan`, and `poll` return explicit not-implemented errors;
+  queue, packet, AreaFix, subscribe/unsubscribe, link-show, and poll-all/dry-run
+  commands are not implemented.
+- Not done: quarantine dashboard data, poll failure dashboard data, packet
+  retention policy, stats collection, stress tests, and operational FTN behavior
+  are not implemented.
+- Not done: required FTN docs pages such as setup, sysop guide, CLI,
+  configuration, packet format, tosser, scanner, bundles, nodelist, AreaFix,
+  BinkP, troubleshooting, testing, and performance are missing.
 
 Objective: Make the FTN engine operable by sysops.
 
@@ -1077,7 +1306,19 @@ npm run docs:build
 
 ## P15: OxideNet Implementation
 
-Status: Complete
+Status: Partial
+
+Audit update 2026-06-04:
+
+- Done: `oxidebbs-oxidenet` exists with default constants and basic
+  application/node/config-package data structs.
+- Not done: BBS-native application flow, admin review, token-based join, config
+  package import, filesystem simulation, BinkP polling, first hub/member flow,
+  operational hardening, public experimental network support, backup/multi-hub
+  topology, reachability validation, non-OxideBBS participation, and
+  FTN-to-internal conversion are not implemented.
+- Not done: TUI OxideNet screens are absent and required `docs/oxidenet/*`
+  documentation pages do not exist.
 
 Objective: Build the first-party OxideNet profile on top of the shared network
 and BinkP foundations.
@@ -1202,7 +1443,19 @@ npm run docs:build
 
 ## P16: Remote Admin And Status Surface
 
-Status: Complete
+Status: Partial
+
+Audit update 2026-06-04:
+
+- Done: ADR 0029 defines the required security model.
+- Done: disabled-by-default `[admin_web]` config exists with validation for IP
+  socket bind syntax, non-loopback TLS requirement, read-only enforcement,
+  CSRF/replay timing settings, positive rate-limit settings, example config, and
+  remote-admin docs.
+- Not done: there is no remote admin/status HTTP module or crate, no read-only
+  status endpoint, no authenticated browser/API admin views, no CSRF token
+  runtime handling, no replay nonce/timestamp runtime handling, no remote login
+  rate limiting implementation, and no remote-admin security test suite.
 
 Objective: Implement the future remote web admin/status dashboard with the full
 security model required by existing docs.
@@ -1274,6 +1527,22 @@ npm run docs:build
 
 Status: Complete
 
+Audit update 2026-06-04:
+
+- Done: a root `VERSION` file exists and release artifact workflow packaging
+  exists.
+- Complete: `VERSION`, all OxideBBS crate manifests, `Cargo.lock`,
+  `package.json`, `package-lock.json`, and the release workflow manual-dispatch
+  default are aligned at `1.2.0`.
+- Complete: `scripts/bump-version.sh` updates release metadata and generated
+  lockfile metadata from the root `VERSION` source of truth.
+- Complete: Codeberg mirror automation exists as a manually dispatched workflow
+  that defaults to dry-run and documents GitHub as canonical.
+- Complete: optional DOSEMU2 smoke automation exists outside mandatory CI and
+  skips cleanly when DOSEMU2 is unavailable.
+- Complete: the release workflow smokes each packaged binary before upload.
+- Publication note: no tag, release, push, or mirror update was created.
+
 Objective: Complete repository and release workflow items that were described as
 future or optional.
 
@@ -1323,7 +1592,27 @@ npm run docs:build
 
 ## P18: Final Integration And Release Readiness
 
-Status: Complete
+Status: Partial
+
+Audit update 2026-06-04:
+
+- Done: `./scripts/dev-check.sh` passed during audit, and `npm run docs:build`
+  passed during audit.
+- Not done: the stale wording scan still returns many hits where current docs
+  describe claimed v1.2 behavior as future, absent, or deferred.
+- Done: docs navigation now includes FTN, OxideNet, file-transfer, serial, door,
+  and remote-admin entry points.
+- Not done: several required deep-dive FTN/OxideNet/file-transfer/serial docs
+  are still status pages or missing operational details because the underlying
+  features are incomplete.
+- Not done: required smoke matrix cannot pass because physical serial,
+  ZMODEM/XMODEM-CRC transfers, FTN toss/scan/bundles/nodelist/AreaFix, BinkP,
+  OxideNet, remote admin, and related fake-provider/network paths are incomplete.
+- Done: `README.md`, `design/ROADMAP.md`, and `design/RUNBOOK.md` no longer
+  claim broad v1.2 completion for incomplete phases.
+- Not done: final release readiness still requires all phase statuses and
+  `design/TASKS.md` checkboxes to move to complete only after the underlying
+  phase gates are satisfied.
 
 Objective: Prove v1.2 is shippable as one coherent release.
 

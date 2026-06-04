@@ -1028,6 +1028,98 @@ mod tests {
     }
 
     #[test]
+    fn migration_4_to_current_preserves_runtime_tables() {
+        let db = Db::open_or_create(":memory:", DbConfig::default()).expect("open DecentDB");
+
+        seed_schema_2_database(&db);
+        migrate_2_to_3(&db).expect("apply migration 2->3");
+        migrate_3_to_4(&db).expect("apply migration 3->4");
+        assert_eq!(schema::schema_version(&db).expect("schema before"), 4);
+
+        db.execute_batch(
+            "INSERT INTO auth_attempts (
+                scope, scope_key, failed_count, first_failed_at, last_failed_at, locked_until
+            ) VALUES (
+                'alias', 'alice', 2, '2026-01-01T00:00:00.000000Z',
+                '2026-01-01T00:01:00.000000Z', '2026-01-01T00:15:00.000000Z'
+            );
+
+            INSERT INTO sessions (
+                id, node_number, user_id, transport, remote_address, remote_port,
+                started_at, ended_at, disconnect_reason
+            ) VALUES (
+                UUID_PARSE('00000000-0000-4000-8000-000000000301'), 1,
+                UUID_PARSE('00000000-0000-4000-8000-000000000011'), 'telnet',
+                '127.0.0.1:2323', 2323, '2026-01-01T00:02:00.000000Z',
+                '2026-01-01T00:03:00.000000Z', 'caller_logoff'
+            );
+
+            INSERT INTO doors (
+                id, key, name, runner, working_dir, command, drop_file, exclusive,
+                time_limit_minutes, enabled
+            ) VALUES (
+                UUID_PARSE('00000000-0000-4000-8000-000000000401'), 'test-door',
+                'Test Door', 'dosemu', './doors/test', 'TEST.EXE', 'DORINFO1.DEF',
+                FALSE, 5, TRUE
+            );
+
+            INSERT INTO door_runs (
+                id, door_id, user_id, node_number, started_at, ended_at, exit_code,
+                timed_out, disconnect_forced, bytes_in, bytes_out
+            ) VALUES (
+                UUID_PARSE('00000000-0000-4000-8000-000000000402'),
+                UUID_PARSE('00000000-0000-4000-8000-000000000401'),
+                UUID_PARSE('00000000-0000-4000-8000-000000000011'), 1,
+                '2026-01-01T00:04:00.000000Z', '2026-01-01T00:05:00.000000Z',
+                0, FALSE, FALSE, 12, 34
+            );
+
+            INSERT INTO audit_events (
+                id, created_at, event_type, user_id, node_number, details
+            ) VALUES (
+                UUID_PARSE('00000000-0000-4000-8000-000000000501'),
+                '2026-01-01T00:06:00.000000Z', 'login_success',
+                UUID_PARSE('00000000-0000-4000-8000-000000000011'), 1,
+                'preserve audit'
+            );",
+        )
+        .expect("seed schema-4 runtime rows");
+
+        migrate_to_current(&db).expect("migrate schema 4 to current");
+        assert_eq!(
+            schema::schema_version(&db).expect("schema version"),
+            SCHEMA_VERSION
+        );
+
+        assert_eq!(count_rows(&db, "users"), 1);
+        assert_eq!(count_rows(&db, "auth_attempts"), 1);
+        assert_eq!(count_rows(&db, "message_areas"), 1);
+        assert_eq!(count_rows(&db, "messages"), 2);
+        assert_eq!(count_rows(&db, "sessions"), 1);
+        assert_eq!(count_rows(&db, "doors"), 1);
+        assert_eq!(count_rows(&db, "door_runs"), 1);
+        assert_eq!(count_rows(&db, "audit_events"), 1);
+
+        assert_eq!(
+            scalar_text(
+                &db,
+                "SELECT subject FROM messages WHERE id = UUID_PARSE('00000000-0000-4000-8000-000000000201')"
+            ),
+            "First"
+        );
+        assert_eq!(
+            scalar_text(&db, "SELECT remote_address FROM sessions"),
+            "127.0.0.1:2323"
+        );
+        assert_eq!(scalar_int(&db, "SELECT min_security_level FROM doors"), 0);
+        assert_eq!(scalar_int(&db, "SELECT bytes_out FROM door_runs"), 34);
+        assert_eq!(
+            scalar_text(&db, "SELECT details FROM audit_events"),
+            "preserve audit"
+        );
+    }
+
+    #[test]
     fn migration_runner_rejects_future_versions() {
         let db = Db::open_or_create(":memory:", DbConfig::default()).expect("open DecentDB");
         db.execute_batch(
@@ -1210,5 +1302,35 @@ mod tests {
             INSERT INTO system_config (key, value) VALUES ('schema_version', '6');",
         )?;
         Ok(())
+    }
+
+    fn count_rows(db: &Db, table: &str) -> i64 {
+        scalar_int(db, &format!("SELECT COUNT(*) FROM {table}"))
+    }
+
+    fn scalar_int(db: &Db, query: &str) -> i64 {
+        db.execute(query)
+            .expect("execute scalar int query")
+            .rows()
+            .first()
+            .and_then(|row| row.values().first())
+            .and_then(|value| match value {
+                Value::Int64(value) => Some(*value),
+                _ => None,
+            })
+            .expect("int scalar result")
+    }
+
+    fn scalar_text(db: &Db, query: &str) -> String {
+        db.execute(query)
+            .expect("execute scalar text query")
+            .rows()
+            .first()
+            .and_then(|row| row.values().first())
+            .and_then(|value| match value {
+                Value::Text(value) => Some(value.clone()),
+                _ => None,
+            })
+            .expect("text scalar result")
     }
 }

@@ -1,1 +1,74 @@
+use std::io::{Read, Write};
+
+use crate::error::BinkpError;
+use crate::handshake::{BinkpServerHandshake, BinkpSession};
+use crate::transfer::{BinkpInboundFile, BinkpOutboundFile};
+
+/// BinkP server configuration and state.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BinkpServer;
+
+impl BinkpServer {
+    /// Create a BinkP server.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self
+    }
+
+    /// Accept the initial BinkP server handshake on an established stream.
+    ///
+    /// # Errors
+    ///
+    /// Returns protocol errors for invalid local policy or malformed peer
+    /// commands, connection refusal for address/password mismatches, or I/O
+    /// errors from the stream.
+    pub fn accept_handshake<S: Read + Write>(
+        &self,
+        stream: &mut S,
+        policy: &BinkpServerHandshake,
+    ) -> Result<BinkpSession, BinkpError> {
+        crate::handshake::accept_client_handshake(stream, policy)
+    }
+
+    /// Send one BinkP file offer and payload on an authenticated stream.
+    ///
+    /// # Errors
+    ///
+    /// Returns protocol errors for invalid file metadata or I/O errors from the
+    /// stream.
+    pub fn send_file<W: Write>(
+        &self,
+        writer: &mut W,
+        file: &BinkpOutboundFile,
+    ) -> Result<(), BinkpError> {
+        crate::transfer::send_file(writer, file)
+    }
+
+    /// Receive the next BinkP file, or `None` when the peer ends the batch.
+    ///
+    /// # Errors
+    ///
+    /// Returns protocol errors for malformed file exchange or I/O errors from
+    /// the stream.
+    pub fn receive_next_file<S: Read + Write>(
+        &self,
+        stream: &mut S,
+    ) -> Result<Option<BinkpInboundFile>, BinkpError> {
+        crate::transfer::receive_next_file(stream)
+    }
+
+    /// Send the BinkP end-of-batch marker.
+    ///
+    /// # Errors
+    ///
+    /// Returns I/O errors from the stream.
+    pub fn send_end_of_batch<W: Write>(&self, writer: &mut W) -> Result<(), BinkpError> {
+        crate::transfer::send_end_of_batch(writer)
+    }
+}
+
+impl Default for BinkpServer {
+    fn default() -> Self {
+        Self::new()
+    }
+}

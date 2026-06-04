@@ -21,12 +21,22 @@ GitHub is preferred for this project because the project is interested in outsid
 
 ## Codeberg
 
-Codeberg remains a good cultural fit for a FOSS/retro project, and a mirror may be useful later.
+Codeberg is maintained as an optional mirror target while GitHub remains the
+canonical repository host.
 
-Possible future mirror:
+Mirror target:
 
 ```text
 https://codeberg.org/sphildreth/oxidebbs
 ```
 
-If a mirror is added, the README should clearly state that GitHub is canonical unless the project changes this decision.
+The `.github/workflows/codeberg-mirror.yml` workflow is manually dispatched and
+defaults to `dry_run = true`, so maintainers can validate the ref update without
+pushing. A real mirror update requires `dry_run = false` and configured
+`CODEBERG_MIRROR_URL` plus `CODEBERG_MIRROR_SSH_KEY` secrets when SSH
+authentication is needed.
+
+Mirror failures do not change repository authority. Recovery is to inspect the
+failed workflow logs, confirm the Codeberg remote and deploy key, rerun with
+`dry_run = true`, then rerun with `dry_run = false` only after the dry-run output
+matches the expected refs.

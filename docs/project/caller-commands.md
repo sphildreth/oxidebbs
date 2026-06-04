@@ -25,7 +25,26 @@ The starter main menu is configured by `[menus.main]`.
 | --- | --- | --- | --- |
 | `D` | Doors | `doors` | Active |
 | `M` | Messages | `messages` | Active |
+| `S` | Sysop | `submenu` -> `sysop` | Active for level `255` callers |
 | `G` | Goodbye | `logoff` | Active |
+
+The default `S` item is gated by `min_security_level = 255`. Default new callers
+at level `10` receive an access-denied line and remain at the main menu.
+
+## Default Sysop Submenu
+
+The starter sysop submenu is configured by `[menus.sysop]` and is reachable only
+through the gated main-menu `S` item.
+
+| Key | Label | Action | Status |
+| --- | --- | --- | --- |
+| `N` | Node Status | `noop` | Active |
+| `R` | Return to main | `submenu` -> `main` | Active |
+| `G` | Goodbye | `logoff` | Active |
+
+The caller sysop submenu is intentionally non-mutating. It can show safe
+sysop-oriented information, but remote admin changes remain outside the caller
+menu surface.
 
 ## Door Menu
 
@@ -77,14 +96,10 @@ case-insensitively.
 | `submenu` | Moves into the configured target menu | Active |
 | `noop` | Accepts the key and performs no visible action | Active |
 
-## Future And Reserved Commands
+## Future Commands
 
 No caller key is globally reserved by the router. Future commands become real
 only when the config maps a key to an implemented action or prompt handler.
-
-| Key or label | Current status | Notes |
-| --- | --- | --- |
-| `S` / Sysop | Not implemented | Some art may mention a Sysop command, but there is no caller-side sysop menu action yet. Do not show it in production screens unless it is mapped to a real submenu or action. |
 
 When adding a future caller command:
 

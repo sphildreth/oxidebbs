@@ -504,7 +504,13 @@ Use as background for:
 
 ## Remote game services
 
-Remote services are not local DOS doors, but they may be useful for future OxideBBS integrations.
+Remote services are not local DOS doors, but they are useful integration targets
+for OxideBBS provider work.
+
+v1.2 includes local dry-run adapter scaffolding for BBSLink and
+DoorParty-style services in `oxidebbs-door`. Live external connectors,
+credential persistence, and fake-server integration tests remain P5 follow-up
+work.
 
 ---
 
@@ -524,7 +530,10 @@ BBSLink is not the same as running DOS doors locally, but it is relevant because
 
 Recommended OxideBBS usage:
 
-Do not make BBSLink part of v1. Treat it as a future “remote door provider” integration.
+Do not treat BBSLink as part of the v1 local-DOS-door requirement. In v1.2 it is
+a remote door-provider integration target with local dry-run validation
+scaffolding; live network sessions and credential storage remain separate
+implementation work.
 
 Possible future abstraction:
 

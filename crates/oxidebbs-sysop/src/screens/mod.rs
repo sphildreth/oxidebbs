@@ -9,5 +9,6 @@ pub mod doors;
 pub mod help;
 pub mod logs;
 pub mod messages;
+pub mod network;
 pub mod nodes;
 pub mod users;

@@ -27,6 +27,7 @@ use crate::screens::doors::DoorsScreen;
 use crate::screens::help::HelpScreen;
 use crate::screens::logs::LogsScreen;
 use crate::screens::messages::MessagesScreen;
+use crate::screens::network::NetworkScreen;
 use crate::screens::nodes::NodesScreen;
 use crate::screens::users::UsersScreen;
 use crate::services::node_service::NodeAdminService;
@@ -92,6 +93,7 @@ pub struct App {
     pub nodes_screen: NodesScreen,
     pub users_screen: UsersScreen,
     pub messages_screen: MessagesScreen,
+    pub network_screen: NetworkScreen,
     pub doors_screen: DoorsScreen,
     pub ansi_screen: AnsiScreen,
     pub config_screen: ConfigScreen,
@@ -146,6 +148,7 @@ impl App {
             nodes_screen: NodesScreen::new(theme.clone(), node_count),
             users_screen: UsersScreen::new(theme.clone()),
             messages_screen: MessagesScreen::new(theme.clone()),
+            network_screen: NetworkScreen::new(theme.clone()),
             doors_screen: DoorsScreen::new(theme.clone()),
             ansi_screen: AnsiScreen::new(theme.clone(), screens_path),
             config_screen: ConfigScreen::new(theme.clone(), config_path),
@@ -199,6 +202,14 @@ impl App {
                 shortcut: Some("Ctrl+M".into()),
                 is_destructive: false,
                 action: PaletteAction::Navigate(ScreenId::Messages),
+            },
+            PaletteCommand {
+                id: "nav.network".into(),
+                label: "Go to Network".into(),
+                description: "View FTN and OxideNet status".into(),
+                shortcut: Some("Ctrl+X".into()),
+                is_destructive: false,
+                action: PaletteAction::Navigate(ScreenId::Network),
             },
             PaletteCommand {
                 id: "nav.logs".into(),
@@ -290,6 +301,7 @@ impl App {
             self.users_screen.refresh(db);
             self.doors_screen.refresh(db);
             self.messages_screen.refresh(db);
+            self.network_screen.refresh(db);
             self.database_screen.refresh(db);
             self.audit_screen.refresh(db);
             self.active_nodes = self
@@ -355,6 +367,10 @@ impl App {
                 self.messages_screen
                     .handle_event(event, &self.db, self.config.readonly)
             }
+            ScreenId::Network => {
+                self.network_screen
+                    .handle_event(event, &self.db, self.config.readonly)
+            }
             ScreenId::Database => {
                 self.database_screen
                     .handle_event(event, &self.db, self.config.readonly)
@@ -387,6 +403,7 @@ impl App {
             ScreenId::Nodes => self.nodes_screen.render(frame, area),
             ScreenId::Users => self.users_screen.render(frame, area),
             ScreenId::Messages => self.messages_screen.render(frame, area),
+            ScreenId::Network => self.network_screen.render(frame, area),
             ScreenId::Doors => self.doors_screen.render(frame, area),
             ScreenId::Ansi => self.ansi_screen.render(frame, area),
             ScreenId::Config => self.config_screen.render(frame, area),

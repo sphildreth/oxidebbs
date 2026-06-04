@@ -64,6 +64,10 @@ actions include `login`, `new_user`, `doors`, `messages`, `logoff`, `noop`,
 `submenu` actions are now runtime-capable: when selected, the caller moves into
 the referenced menu and continues from that menu context.
 
+Menu items may set `min_security_level`. Runtime routing rejects inaccessible
+keys with an access-denied line before executing the action. The starter main
+menu uses this for the `S` Sysop submenu entry, which requires level `255`.
+
 See the [Caller Command Reference](./caller-commands.md) for the current
 sysop-facing list of default caller keys, prompt commands, and future/reserved
 command notes.
@@ -77,7 +81,8 @@ assets/screens/
 ├── login/
 ├── info/
 └── menus/
-    └── main/
+    ├── main/
+    └── sysop/
 ```
 
 This keeps login screens, post-login information screens, and menu graphics

@@ -23,6 +23,7 @@ pub enum ScreenId {
     Nodes,
     Users,
     Messages,
+    Network,
     Doors,
     Ansi,
     Config,
@@ -40,6 +41,7 @@ impl ScreenId {
             Self::Nodes => "Nodes",
             Self::Users => "Users",
             Self::Messages => "Messages",
+            Self::Network => "Network",
             Self::Doors => "Doors",
             Self::Ansi => "ANSI",
             Self::Config => "Config",
@@ -57,6 +59,7 @@ impl ScreenId {
             Self::Nodes,
             Self::Users,
             Self::Messages,
+            Self::Network,
             Self::Doors,
             Self::Ansi,
             Self::Config,
@@ -87,6 +90,7 @@ pub fn translate_key(key: KeyEvent) -> UiEvent {
         KeyCode::Char('u' | 'U') if control => UiEvent::NavigateTo(ScreenId::Users),
         KeyCode::Char('d' | 'D') if control => UiEvent::NavigateTo(ScreenId::Doors),
         KeyCode::Char('m' | 'M') if control => UiEvent::NavigateTo(ScreenId::Messages),
+        KeyCode::Char('x' | 'X') if control => UiEvent::NavigateTo(ScreenId::Network),
         KeyCode::Char('l' | 'L') if control => UiEvent::NavigateTo(ScreenId::Logs),
         KeyCode::Char('b' | 'B') if control => UiEvent::NavigateTo(ScreenId::Database),
         KeyCode::Char('o' | 'O') if control => UiEvent::NavigateTo(ScreenId::Doctor),
@@ -126,6 +130,18 @@ mod tests {
         assert_eq!(
             translate_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
             UiEvent::Cancel
+        );
+    }
+
+    #[test]
+    fn network_screen_is_in_navigation_order() {
+        assert!(ScreenId::all().contains(&ScreenId::Network));
+        assert_eq!(
+            translate_key(KeyEvent::new(
+                KeyCode::Char('X'),
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT
+            )),
+            UiEvent::NavigateTo(ScreenId::Network)
         );
     }
 }
