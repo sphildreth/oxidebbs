@@ -6,8 +6,8 @@ use oxidebbs_db::{
     NetworkPacketRecord, NetworkPathNode, NetworkProfileRecord, NetworkSeenByNode, Value,
     find_network_area_by_tag_and_profile, finish_network_packet, insert_message,
     insert_network_duplicate_log, insert_network_message, insert_network_packet,
-    insert_network_path_node, insert_network_seen_by_node, list_network_links,
-    list_network_messages, list_message_areas,
+    insert_network_path_node, insert_network_seen_by_node, list_message_areas, list_network_links,
+    list_network_messages,
 };
 use oxidebbs_network::FtnAddress;
 use sha2::{Digest, Sha256};

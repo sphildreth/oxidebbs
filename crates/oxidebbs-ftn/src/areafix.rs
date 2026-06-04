@@ -70,11 +70,7 @@ pub struct AreaFixProcessor<'db> {
 impl<'db> AreaFixProcessor<'db> {
     /// Create an AreaFix processor for one local profile and linked remote node.
     #[must_use]
-    pub fn new(
-        db: &'db Db,
-        profile: NetworkProfileRecord,
-        link: NetworkLinkRecord,
-    ) -> Self {
+    pub fn new(db: &'db Db, profile: NetworkProfileRecord, link: NetworkLinkRecord) -> Self {
         Self { db, profile, link }
     }
 
@@ -463,9 +459,8 @@ fn scalar_text(db: &Db, sql: &str) -> Result<String, FtnError> {
 mod tests {
     use super::*;
     use oxidebbs_db::{
-        MessageAreaRecord, OxideDb, insert_message_area, insert_network_area,
-        insert_network_link, insert_network_profile, list_audit_events,
-        list_network_subscriptions,
+        MessageAreaRecord, OxideDb, insert_message_area, insert_network_area, insert_network_link,
+        insert_network_profile, list_audit_events, list_network_subscriptions,
     };
 
     const PROFILE_ID: &str = "00000000-0000-4000-8000-000000003001";
@@ -694,11 +689,9 @@ mod tests {
             .expect("process request");
 
         assert_eq!(result.rescan_requests, vec!["OXIDE.GENERAL".to_string()]);
-        assert!(
-            result.reply.contains(
-                "Rescan requested for OXIDE.GENERAL; rescan queueing is not implemented yet"
-            )
-        );
+        assert!(result.reply.contains(
+            "Rescan requested for OXIDE.GENERAL; rescan queueing is not implemented yet"
+        ));
     }
 
     #[test]
