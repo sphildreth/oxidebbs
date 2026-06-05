@@ -10,10 +10,13 @@ use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
 use oxidebbs_telnet::Transport;
 use oxidebbs_telnet::TransportError;
+use oxidebbs_term::TerminalCapabilities;
 use tracing::warn;
 
 use crate::config::OxideConfig;
-use crate::serve::{CallerPeer, CallerResources, handle_raw_caller_transport};
+use crate::serve::{
+    CallerPeer, CallerResources, handle_raw_caller_transport_with_capabilities,
+};
 
 const BUSY_MESSAGE: &str = "System busy. Try again later.";
 
@@ -244,10 +247,11 @@ async fn ws_handler(
 
     let resources = state.caller_resources;
     ws.on_upgrade(move |socket| async move {
-        if let Err(error) = handle_raw_caller_transport(
+        if let Err(error) = handle_raw_caller_transport_with_capabilities(
             allocation,
             WsTransport::new(socket),
             "websocket",
+            Some(TerminalCapabilities::ansi_80()),
             peer,
             resources,
         )
@@ -515,7 +519,7 @@ mod tests {
         let server = tokio::spawn({
             let resources = state.caller_resources.clone();
             async move {
-                handle_raw_caller_transport(
+                crate::serve::handle_raw_caller_transport(
                     allocation,
                     transport,
                     "websocket",

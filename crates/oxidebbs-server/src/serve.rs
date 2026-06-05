@@ -597,7 +597,7 @@ async fn handle_caller(
     resources: CallerResources,
 ) -> ServeResult<()> {
     let transport = TcpTransport::new(stream);
-    handle_caller_transport(allocation, transport, "telnet", true, peer, resources).await
+    handle_caller_transport(allocation, transport, "telnet", true, None, peer, resources).await
 }
 
 pub(crate) async fn handle_raw_caller_transport<T: Transport>(
@@ -607,11 +607,31 @@ pub(crate) async fn handle_raw_caller_transport<T: Transport>(
     peer: CallerPeer,
     resources: CallerResources,
 ) -> ServeResult<()> {
+    handle_raw_caller_transport_with_capabilities(
+        allocation,
+        transport,
+        transport_name,
+        None,
+        peer,
+        resources,
+    )
+    .await
+}
+
+pub(crate) async fn handle_raw_caller_transport_with_capabilities<T: Transport>(
+    allocation: NodeAllocation,
+    transport: T,
+    transport_name: &'static str,
+    raw_capabilities: Option<TerminalCapabilities>,
+    peer: CallerPeer,
+    resources: CallerResources,
+) -> ServeResult<()> {
     handle_caller_transport(
         allocation,
         transport,
         transport_name,
         false,
+        raw_capabilities,
         peer,
         resources,
     )
@@ -623,6 +643,7 @@ async fn handle_caller_transport<T: Transport>(
     mut transport: T,
     transport_name: &'static str,
     telnet_protocol: bool,
+    raw_capabilities: Option<TerminalCapabilities>,
     peer: CallerPeer,
     resources: CallerResources,
 ) -> ServeResult<()> {
@@ -718,7 +739,7 @@ async fn handle_caller_transport<T: Transport>(
         )
         .await?
     } else {
-        fallback_capabilities
+        raw_capabilities.unwrap_or(fallback_capabilities)
     };
     debug!(
         node = %node_number,
@@ -5568,6 +5589,7 @@ mod tests {
                 transport,
                 "serial",
                 false,
+                None,
                 CallerPeer {
                     address: "serial:test".to_string(),
                     ip: None,

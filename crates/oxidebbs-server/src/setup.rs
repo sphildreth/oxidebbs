@@ -989,31 +989,31 @@ mod tests {
         parsed.validate().expect("validate generated config");
 
         assert_default_menu_asset_contains_items(
-            include_str!("../../../assets/screens/login/login.ans"),
+            include_bytes!("../../../assets/screens/login/login.ans"),
             &parsed.menus["login"].items,
         );
         assert_default_menu_asset_contains_items(
-            include_str!("../../../assets/screens/login/login-40.ans"),
+            include_bytes!("../../../assets/screens/login/login-40.ans"),
             &parsed.menus["login"].items,
         );
         assert_default_menu_asset_contains_items(
-            include_str!("../../../assets/screens/login/login.asc"),
+            include_bytes!("../../../assets/screens/login/login.asc"),
             &parsed.menus["login"].items,
         );
         assert_default_menu_asset_contains_items(
-            include_str!("../../../assets/screens/menus/main/main.ans"),
+            include_bytes!("../../../assets/screens/menus/main/main.ans"),
             &parsed.menus["main"].items,
         );
         assert_default_menu_asset_contains_items(
-            include_str!("../../../assets/screens/menus/main/main-40.ans"),
+            include_bytes!("../../../assets/screens/menus/main/main-40.ans"),
             &parsed.menus["main"].items,
         );
         assert_default_menu_asset_contains_items(
-            include_str!("../../../assets/screens/menus/main/main.asc"),
+            include_bytes!("../../../assets/screens/menus/main/main.asc"),
             &parsed.menus["main"].items,
         );
         assert_default_menu_asset_contains_items(
-            include_str!("../../../assets/screens/menus/main/main.txt"),
+            include_bytes!("../../../assets/screens/menus/main/main.txt"),
             &parsed.menus["main"].items,
         );
         assert!(
@@ -1035,7 +1035,73 @@ mod tests {
         );
     }
 
-    fn assert_default_menu_asset_contains_items(asset: &str, items: &[MenuItemConfig]) {
+    #[test]
+    fn bundled_ansi_assets_are_terminal_safe() {
+        for asset in DEFAULT_ASSETS {
+            if !asset.path.ends_with(".ans") {
+                continue;
+            }
+
+            let max_width = if asset.path.ends_with("-40.ans") {
+                40
+            } else {
+                80
+            };
+            assert_ansi_asset_is_terminal_safe(asset.path, asset.bytes, max_width);
+        }
+    }
+
+    fn assert_ansi_asset_is_terminal_safe(path: &str, bytes: &[u8], max_width: usize) {
+        let mut line = 1usize;
+        let mut width = 0usize;
+        let mut index = 0usize;
+
+        while index < bytes.len() {
+            let byte = bytes[index];
+
+            if byte == 0x1b {
+                assert_eq!(
+                    bytes.get(index + 1),
+                    Some(&b'['),
+                    "ANSI asset {path} line {line} contains unsupported escape sequence"
+                );
+                index += 2;
+                while index < bytes.len() {
+                    let final_byte = bytes[index];
+                    index += 1;
+                    if (0x40..=0x7e).contains(&final_byte) {
+                        break;
+                    }
+                }
+                continue;
+            }
+
+            match byte {
+                b'\r' => {}
+                b'\n' => {
+                    line += 1;
+                    width = 0;
+                }
+                0x00..=0x1f | 0x7f => {
+                    panic!(
+                        "ANSI asset {path} line {line} contains unsafe control byte 0x{byte:02x}"
+                    );
+                }
+                _ => {
+                    width += 1;
+                    assert!(
+                        width <= max_width,
+                        "ANSI asset {path} line {line} is wider than {max_width} safe columns"
+                    );
+                }
+            }
+
+            index += 1;
+        }
+    }
+
+    fn assert_default_menu_asset_contains_items(asset: &[u8], items: &[MenuItemConfig]) {
+        let asset = String::from_utf8_lossy(asset);
         for item in items {
             assert!(
                 asset.contains(&format!("[{}]", item.key)) || asset.contains(&item.key),
