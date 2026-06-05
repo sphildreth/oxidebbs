@@ -146,36 +146,42 @@ const zmodemSentry = new Zmodem.Sentry({
     }
 
     session.on('session_end', () => {
-      terminal.writeln('\\r\\nZMODEM session ended');
+      terminal.writeln('\r\nZMODEM session ended');
     });
 
     if (session.type === 'receive') {
       session.on('offer', (offer) => {
         const details = offer.get_details();
         const filename = details?.name || '<unknown>';
-        terminal.writeln(`\\r\\nAccepting ZMODEM receive: ${filename}`);
-        offer.on('input', () => {});
-        offer.accept({ on_input: 'spool_array' })
+        const chunks = [];
+        terminal.writeln(`\r\nAccepting ZMODEM receive: ${filename}`);
+        offer.accept({
+          on_input: (payload) => {
+            chunks.push(Uint8Array.from(payload));
+          },
+        })
           .then((payloads) => {
-            const chunks = Array.isArray(payloads)
+            const receivedChunks = chunks.length > 0
+              ? chunks
+              : Array.isArray(payloads)
               ? payloads
               : [
                   payloads instanceof Uint8Array
                     ? payloads
                     : new TextEncoder().encode(String(payloads || '')),
                 ];
-            if (chunks.length === 0) {
+            if (receivedChunks.length === 0) {
               return;
             }
-            Zmodem.Browser.save_to_disk(chunks, details.name);
+            Zmodem.Browser.save_to_disk(receivedChunks, details.name);
           })
-          .catch(() => {
-            // If the transfer fails, keep terminal readable.
+          .catch((error) => {
+            terminal.writeln(`\r\nZMODEM receive failed: ${error?.message || error || 'unknown error'}`);
           });
       });
 
-      session.start().catch(() => {
-        terminal.writeln('\\r\\nZMODEM receive failed');
+      session.start().catch((error) => {
+        terminal.writeln(`\r\nZMODEM receive failed: ${error?.message || error || 'unknown error'}`);
       });
       return;
     }
@@ -200,11 +206,11 @@ const zmodemSentry = new Zmodem.Sentry({
       });
     };
 
-    terminal.writeln('\\r\\nZMODEM upload requested, waiting for file picker...');
+    terminal.writeln('\r\nZMODEM upload requested, waiting for file picker...');
     pickFiles()
       .then((files) => {
         if (files.length === 0) {
-          terminal.writeln('\\r\\nZMODEM upload cancelled');
+          terminal.writeln('\r\nZMODEM upload cancelled');
           return;
         }
         return Zmodem.Browser.send_files(session, files);
@@ -233,15 +239,19 @@ socket.addEventListener('open', () => {
 
 socket.addEventListener('message', async (event) => {
   const bytes = await socketBytesToArray(event.data);
-  zmodemSentry.consume(bytes);
+  try {
+    zmodemSentry.consume(bytes);
+  } catch (error) {
+    terminal.writeln(`\r\nZMODEM protocol error: ${error?.message || error || 'unknown error'}`);
+  }
 });
 
 socket.addEventListener('close', () => {
-  terminal.writeln('\\r\\nDisconnected');
+  terminal.writeln('\r\nDisconnected');
 });
 
 socket.addEventListener('error', () => {
-  terminal.writeln('\\r\\nConnection error');
+  terminal.writeln('\r\nConnection error');
 });
 
 terminal.onData((data) => {

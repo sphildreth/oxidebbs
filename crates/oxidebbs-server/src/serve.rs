@@ -2732,6 +2732,13 @@ async fn run_file_download<T: Transport>(
         ),
     )
     .await?;
+    if protocol == TransferProtocol::XmodemCrc {
+        send_text(
+            transport,
+            "Start XMODEM-CRC receive in your terminal now.\r\n",
+        )
+        .await?;
+    }
 
     let started_at = current_timestamp(db)?;
     let started = Instant::now();

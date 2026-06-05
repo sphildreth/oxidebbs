@@ -311,25 +311,37 @@ pub fn encode_binary_header(header: ZmodemHeader) -> Vec<u8> {
     payload.push(header.kind as u8);
     payload.extend_from_slice(&header.flags);
     let crc = crc16_xmodem(&payload);
+    payload.extend_from_slice(&crc.to_be_bytes());
 
     let mut frame = Vec::with_capacity(10);
     frame.extend_from_slice(&[ZPAD, ZDLE, ZBIN]);
-    frame.extend_from_slice(&payload);
-    frame.extend_from_slice(&crc.to_be_bytes());
+    frame.extend_from_slice(&zdle_escape(&payload, true));
     frame
 }
 
 pub fn decode_binary_header(frame: &[u8]) -> Result<ZmodemHeader, TransferError> {
-    if frame.len() != 10 || frame[..3] != [ZPAD, ZDLE, ZBIN] {
+    if frame.len() < 10 || frame[..3] != [ZPAD, ZDLE, ZBIN] {
         return Err(TransferError::ProtocolError);
     }
-    let payload = &frame[3..8];
-    let received_crc = u16::from_be_bytes([frame[8], frame[9]]);
-    if crc16_xmodem(payload) != received_crc {
+    decode_binary_header_payload(&zdle_unescape(&frame[3..])?)
+}
+
+fn decode_binary_header_payload(payload: &[u8]) -> Result<ZmodemHeader, TransferError> {
+    if payload.len() != 7 {
         return Err(TransferError::ProtocolError);
     }
-    let kind = ZmodemFrameKind::try_from(payload[0])?;
-    let flags = [payload[1], payload[2], payload[3], payload[4]];
+    let header_payload = &payload[..5];
+    let received_crc = u16::from_be_bytes([payload[5], payload[6]]);
+    if crc16_xmodem(header_payload) != received_crc {
+        return Err(TransferError::ProtocolError);
+    }
+    let kind = ZmodemFrameKind::try_from(header_payload[0])?;
+    let flags = [
+        header_payload[1],
+        header_payload[2],
+        header_payload[3],
+        header_payload[4],
+    ];
     Ok(ZmodemHeader { kind, flags })
 }
 
@@ -339,25 +351,37 @@ pub fn encode_binary32_header(header: ZmodemHeader) -> Vec<u8> {
     payload.push(header.kind as u8);
     payload.extend_from_slice(&header.flags);
     let crc = crc32_iso_hdlc(&payload);
+    payload.extend_from_slice(&crc.to_le_bytes());
 
     let mut frame = Vec::with_capacity(12);
     frame.extend_from_slice(&[ZPAD, ZDLE, ZBIN32]);
-    frame.extend_from_slice(&payload);
-    frame.extend_from_slice(&crc.to_le_bytes());
+    frame.extend_from_slice(&zdle_escape(&payload, true));
     frame
 }
 
 pub fn decode_binary32_header(frame: &[u8]) -> Result<ZmodemHeader, TransferError> {
-    if frame.len() != 12 || frame[..3] != [ZPAD, ZDLE, ZBIN32] {
+    if frame.len() < 12 || frame[..3] != [ZPAD, ZDLE, ZBIN32] {
         return Err(TransferError::ProtocolError);
     }
-    let payload = &frame[3..8];
-    let received_crc = u32::from_le_bytes([frame[8], frame[9], frame[10], frame[11]]);
-    if crc32_iso_hdlc(payload) != received_crc {
+    decode_binary32_header_payload(&zdle_unescape(&frame[3..])?)
+}
+
+fn decode_binary32_header_payload(payload: &[u8]) -> Result<ZmodemHeader, TransferError> {
+    if payload.len() != 9 {
         return Err(TransferError::ProtocolError);
     }
-    let kind = ZmodemFrameKind::try_from(payload[0])?;
-    let flags = [payload[1], payload[2], payload[3], payload[4]];
+    let header_payload = &payload[..5];
+    let received_crc = u32::from_le_bytes([payload[5], payload[6], payload[7], payload[8]]);
+    if crc32_iso_hdlc(header_payload) != received_crc {
+        return Err(TransferError::ProtocolError);
+    }
+    let kind = ZmodemFrameKind::try_from(header_payload[0])?;
+    let flags = [
+        header_payload[1],
+        header_payload[2],
+        header_payload[3],
+        header_payload[4],
+    ];
     Ok(ZmodemHeader { kind, flags })
 }
 
@@ -379,15 +403,24 @@ pub fn encode_hex_header(header: ZmodemHeader) -> Vec<u8> {
 }
 
 pub fn decode_hex_header(frame: &[u8]) -> Result<ZmodemHeader, TransferError> {
-    if frame.len() < 20
-        || frame[0] != ZPAD
-        || frame[1] != ZPAD
-        || frame[2] != ZDLE
-        || frame[3] != ZHEX
+    let hex_start = if frame.len() >= 4
+        && frame[0] == ZPAD
+        && frame[1] == ZPAD
+        && frame[2] == ZDLE
+        && frame[3] == ZHEX
     {
+        4
+    } else if frame.len() >= 3 && frame[0] == ZPAD && frame[1] == ZDLE && frame[2] == ZHEX {
+        3
+    } else {
+        return Err(TransferError::ProtocolError);
+    };
+
+    if frame.len() < hex_start + 14 {
         return Err(TransferError::ProtocolError);
     }
-    let hex_str = std::str::from_utf8(&frame[4..18]).map_err(|_| TransferError::ProtocolError)?;
+    let hex_str = std::str::from_utf8(&frame[hex_start..hex_start + 14])
+        .map_err(|_| TransferError::ProtocolError)?;
     let mut payload = Vec::with_capacity(7);
     for i in (0..14).step_by(2) {
         let byte =
@@ -734,7 +767,7 @@ async fn send_zmodem_payload<T: ByteTransport + ?Sized>(
                 FrameEnd::Zcrce
             } else if bytes_since_ack >= ACK_INTERVAL_BYTES {
                 bytes_since_ack = 0;
-                FrameEnd::Zcrcw
+                FrameEnd::Zcrcq
             } else {
                 FrameEnd::Zcrcg
             };
@@ -746,7 +779,7 @@ async fn send_zmodem_payload<T: ByteTransport + ?Sized>(
                 .write_all(&encode_data_subpacket(&subpacket, true))
                 .await?;
             transport.flush().await?;
-            if frame_end == FrameEnd::Zcrcw {
+            if frame_end == FrameEnd::Zcrcq || frame_end == FrameEnd::Zcrcw {
                 match read_required_header(transport).await? {
                     header if header.kind == ZmodemFrameKind::Zack => {}
                     header if header.kind == ZmodemFrameKind::Zrpos => {
@@ -950,14 +983,12 @@ async fn read_header<T: ByteTransport + ?Sized>(
 
     match encoding {
         ZBIN => {
-            let mut rest = read_raw_exact(transport, 7, timeout_secs).await?;
-            frame.append(&mut rest);
-            decode_binary_header(&frame).map(Some)
+            let payload = read_decoded_exact(transport, 7, timeout_secs).await?;
+            decode_binary_header_payload(&payload).map(Some)
         }
         ZBIN32 => {
-            let mut rest = read_raw_exact(transport, 9, timeout_secs).await?;
-            frame.append(&mut rest);
-            decode_binary32_header(&frame).map(Some)
+            let payload = read_decoded_exact(transport, 9, timeout_secs).await?;
+            decode_binary32_header_payload(&payload).map(Some)
         }
         ZHEX => {
             let mut rest = read_raw_exact(transport, 16, timeout_secs).await?;

@@ -15,6 +15,12 @@ ZMODEM is the primary protocol and supports send, receive, batch protocol
 state, retry via `ZRPOS`, cancel handling, metadata parsing, and CRC-32 data
 subpackets. XMODEM-CRC is the single-file fallback.
 
+ZMODEM downloads are normally auto-detected by BBS-aware terminal clients.
+XMODEM-CRC downloads are not auto-started; after OxideBBS prints the transfer
+start line, the caller must manually start an XMODEM-CRC receive in the terminal
+client. OxideBBS waits up to 60 seconds for the receiver's initial CRC request
+byte.
+
 File area roots are sysop-controlled storage directories. Downloaded files are
 read from the entry storage name under the area root. Caller uploads are
 sanitized to a basename, written under a generated storage name inside the area

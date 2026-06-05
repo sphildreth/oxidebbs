@@ -12,6 +12,8 @@ const CRC_REQUEST: u8 = b'C';
 const CPMEOF: u8 = 0x1A;
 const BLOCK_SIZE: usize = 128;
 const DEFAULT_MAX_RETRIES: u8 = 10;
+const CONTROL_TIMEOUT_SECS: u64 = 1;
+const INITIAL_RECEIVER_TIMEOUT_SECS: u64 = 60;
 
 /// Send bytes to a caller using XMODEM-CRC.
 ///
@@ -96,8 +98,9 @@ async fn wait_for_crc_request<T: ByteTransport + ?Sized>(
     transport: &mut T,
     max_retries: u8,
 ) -> Result<(), TransferError> {
-    for _ in 0..=max_retries {
-        match read_control_byte(transport).await? {
+    let attempts = INITIAL_RECEIVER_TIMEOUT_SECS.max(u64::from(max_retries) + 1);
+    for _ in 0..attempts {
+        match read_control_byte_with_timeout(transport, CONTROL_TIMEOUT_SECS).await? {
             Some(CRC_REQUEST) => return Ok(()),
             Some(CAN) => return Err(TransferError::Canceled),
             Some(_) | None => {}
@@ -230,7 +233,14 @@ async fn read_required_byte<T: ByteTransport + ?Sized>(
 async fn read_control_byte<T: ByteTransport + ?Sized>(
     transport: &mut T,
 ) -> Result<Option<u8>, TransferError> {
-    match transport.read_byte(1).await? {
+    read_control_byte_with_timeout(transport, CONTROL_TIMEOUT_SECS).await
+}
+
+async fn read_control_byte_with_timeout<T: ByteTransport + ?Sized>(
+    transport: &mut T,
+    timeout_secs: u64,
+) -> Result<Option<u8>, TransferError> {
+    match transport.read_byte(timeout_secs).await? {
         TransferRead::Byte(byte) => Ok(Some(byte)),
         TransferRead::TimedOut => Ok(None),
         TransferRead::Closed => Err(TransferError::Transport),
