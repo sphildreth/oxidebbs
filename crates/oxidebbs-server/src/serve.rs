@@ -202,6 +202,14 @@ where
         .cloned()
         .ok_or_else(|| ServeError::Config(format!("missing main menu {main_menu_id:?}")))?;
     let menus = Arc::new(resolved_menus);
+    let caller_resources = caller_resources(
+        Arc::clone(&db),
+        Arc::clone(&shared_config),
+        Arc::clone(&login_menu),
+        Arc::clone(&main_menu),
+        Arc::clone(&menus),
+        Arc::clone(&runtime),
+    );
 
     let control_listener =
         match start_control_listener(&config.paths.runtime, Arc::clone(&runtime)).await {
@@ -247,6 +255,11 @@ where
                 Arc::clone(&shared_config),
                 Arc::clone(&db),
                 Arc::clone(&runtime),
+                if config.web_terminal.enabled {
+                    Some(caller_resources.clone())
+                } else {
+                    None
+                },
             )
             .await?,
         )
@@ -276,10 +289,8 @@ where
         start_serial_callers(
             Arc::clone(&shared_config),
             Arc::clone(&db),
-            Arc::clone(&login_menu),
-            Arc::clone(&main_menu),
-            Arc::clone(&menus),
             Arc::clone(&runtime),
+            caller_resources.clone(),
         )?
     } else {
         Vec::new()
@@ -331,17 +342,10 @@ where
                             format!("node {} assigned to {}", allocation.node_number, peer.address),
                             Some(runtime.as_ref()),
                         );
-                        let resources = CallerResources {
-                            db: Arc::clone(&db),
-                            config: Arc::clone(&shared_config),
-                            login_menu: Arc::clone(&login_menu),
-                            main_menu: Arc::clone(&main_menu),
-                            menus: Arc::clone(&menus),
-                            runtime: Arc::clone(&runtime),
-                        };
-
+                        let resources = caller_resources.clone();
                         tokio::spawn(async move {
-                            if let Err(error) = handle_caller(allocation, stream, peer, resources).await {
+                            if let Err(error) = handle_caller(allocation, stream, peer, resources).await
+                            {
                                 warn!("caller session ended with error: {error}");
                             }
                         });
@@ -451,11 +455,9 @@ async fn reject_connection(mut stream: TcpStream) -> ServeResult<()> {
 
 fn start_serial_callers(
     config: Arc<OxideConfig>,
-    db: Arc<OxideDb>,
-    login_menu: Arc<Menu>,
-    main_menu: Arc<Menu>,
-    menus: Arc<HashMap<String, Arc<Menu>>>,
+    _db: Arc<OxideDb>,
     runtime: Arc<ServerRuntime>,
+    resources: CallerResources,
 ) -> ServeResult<Vec<tokio::task::JoinHandle<()>>> {
     let mut handles = Vec::new();
     for device in &config.serial.devices {
@@ -475,24 +477,16 @@ fn start_serial_callers(
             ip: None,
             port: 0,
         };
-        let resources = CallerResources {
-            db: Arc::clone(&db),
-            config: Arc::clone(&config),
-            login_menu: Arc::clone(&login_menu),
-            main_menu: Arc::clone(&main_menu),
-            menus: Arc::clone(&menus),
-            runtime: Arc::clone(&runtime),
-        };
         info!(
             node = %allocation.node_number,
             device = %device.name,
             path = %device.path,
             "serial caller device opened"
         );
+        let resources = resources.clone();
         handles.push(tokio::spawn(async move {
             if let Err(error) =
-                handle_caller_transport(allocation, transport, "serial", false, peer, resources)
-                    .await
+                handle_raw_caller_transport(allocation, transport, "serial", peer, resources).await
             {
                 warn!("serial caller session ended with error: {error}");
             }
@@ -562,13 +556,38 @@ fn start_stale_node_sweeper(
 }
 
 #[derive(Clone)]
-struct CallerResources {
+pub(crate) struct CallerResources {
     db: Arc<OxideDb>,
     config: Arc<OxideConfig>,
     login_menu: Arc<Menu>,
     main_menu: Arc<Menu>,
     menus: Arc<HashMap<String, Arc<Menu>>>,
     runtime: Arc<ServerRuntime>,
+}
+
+#[derive(Clone)]
+pub(crate) struct CallerPeer {
+    pub(crate) address: String,
+    pub(crate) ip: Option<String>,
+    pub(crate) port: i64,
+}
+
+pub(crate) fn caller_resources(
+    db: Arc<OxideDb>,
+    config: Arc<OxideConfig>,
+    login_menu: Arc<Menu>,
+    main_menu: Arc<Menu>,
+    menus: Arc<HashMap<String, Arc<Menu>>>,
+    runtime: Arc<ServerRuntime>,
+) -> CallerResources {
+    CallerResources {
+        db,
+        config,
+        login_menu,
+        main_menu,
+        menus,
+        runtime,
+    }
 }
 
 async fn handle_caller(
@@ -579,6 +598,24 @@ async fn handle_caller(
 ) -> ServeResult<()> {
     let transport = TcpTransport::new(stream);
     handle_caller_transport(allocation, transport, "telnet", true, peer, resources).await
+}
+
+pub(crate) async fn handle_raw_caller_transport<T: Transport>(
+    allocation: NodeAllocation,
+    transport: T,
+    transport_name: &'static str,
+    peer: CallerPeer,
+    resources: CallerResources,
+) -> ServeResult<()> {
+    handle_caller_transport(
+        allocation,
+        transport,
+        transport_name,
+        false,
+        peer,
+        resources,
+    )
+    .await
 }
 
 async fn handle_caller_transport<T: Transport>(
@@ -4124,12 +4161,6 @@ impl InputSession {
             ..Self::default()
         }
     }
-}
-
-struct CallerPeer {
-    address: String,
-    ip: Option<String>,
-    port: i64,
 }
 
 fn resolve_submenu(menus: &HashMap<String, Arc<Menu>>, menu_id: &str) -> Option<Arc<Menu>> {

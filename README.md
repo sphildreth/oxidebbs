@@ -87,6 +87,13 @@ terminal profile; this is not a C64-native server port.
   listener with a human-readable root page, `/status`, doctor-backed `/health`,
   `/healthz`, `/healtz`, sysop-authenticated read-only JSON APIs, CSRF/replay
   protections, origin checks, rate limits, and read-only mutation blocking.
+- 🌐 **Browser Caller Terminal** - Optional `/terminal` endpoint on the same listener
+  as `[admin_web]` that opens a full-browser CP437 terminal connected to a normal
+  caller session via `/terminal/ws`, then prompts for the same BBS login menu flow as
+  telnet callers.
+- ⚡ **Browser ZMODEM Transfer** - `zmodem.js` is available on `/terminal/zmodem.js`
+  and `/terminal` routes upload/download bytes through the existing caller transfer
+  engine without changing transport protocol.
 - 📝 **Operational Logs And Audit Trail** - Configurable text or JSON logs,
   rotation, monitoring web activity lines, audit retention, startup/shutdown
   events, door events, auth events, and sysop action records.
@@ -224,6 +231,16 @@ monitoring-friendly health checks. `/status` is public only when
 only; use a local reverse proxy such as Caddy for HTTPS/TLS termination. Do
 not connect directly with `https://127.0.0.1:8080`; terminate HTTPS at the
 proxy and forward plain HTTP to OxideBBS.
+
+If `[web_terminal].enabled = true` (default), the same listener also serves:
+
+- `GET /terminal` - full-browser caller terminal.
+- `GET /terminal/ws` - websocket byte stream.
+- `GET /terminal/zmodem.js` - browser-side zmodem helper.
+
+The browser terminal uses the same login, menu flow, sessions, node allocation,
+and disconnect handling as telnet/raw callers. ZMODEM upload/download flows use
+the same transfer stack through the websocket stream.
 
 ```bash
 curl http://127.0.0.1:8080/

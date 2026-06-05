@@ -49,6 +49,22 @@ re-opening scope decisions.
 - [ ] Persist manual terminal profile selection in user/account settings once
   the user schema has a terminal preference field.
 
+## Web Caller Terminal
+
+- [x] Add `[web_terminal].enabled` config with default `true`.
+- [x] Mount `GET /terminal` and `GET /terminal/ws` on the existing `[admin_web]`
+  listener when enabled.
+- [x] Add websocket transport wrapper with binary frame input/output and
+  close/error handling.
+- [x] Route browser websocket callers through existing raw caller loop with
+  transport name `"websocket"`.
+- [x] Add full-viewport terminal frontend with CP437-capable xterm.js UI.
+- [x] Add `/terminal/zmodem.js` static endpoint and wire browser xterm frontend
+  into `Zmodem.Sentry`.
+- [x] Add caller session tracking test assertions for websocket transport rows.
+- [x] Add browser-side frontend automated tests for viewport fit and websocket I/O.
+- [x] Add browser-side ZMODEM tests and transfer-path coverage.
+
 ## v1.1.0 Release Readiness
 
 - [x] Bump all OxideBBS Rust workspace crate versions to `1.1.0`.

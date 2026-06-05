@@ -1592,6 +1592,7 @@ mod tests {
             serial: SerialConfig::default(),
             file_transfers: FileTransfersConfig::default(),
             admin_web: AdminWebConfig::default(),
+            web_terminal: crate::config::WebTerminalConfig::default(),
         }
     }
 

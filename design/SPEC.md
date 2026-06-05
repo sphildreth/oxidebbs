@@ -516,6 +516,22 @@ the control socket is reachable.
 Remote callers must never see Ratatui output; Ratatui remains local sysop/admin
 UI only.
 
+Web browser callers use an optional raw terminal surface exposed from the same
+`[admin_web]` listener:
+
+- `GET /terminal` serves a full-browser caller terminal page.
+- `GET /terminal/ws` carries raw websocket bytes to/from the same caller session
+  transport pipeline used by telnet/raw callers with `telnet_protocol = false`
+  and transport `"websocket"`.
+- `GET /terminal/zmodem.js` serves browser-side zmodem transfer support.
+
+`[web_terminal].enabled` controls whether these routes are mounted. It defaults
+to `true`, so `OxideBBS` accepts browser callers on `/terminal` out of the box
+when `[admin_web].enabled = true`. Browser callers authenticate at the normal BBS
+login prompt, then follow the same menu and session flow as any other caller.
+Browser ZMODEM transfers remain on the same websocket stream and the same server
+transfer stack; no XMODEM changes are required for web sessions.
+
 ## 13. FTN/OxideNet boundary
 
 FTN/OxideNet support starts with `oxidebbs-network` protocol-neutral types for

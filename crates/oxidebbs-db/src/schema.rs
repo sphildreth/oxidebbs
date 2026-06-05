@@ -409,7 +409,7 @@ fn create_full_schema(db: &Db) -> decentdb::Result<()> {
             id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
             node_number INT NOT NULL CHECK (node_number > 0),
             user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-            transport TEXT NOT NULL CHECK (transport = 'telnet' OR transport = 'serial'),
+            transport TEXT NOT NULL CHECK (transport = 'telnet' OR transport = 'serial' OR transport = 'websocket'),
             remote_address TEXT NOT NULL DEFAULT '',
             remote_ip IPADDR,
             remote_port INT CHECK (remote_port IS NULL OR (remote_port >= 0 AND remote_port <= 65535)),

@@ -42,6 +42,32 @@ public_status_enabled = true
 read_only = true
 ```
 
+## Browser Caller Terminal
+
+When `[admin_web].enabled = true`, OxideBBS also serves a caller-facing terminal
+surface on the same listener when `[web_terminal].enabled = true` (default):
+
+- `GET /terminal` renders a full-browser terminal with no admin/dashboard chrome.
+- `GET /terminal/ws` upgrades to the raw websocket byte stream used by caller
+  sessions.
+- `GET /terminal/zmodem.js` serves browser-side ZMODEM support.
+
+Browser callers authenticate at the normal BBS login prompt. This is not a sysop
+or administration portal.
+
+Set `[web_terminal].enabled = false` to disable only `/terminal` and
+`/terminal/ws` while leaving `/`, `/health`, `/status`, and API routes untouched.
+
+This terminal milestone uses raw websocket binary input/output and reuses the same
+caller session allocation, tracking, and transport record path as telnet callers.
+
+ZMODEM transfers happen on the same websocket channel through the existing file
+transfer engine.
+
+`/terminal` is plain HTTP over the existing listener; OxideBBS does not serve
+HTTPS/TLS itself. Use a local reverse proxy (for example Caddy, nginx, or
+Traefik) for public HTTPS deployments.
+
 `GET /` returns a small static landing page that confirms the listener is
 running and points operators to the available JSON routes. The monitoring
 listener speaks HTTP directly.

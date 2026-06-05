@@ -8,6 +8,7 @@ mod door_session;
 mod serve;
 mod setup;
 mod sysop_cli;
+mod web_terminal;
 
 #[tokio::main]
 async fn main() {

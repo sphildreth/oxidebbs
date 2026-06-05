@@ -32,6 +32,7 @@ use oxidebbs_sysop::services::database_service::{DatabaseAdminService, DoctorSta
 use crate::admin_status::{AdminStatusPayload, build_admin_status_payload};
 use crate::config::{Argon2Config, OxideConfig};
 use crate::control::ServerRuntime;
+use crate::serve::CallerResources;
 use crate::serve::{ServeError, ServeResult};
 
 const SESSION_COOKIE_NAME: &str = "oxidebbs_session";
@@ -69,6 +70,7 @@ struct AdminWebState {
     config: Arc<OxideConfig>,
     db: Arc<OxideDb>,
     runtime: Arc<ServerRuntime>,
+    caller_resources: Option<CallerResources>,
     rate_limiter: Arc<RwLock<RateLimiter>>,
     sessions: Arc<RwLock<SessionStore>>,
 }
@@ -339,6 +341,7 @@ pub(crate) async fn start_admin_web(
     config: Arc<OxideConfig>,
     db: Arc<OxideDb>,
     runtime: Arc<ServerRuntime>,
+    caller_resources: Option<CallerResources>,
 ) -> ServeResult<tokio::task::JoinHandle<ServeResult<()>>> {
     let bind: SocketAddr = config
         .admin_web
@@ -347,7 +350,7 @@ pub(crate) async fn start_admin_web(
         .map_err(|error| ServeError::Config(format!("invalid admin_web.bind: {error}")))?;
 
     let listener = TcpListener::bind(bind).await?;
-    let app = admin_router(AdminWebState::new(config, db, runtime));
+    let app = admin_router(AdminWebState::new(config, db, runtime, caller_resources));
 
     info!(bind = %listener.local_addr()?, "monitoring web listener started");
     Ok(tokio::spawn(async move {
@@ -361,11 +364,17 @@ pub(crate) async fn start_admin_web(
 }
 
 impl AdminWebState {
-    fn new(config: Arc<OxideConfig>, db: Arc<OxideDb>, runtime: Arc<ServerRuntime>) -> Self {
+    pub(crate) fn new(
+        config: Arc<OxideConfig>,
+        db: Arc<OxideDb>,
+        runtime: Arc<ServerRuntime>,
+        caller_resources: Option<CallerResources>,
+    ) -> Self {
         Self {
             config,
             db,
             runtime,
+            caller_resources,
             rate_limiter: Arc::new(RwLock::new(RateLimiter::default())),
             sessions: Arc::new(RwLock::new(SessionStore::default())),
         }
@@ -374,7 +383,11 @@ impl AdminWebState {
 
 fn admin_router(state: AdminWebState) -> Router {
     let activity_log_state = state.clone();
-    Router::new()
+    let terminal_state = state.caller_resources.clone();
+    let terminal_config = state.config.clone();
+    let terminal_db = state.db.clone();
+    let terminal_runtime = state.runtime.clone();
+    let mut router = Router::new()
         .route("/", get(root_handler))
         .route("/health", get(health_handler))
         .route("/healthz", get(health_handler))
@@ -397,12 +410,24 @@ fn admin_router(state: AdminWebState) -> Router {
             "/api/nodes/{node_number}/disconnect",
             post(api_node_disconnect_handler),
         )
-        .fallback(not_found_handler)
         .with_state(state)
         .layer(middleware::from_fn_with_state(
             activity_log_state,
             log_admin_request,
-        ))
+        ));
+
+    if let Some(caller_resources) = terminal_state {
+        router = router.merge(crate::web_terminal::web_terminal_router(
+            crate::web_terminal::WebTerminalState {
+                config: terminal_config,
+                _db: terminal_db,
+                runtime: terminal_runtime,
+                caller_resources,
+            },
+        ));
+    }
+
+    router.fallback(not_found_handler)
 }
 
 async fn root_handler() -> Html<&'static str> {
@@ -1427,8 +1452,11 @@ fn log_file_summaries(logs_path: &Path) -> Vec<serde_json::Value> {
 mod tests {
     use super::*;
     use axum::body::to_bytes;
+    use axum::http::Request;
+    use oxidebbs_db::OxideDb;
     use oxidebbs_db::{UserRecord, insert_user, list_audit_events};
     use serde_json::Value as JsonValue;
+    use tower::util::ServiceExt;
 
     fn test_state() -> AdminWebState {
         test_state_with_rate_limit(30)
@@ -1458,7 +1486,68 @@ allowed_origins = ["https://admin.example.test"]
             config.telnet.max_connections,
             config.telnet.idle_timeout_seconds,
         ));
-        AdminWebState::new(Arc::new(config), db, runtime)
+        AdminWebState::new(Arc::new(config), db, runtime, None)
+    }
+
+    fn test_state_with_terminal(enabled: bool) -> AdminWebState {
+        let mut config: OxideConfig =
+            toml::from_str(include_str!("../../../config/oxidebbs.example.toml"))
+                .expect("parse example config");
+        config.admin_web.enabled = true;
+        config.admin_web.public_status_enabled = true;
+        config.web_terminal.enabled = enabled;
+        config.database.path = ":memory:".into();
+        let db = Arc::new(OxideDb::open_memory().expect("open memory db"));
+        let runtime = Arc::new(ServerRuntime::new(
+            config.board.name.clone(),
+            config.nodes.count,
+            config.telnet.max_connections,
+            config.telnet.idle_timeout_seconds,
+        ));
+        let caller_resources = if enabled {
+            Some(test_caller_resources(
+                &config,
+                Arc::clone(&db),
+                Arc::clone(&runtime),
+            ))
+        } else {
+            None
+        };
+        AdminWebState::new(Arc::new(config), db, runtime, caller_resources)
+    }
+
+    fn test_caller_resources(
+        config: &OxideConfig,
+        db: Arc<OxideDb>,
+        runtime: Arc<crate::control::ServerRuntime>,
+    ) -> CallerResources {
+        let mut menus = HashMap::new();
+        for menu_id in config.menus.keys() {
+            menus.insert(
+                menu_id.clone(),
+                Arc::new(
+                    config
+                        .core_menu(menu_id)
+                        .expect("configured default menu from example config"),
+                ),
+            );
+        }
+        let login_menu = menus
+            .get(&config.flow.login_menu)
+            .expect("login menu")
+            .clone();
+        let main_menu = menus
+            .get(&config.flow.main_menu)
+            .expect("main menu")
+            .clone();
+        crate::serve::caller_resources(
+            db,
+            Arc::new(config.clone()),
+            login_menu,
+            main_menu,
+            Arc::new(menus),
+            runtime,
+        )
     }
 
     fn seed_user(state: &AdminWebState, alias: &str, password: &str, is_sysop: bool) -> String {
@@ -1989,5 +2078,86 @@ allowed_origins = ["https://admin.example.test"]
             .await
             .expect("same origin");
         assert_eq!(result.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn terminal_routes_available_when_web_terminal_resources_are_present() {
+        let state = test_state_with_terminal(true);
+        let app = admin_router(state);
+
+        let terminal_request = Request::builder()
+            .uri("/terminal")
+            .body(axum::body::Body::empty())
+            .expect("terminal request");
+        let terminal_response = app
+            .clone()
+            .oneshot(terminal_request)
+            .await
+            .expect("terminal response");
+        assert_eq!(terminal_response.status(), StatusCode::OK);
+        let terminal_body = to_bytes(terminal_response.into_body(), usize::MAX)
+            .await
+            .expect("terminal body");
+        let terminal_body = String::from_utf8(terminal_body.to_vec()).expect("terminal html");
+        assert!(terminal_body.contains("id=\"terminal\""));
+
+        let ws_request = Request::builder()
+            .uri("/terminal/ws")
+            .body(axum::body::Body::empty())
+            .expect("terminal ws request");
+        let ws_response = app
+            .clone()
+            .oneshot(ws_request)
+            .await
+            .expect("terminal ws response");
+        assert_ne!(ws_response.status(), StatusCode::NOT_FOUND);
+
+        let zmodem_request = Request::builder()
+            .uri("/terminal/zmodem.js")
+            .body(axum::body::Body::empty())
+            .expect("terminal zmodem request");
+        let zmodem_response = app
+            .oneshot(zmodem_request)
+            .await
+            .expect("terminal zmodem response");
+        assert_ne!(zmodem_response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn terminal_routes_disabled_without_web_terminal_resources() {
+        let state = test_state_with_terminal(false);
+        let app = admin_router(state);
+
+        let terminal_request = Request::builder()
+            .uri("/terminal")
+            .body(axum::body::Body::empty())
+            .expect("terminal request");
+        let terminal_response = app
+            .clone()
+            .oneshot(terminal_request)
+            .await
+            .expect("terminal response");
+        assert_eq!(terminal_response.status(), StatusCode::NOT_FOUND);
+
+        let ws_request = Request::builder()
+            .uri("/terminal/ws")
+            .body(axum::body::Body::empty())
+            .expect("terminal ws request");
+        let ws_response = app
+            .clone()
+            .oneshot(ws_request)
+            .await
+            .expect("terminal ws response");
+        assert_eq!(ws_response.status(), StatusCode::NOT_FOUND);
+
+        let zmodem_request = Request::builder()
+            .uri("/terminal/zmodem.js")
+            .body(axum::body::Body::empty())
+            .expect("terminal zmodem request");
+        let zmodem_response = app
+            .oneshot(zmodem_request)
+            .await
+            .expect("terminal zmodem response");
+        assert_eq!(zmodem_response.status(), StatusCode::NOT_FOUND);
     }
 }

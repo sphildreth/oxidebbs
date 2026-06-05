@@ -72,6 +72,8 @@ pub struct OxideConfig {
     pub file_transfers: FileTransfersConfig,
     #[serde(default)]
     pub admin_web: AdminWebConfig,
+    #[serde(default)]
+    pub web_terminal: WebTerminalConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -460,6 +462,13 @@ pub struct FileTransfersConfig {
     pub enabled: bool,
     #[serde(default = "default_file_transfers_max_upload_bytes")]
     pub max_upload_bytes: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WebTerminalConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1767,6 +1776,14 @@ impl Default for AdminWebConfig {
     }
 }
 
+impl Default for WebTerminalConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_true(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1889,6 +1906,7 @@ name = "Minimal"
         assert!(config.network.links.is_empty());
         assert!(!config.ftn.enabled);
         assert!(!config.admin_web.enabled);
+        assert!(config.web_terminal.enabled);
         assert_eq!(config.admin_web.bind, "127.0.0.1:8080");
         assert!(!config.admin_web.public_status_enabled);
         assert!(config.admin_web.require_tls);
@@ -2018,6 +2036,29 @@ enabled = false
         assert_eq!(config.admin_web.csrf_token_ttl_seconds, 900);
         assert_eq!(config.admin_web.replay_window_seconds, 300);
         assert_eq!(config.admin_web.rate_limit_per_minute, 30);
+        assert!(config.web_terminal.enabled);
+    }
+
+    #[test]
+    fn defaults_web_terminal_config_to_enabled() {
+        let toml = r#"
+[board]
+name = "Web terminal default"
+"#;
+        let config: OxideConfig = toml::from_str(toml).expect("parse minimal config");
+        assert!(config.web_terminal.enabled);
+    }
+
+    #[test]
+    fn web_terminal_can_be_disabled() {
+        let mut config: OxideConfig =
+            toml::from_str(include_str!("../../../config/oxidebbs.example.toml"))
+                .expect("load example config");
+        config.web_terminal.enabled = false;
+        assert!(!config.web_terminal.enabled);
+        config
+            .validate()
+            .expect("valid config with web terminal disabled");
     }
 
     #[test]

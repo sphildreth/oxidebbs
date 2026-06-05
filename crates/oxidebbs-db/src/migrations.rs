@@ -21,6 +21,7 @@ pub fn migrate_to_current(db: &Db) -> decentdb::Result<()> {
             6 => migrate_6_to_7(db)?,
             7 => migrate_7_to_8(db)?,
             8 => migrate_8_to_9(db)?,
+            9 => migrate_9_to_10(db)?,
             unknown => {
                 return Err(DbError::sql(format!(
                     "Unsupported migration source schema version {unknown}; expected {SCHEMA_VERSION} or older known versions"
@@ -203,6 +204,60 @@ fn rebuild_sessions_for_v9(db: &Db) -> decentdb::Result<()> {
         FROM oxidebbs_schema8_sessions;
 
         ALTER TABLE sessions_v9 RENAME TO sessions;
+
+        CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions (user_id);
+        CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions (started_at);",
+    )?;
+    Ok(())
+}
+
+fn migrate_9_to_10(db: &Db) -> decentdb::Result<()> {
+    match existing_schema_version(db)? {
+        Some(9) => {
+            run_migration_transaction(db, || {
+                rebuild_sessions_for_v10(db)?;
+                set_schema_version(db, 10)
+            })?;
+            Ok(())
+        }
+        Some(other) => Err(DbError::sql(format!(
+            "Cannot apply migration 9 -> 10 from schema version {other}"
+        ))),
+        None => Err(DbError::sql(
+            "Cannot apply migration 9 -> 10 because schema_version marker is missing",
+        )),
+    }
+}
+
+fn rebuild_sessions_for_v10(db: &Db) -> decentdb::Result<()> {
+    db.execute_batch(
+        "ALTER TABLE sessions RENAME TO oxidebbs_schema9_sessions;
+
+        DROP INDEX IF EXISTS idx_sessions_user_id;
+        DROP INDEX IF EXISTS idx_sessions_started_at;
+
+        CREATE TABLE sessions_v10 (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            node_number INT NOT NULL CHECK (node_number > 0),
+            user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+            transport TEXT NOT NULL CHECK (transport = 'telnet' OR transport = 'serial' OR transport = 'websocket'),
+            remote_address TEXT NOT NULL DEFAULT '',
+            remote_ip IPADDR,
+            remote_port INT CHECK (remote_port IS NULL OR (remote_port >= 0 AND remote_port <= 65535)),
+            started_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            ended_at TIMESTAMPTZ,
+            disconnect_reason TEXT
+        );
+
+        INSERT INTO sessions_v10 (
+            id, node_number, user_id, transport, remote_address, remote_ip,
+            remote_port, started_at, ended_at, disconnect_reason
+        )
+        SELECT id, node_number, user_id, transport, remote_address, remote_ip,
+               remote_port, started_at, ended_at, disconnect_reason
+        FROM oxidebbs_schema9_sessions;
+
+        ALTER TABLE sessions_v10 RENAME TO sessions;
 
         CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions (user_id);
         CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions (started_at);",
@@ -1518,6 +1573,9 @@ mod tests {
 
         migrate_8_to_9(&db).expect("apply migration 8->9");
         assert_eq!(schema::schema_version(&db).expect("schema after 8->9"), 9);
+
+        migrate_9_to_10(&db).expect("apply migration 9->10");
+        assert_eq!(schema::schema_version(&db).expect("schema after 9->10"), 10);
 
         assert_eq!(
             schema::schema_version(&db).expect("schema version"),
