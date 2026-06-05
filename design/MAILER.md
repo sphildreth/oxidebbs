@@ -343,79 +343,67 @@ Rules:
 - `bind` must be parsed as a socket address. Public exposure is an operator
   decision and must be documented with security warnings.
 
-P11 or P13 must add network spool path settings. If omitted, defaults are
-derived from `paths.runtime`:
+The implemented v1.2 spool layout is derived from `paths.runtime` and the
+network profile key. There is no separate `[network.paths]` configuration
+surface in v1.2:
 
-```toml
-[network.paths]
-spool = "./runtime/network"
-inbound = "./runtime/network/inbound"
-temp_inbound = "./runtime/network/temp-inbound"
-outbound = "./runtime/network/outbound"
-archive = "./runtime/network/archive"
-quarantine = "./runtime/network/quarantine"
-nodelist = "./runtime/network/nodelist"
+```text
+runtime/network/<profile-key>/
+  inbound/drop/
+  inbound/archive/
+  inbound/quarantine/
+  temp-inbound/
+  outbound/<link-key>/ready/
+  outbound/<link-key>/bundled/
 ```
 
 Rules:
 
 - Paths may be relative to the process working directory, matching existing
   OxideBBS path behavior.
-- Startup must create missing spool directories when setup/runtime initialization
-  owns the data directory.
-- Startup must fail with an actionable error if a required enabled network path
-  exists but is not a directory or is not writable.
-- File paths stored in `network_packets.filename` must be relative to
-  `network.paths.spool`, not absolute host paths.
+- Commands that write spool content create their required profile-scoped
+  directories before writing.
+- Startup and command execution must fail with an actionable error if a
+  required enabled network path exists but is not a directory or is not
+  writable.
+- File paths stored in `network_packets.filename` are the filesystem path used
+  by the scanner, tosser, or AreaFix writer for that packet.
 - Caller-facing errors must not expose absolute host paths.
 
 ## Spool Layout
 
-The implementation must use this logical layout under `network.paths.spool`:
+The implementation uses this logical layout under
+`paths.runtime/network/<profile-key>`:
 
 ```text
 network/
-  inbound/
-    drop/
-    <network-key>/
+  <profile-key>/
+    inbound/
+      drop/
+      archive/
+      quarantine/
+    temp-inbound/
+    outbound/
       <link-key>/
-  temp-inbound/
-    <session-id>/
-  outbound/
-    <link-key>/
-      ready/
-      busy/
-      sent/
-      hold/
-      temp/
-  archive/
-    inbound/
-    outbound/
-  quarantine/
-    inbound/
-    outbound/
-  nodelist/
+        ready/
+        bundled/
+    nodelist/
 ```
 
 Directory meaning:
 
 - `inbound/drop`: operator and external-mailer drop point. The tosser resolves
   network and link by packet header and configured passwords.
-- `inbound/<network-key>/<link-key>`: committed files received by the built-in
-  BinkP mailer after link authentication.
-- `temp-inbound/<session-id>`: incomplete BinkP receive files. The tosser must
-  ignore this directory.
+- `inbound/archive`: retention destination for successfully processed inbound
+  files.
+- `inbound/quarantine`: retention destination for unsafe, malformed,
+  unauthorized, or failed inbound files.
+- `temp-inbound`: temporary extraction space for inbound bundles.
 - `outbound/<link-key>/ready`: files available for the BinkP mailer or external
   transport.
-- `outbound/<link-key>/busy`: files claimed by an active mailer session.
-- `outbound/<link-key>/sent`: files successfully acknowledged by the remote.
-- `outbound/<link-key>/hold`: files held by operator action, routing policy, or
-  retry policy.
-- `outbound/<link-key>/temp`: scanner write-in-progress directory. The mailer
-  must ignore this directory.
-- `archive`: retention destination for successfully processed files.
-- `quarantine`: retention destination for unsafe, malformed, unauthorized, or
-  failed files.
+- `outbound/<link-key>/bundled`: bundle output staged by scanner/bundler
+  workflows before ready-file exchange.
+- `nodelist`: profile nodelist import workspace.
 
 All file moves between `temp`, `ready`, `busy`, `sent`, `archive`, and
 `quarantine` must use atomic rename when the source and destination are on the
@@ -437,7 +425,8 @@ Rules:
 - `direction = 'inbound'` for files received from BinkP, dropped by an external
   mailer, or copied manually for tossing.
 - `direction = 'outbound'` for files created by the scanner.
-- `filename` is the path relative to `network.paths.spool`.
+- `filename` is the filesystem path written by the scanner, tosser, mailer, or
+  AreaFix writer for the tracked packet file.
 - `sha256` is computed after the file is complete and before the row is marked
   ready for processing.
 - `status = 'pending'` means the file is ready for the next phase.
@@ -544,8 +533,9 @@ The background scheduler is an `oxidebbs-server` concern.
 
 Rules:
 
-- The scheduler starts only when `network.enabled = true` and
-  `network.binkp.poller_enabled = true`.
+- Manual polling is available when `network.enabled = true`. If a background
+  scheduler is added, it starts only when explicitly enabled by its own runtime
+  configuration.
 - It considers only enabled links whose profiles are also enabled.
 - It uses each link's `poll_schedule_minutes`.
 - It must not hold locks across `.await`.
@@ -722,9 +712,9 @@ this document:
 
 ## Implementation Checklist
 
-- [ ] Add `network.binkp` runtime config.
-- [ ] Add or derive `network.paths` spool config.
-- [ ] Create the spool directories during setup/runtime initialization.
+- [x] Add BinkP listener runtime config and per-link transport policy.
+- [x] Derive profile-scoped network spool paths from `paths.runtime`.
+- [x] Create spool directories from commands/runtime paths before writing.
 - [x] Implement `oxidebbs-binkp`.
 - [x] Keep `oxidebbs-binkp` independent from `oxidebbs-transfer`.
 - [x] Keep BinkP independent from FTN packet parsing.
@@ -739,4 +729,4 @@ this document:
 - [ ] Add CLI status and queue views.
 - [x] Add sysop docs in `docs/ftn/architecture.md`, `docs/ftn/binkp.md`,
   `docs/ftn/configuration.md`, and `docs/ftn/troubleshooting.md`.
-- [ ] Pass `./scripts/dev-check.sh`.
+- [x] Pass `./scripts/dev-check.sh`.

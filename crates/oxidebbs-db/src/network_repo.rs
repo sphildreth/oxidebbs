@@ -1277,13 +1277,29 @@ pub fn find_network_rescan_by_id(
 ///
 /// Only counts packets with terminal status (processed, failed) to avoid
 /// affecting active or quarantined packets that need manual review.
-pub fn count_network_packets_before(db: &Db, cutoff_timestamp: &str) -> decentdb::Result<i64> {
-    let result = db.execute_with_params(
-        "SELECT COUNT(*) FROM network_packets
-         WHERE created_at < CAST($1 AS TIMESTAMPTZ)
-         AND status IN ('processed', 'failed')",
-        &[Value::Text(cutoff_timestamp.to_string())],
-    )?;
+pub fn count_network_packets_before(
+    db: &Db,
+    network_id: Option<&str>,
+    cutoff_timestamp: &str,
+) -> decentdb::Result<i64> {
+    let result = match network_id {
+        Some(network_id) => db.execute_with_params(
+            "SELECT COUNT(*) FROM network_packets
+             WHERE network_id = UUID_PARSE($1)
+             AND created_at < CAST($2 AS TIMESTAMPTZ)
+             AND status IN ('processed', 'failed')",
+            &[
+                Value::Text(network_id.to_string()),
+                Value::Text(cutoff_timestamp.to_string()),
+            ],
+        )?,
+        None => db.execute_with_params(
+            "SELECT COUNT(*) FROM network_packets
+             WHERE created_at < CAST($1 AS TIMESTAMPTZ)
+             AND status IN ('processed', 'failed')",
+            &[Value::Text(cutoff_timestamp.to_string())],
+        )?,
+    };
     Ok(result
         .rows()
         .first()
@@ -1300,55 +1316,73 @@ pub fn count_network_packets_before(db: &Db, cutoff_timestamp: &str) -> decentdb
 /// Only deletes packets with terminal status (processed, failed) to avoid
 /// affecting active or quarantined packets that need manual review.
 /// Returns the number of packets deleted.
-pub fn delete_network_packets_older_than(db: &Db, cutoff_timestamp: &str) -> decentdb::Result<i64> {
-    let before = count_network_packets_before(db, cutoff_timestamp)?;
+pub fn delete_network_packets_older_than(
+    db: &Db,
+    network_id: Option<&str>,
+    cutoff_timestamp: &str,
+) -> decentdb::Result<i64> {
+    let before = count_network_packets_before(db, network_id, cutoff_timestamp)?;
+    let packet_filter = retention_packet_filter(network_id);
+    let params = retention_params(network_id, cutoff_timestamp);
 
     // Delete associated records from leaf tables first.
     db.execute_with_params(
-        "DELETE FROM network_seen_by
+        &format!(
+            "DELETE FROM network_seen_by
          WHERE message_id IN (
              SELECT id FROM network_messages
              WHERE packet_id IN (
                  SELECT id FROM network_packets
                  WHERE created_at < CAST($1 AS TIMESTAMPTZ)
                  AND status IN ('processed', 'failed')
+                 {packet_filter}
              )
-         )",
-        &[Value::Text(cutoff_timestamp.to_string())],
+         )"
+        ),
+        &params,
     )?;
 
     db.execute_with_params(
-        "DELETE FROM network_path
+        &format!(
+            "DELETE FROM network_path
          WHERE message_id IN (
              SELECT id FROM network_messages
              WHERE packet_id IN (
                  SELECT id FROM network_packets
                  WHERE created_at < CAST($1 AS TIMESTAMPTZ)
                  AND status IN ('processed', 'failed')
+                 {packet_filter}
              )
-         )",
-        &[Value::Text(cutoff_timestamp.to_string())],
+         )"
+        ),
+        &params,
     )?;
 
     db.execute_with_params(
-        "DELETE FROM network_messages
+        &format!(
+            "DELETE FROM network_messages
          WHERE packet_id IN (
              SELECT id FROM network_packets
              WHERE created_at < CAST($1 AS TIMESTAMPTZ)
              AND status IN ('processed', 'failed')
-         )",
-        &[Value::Text(cutoff_timestamp.to_string())],
+             {packet_filter}
+         )"
+        ),
+        &params,
     )?;
 
     // Delete the packets themselves
     db.execute_with_params(
-        "DELETE FROM network_packets
+        &format!(
+            "DELETE FROM network_packets
          WHERE created_at < CAST($1 AS TIMESTAMPTZ)
-         AND status IN ('processed', 'failed')",
-        &[Value::Text(cutoff_timestamp.to_string())],
+         AND status IN ('processed', 'failed')
+         {packet_filter}"
+        ),
+        &params,
     )?;
 
-    let after = count_network_packets_before(db, cutoff_timestamp)?;
+    let after = count_network_packets_before(db, network_id, cutoff_timestamp)?;
     Ok(before.saturating_sub(after))
 }
 
@@ -1358,24 +1392,59 @@ pub fn delete_network_packets_older_than(db: &Db, cutoff_timestamp: &str) -> dec
 /// the cutoff timestamp, ordered by creation date (oldest first).
 pub fn list_network_packets_for_retention(
     db: &Db,
+    network_id: Option<&str>,
     cutoff_timestamp: &str,
     limit: i64,
 ) -> decentdb::Result<Vec<NetworkPacketRecord>> {
-    let result = db.execute_with_params(
-        "SELECT UUID_TO_STRING(id), UUID_TO_STRING(network_id), direction, UUID_TO_STRING(link_id),
-                filename, sha256, size_bytes, status, error_message,
-                CAST(received_at AS TEXT), CAST(processed_at AS TEXT), CAST(created_at AS TEXT)
-         FROM network_packets
-         WHERE created_at < CAST($1 AS TIMESTAMPTZ)
-         AND status IN ('processed', 'failed')
-         ORDER BY created_at ASC
-         LIMIT $2",
-        &[
-            Value::Text(cutoff_timestamp.to_string()),
-            Value::Int64(limit),
-        ],
-    )?;
+    let result = match network_id {
+        Some(network_id) => db.execute_with_params(
+            "SELECT UUID_TO_STRING(id), UUID_TO_STRING(network_id), direction, UUID_TO_STRING(link_id),
+                    filename, sha256, size_bytes, status, error_message,
+                    CAST(received_at AS TEXT), CAST(processed_at AS TEXT), CAST(created_at AS TEXT)
+             FROM network_packets
+             WHERE network_id = UUID_PARSE($1)
+             AND created_at < CAST($2 AS TIMESTAMPTZ)
+             AND status IN ('processed', 'failed')
+             ORDER BY created_at ASC
+             LIMIT $3",
+            &[
+                Value::Text(network_id.to_string()),
+                Value::Text(cutoff_timestamp.to_string()),
+                Value::Int64(limit),
+            ],
+        )?,
+        None => db.execute_with_params(
+            "SELECT UUID_TO_STRING(id), UUID_TO_STRING(network_id), direction, UUID_TO_STRING(link_id),
+                    filename, sha256, size_bytes, status, error_message,
+                    CAST(received_at AS TEXT), CAST(processed_at AS TEXT), CAST(created_at AS TEXT)
+             FROM network_packets
+             WHERE created_at < CAST($1 AS TIMESTAMPTZ)
+             AND status IN ('processed', 'failed')
+             ORDER BY created_at ASC
+             LIMIT $2",
+            &[
+                Value::Text(cutoff_timestamp.to_string()),
+                Value::Int64(limit),
+            ],
+        )?,
+    };
     Ok(result.rows().iter().map(network_packet_from_row).collect())
+}
+
+fn retention_packet_filter(network_id: Option<&str>) -> &'static str {
+    if network_id.is_some() {
+        "AND network_id = UUID_PARSE($2)"
+    } else {
+        ""
+    }
+}
+
+fn retention_params(network_id: Option<&str>, cutoff_timestamp: &str) -> Vec<Value> {
+    let mut params = vec![Value::Text(cutoff_timestamp.to_string())];
+    if let Some(network_id) = network_id {
+        params.push(Value::Text(network_id.to_string()));
+    }
+    params
 }
 
 /// Cumulative FTN operations statistics for a network profile.
@@ -1415,34 +1484,32 @@ pub fn get_network_operations_stats(
 
     // Packet stats
     let packet_result = db.execute_with_params(
-        "SELECT status, COUNT(*) as count
+        "SELECT direction, status, COUNT(*) as count
          FROM network_packets
          WHERE network_id = UUID_PARSE($1)
-         GROUP BY status",
+         GROUP BY direction, status",
         &[Value::Text(network_id.to_string())],
     )?;
     for row in packet_result.rows() {
-        if let (Some(Value::Text(status)), Some(Value::Int64(count))) =
-            (row.values().first(), row.values().get(1))
-        {
-            match status.as_str() {
-                "processed" => stats.packets_tossed = *count,
-                "quarantined" => stats.packets_quarantined = *count,
-                _ => {}
+        if let (
+            Some(Value::Text(direction)),
+            Some(Value::Text(status)),
+            Some(Value::Int64(count)),
+        ) = (
+            row.values().first(),
+            row.values().get(1),
+            row.values().get(2),
+        ) {
+            if direction == "inbound" && status == "processed" {
+                stats.packets_tossed += *count;
+            }
+            if direction == "inbound" && status == "quarantined" {
+                stats.packets_quarantined += *count;
+            }
+            if direction == "outbound" {
+                stats.packets_scanned += *count;
             }
         }
-    }
-
-    // Outbound packets count
-    let outbound_result = db.execute_with_params(
-        "SELECT COUNT(*) FROM network_packets
-         WHERE network_id = UUID_PARSE($1) AND direction = 'outbound'",
-        &[Value::Text(network_id.to_string())],
-    )?;
-    if let Some(row) = outbound_result.rows().first()
-        && let Some(Value::Int64(count)) = row.values().first()
-    {
-        stats.packets_scanned = *count;
     }
 
     // Message stats
@@ -2081,6 +2148,81 @@ mod tests {
 
         assert_eq!(seen_by.len(), 1);
         assert_eq!(messages.len(), 1);
+    }
+
+    #[test]
+    fn retention_cleanup_can_be_scoped_to_one_network_profile() {
+        let db = test_db();
+        let primary_profile = profile();
+        let other_profile = NetworkProfileRecord {
+            id: "00000000-0000-4000-8000-100000000020".to_string(),
+            key: "other-ftn".to_string(),
+            name: "Other FTN".to_string(),
+            ..profile()
+        };
+        insert_network_profile(&db, &primary_profile).expect("insert profile");
+        insert_network_profile(&db, &other_profile).expect("insert other profile");
+
+        let mut first_packet = packet(&primary_profile.id, None);
+        first_packet.status = "processed".to_string();
+        first_packet.created_at = "2025-01-01T00:00:00.000000Z".to_string();
+        insert_network_packet(&db, &first_packet).expect("insert first packet");
+
+        let mut other_packet = packet(&other_profile.id, None);
+        other_packet.id = "00000000-0000-4000-8000-100000000021".to_string();
+        other_packet.status = "processed".to_string();
+        other_packet.created_at = "2025-01-01T00:00:00.000000Z".to_string();
+        insert_network_packet(&db, &other_packet).expect("insert other packet");
+
+        let cutoff = "2026-01-01T00:00:00.000000Z";
+        assert_eq!(
+            count_network_packets_before(&db, Some(&primary_profile.id), cutoff)
+                .expect("count scoped"),
+            1
+        );
+        assert_eq!(
+            count_network_packets_before(&db, None, cutoff).expect("count all"),
+            2
+        );
+        let scoped_examples =
+            list_network_packets_for_retention(&db, Some(&primary_profile.id), cutoff, 10)
+                .expect("list scoped");
+        assert_eq!(scoped_examples.len(), 1);
+        assert_eq!(scoped_examples[0].network_id, primary_profile.id);
+
+        assert_eq!(
+            delete_network_packets_older_than(&db, Some(&primary_profile.id), cutoff)
+                .expect("delete scoped"),
+            1
+        );
+
+        let packets = list_network_packets(&db).expect("list packets");
+        assert_eq!(packets.len(), 1);
+        assert_eq!(packets[0].network_id, other_profile.id);
+    }
+
+    #[test]
+    fn operations_stats_keep_inbound_tossed_and_outbound_scanned_separate() {
+        let db = test_db();
+        let profile = profile();
+        insert_network_profile(&db, &profile).expect("insert profile");
+
+        let mut inbound_packet = packet(&profile.id, None);
+        inbound_packet.direction = "inbound".to_string();
+        inbound_packet.status = "processed".to_string();
+        insert_network_packet(&db, &inbound_packet).expect("insert inbound packet");
+
+        let mut outbound_packet = packet(&profile.id, None);
+        outbound_packet.id = "00000000-0000-4000-8000-100000000022".to_string();
+        outbound_packet.direction = "outbound".to_string();
+        outbound_packet.status = "processed".to_string();
+        insert_network_packet(&db, &outbound_packet).expect("insert outbound packet");
+
+        let stats = get_network_operations_stats(&db, &profile.id).expect("stats");
+
+        assert_eq!(stats.packets_tossed, 1);
+        assert_eq!(stats.packets_quarantined, 0);
+        assert_eq!(stats.packets_scanned, 1);
     }
 
     #[test]

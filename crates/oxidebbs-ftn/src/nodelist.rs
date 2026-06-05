@@ -217,7 +217,7 @@ pub fn apply_nodelist_diff_with_options(
 /// Returns `Ok(None)` if no CRC is present, `Ok(Some(crc))` if valid,
 /// or an error if the CRC format is invalid.
 fn parse_header_crc(header: &str) -> Result<Option<u16>, NodelistDiffError> {
-    let Some(crc_part) = header.rsplit(':').next() else {
+    let Some((_, crc_part)) = header.rsplit_once(':') else {
         return Ok(None);
     };
 
@@ -623,6 +623,23 @@ Host,105,Some_Net,Somewhere,Sysop,000-0000,300
         .expect_err("header mismatch should fail");
 
         assert!(matches!(error, NodelistDiffError::HeaderMismatch { .. }));
+    }
+
+    #[test]
+    fn crc_validation_allows_headers_without_crc() {
+        let base = "\
+;A Friday, July 25, 1986 -- Day number 206
+Zone,1,FidoNet,Somewhere,Sysop,000-0000,300
+";
+        let diff = "\
+;A Friday, July 25, 1986 -- Day number 206
+C2
+";
+
+        let updated =
+            apply_nodelist_diff_with_options(base, diff, true).expect("apply diff without CRC");
+
+        assert_eq!(updated, base.trim_end());
     }
 
     #[test]

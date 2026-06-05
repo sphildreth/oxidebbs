@@ -498,7 +498,7 @@ Use as background for:
 
 - Local doors
 - Door server integrations
-- Future BBSLink/DoorParty-style integrations
+- BBSLink/DoorParty-style integrations
 
 ---
 
@@ -507,16 +507,17 @@ Use as background for:
 Remote services are not local DOS doors, but they are useful integration targets
 for OxideBBS provider work.
 
-v1.2 includes local dry-run adapter scaffolding for BBSLink and
-DoorParty-style services in `oxidebbs-door`. Live external connectors,
-credential persistence, and fake-server integration tests remain P5 follow-up
-work.
+v1.2 includes BBSLink and DoorParty-style provider adapters in
+`oxidebbs-door`, including local dry-run validation, TCP/telnet connector
+paths, DecentDB credential-reference storage, and localhost fake-server tests.
+Operators still provide their own provider accounts and secret-reference
+backends; OxideBBS must not store or display raw provider secrets.
 
 ---
 
 ## 13. BBSLink
 
-**Use for:** future remote-door integration target.
+**Use for:** remote-door provider integration target.
 
 Source:
 
@@ -531,9 +532,9 @@ BBSLink is not the same as running DOS doors locally, but it is relevant because
 Recommended OxideBBS usage:
 
 Do not treat BBSLink as part of the v1 local-DOS-door requirement. In v1.2 it is
-a remote door-provider integration target with local dry-run validation
-scaffolding; live network sessions and credential storage remain separate
-implementation work.
+a remote door-provider integration target with local dry-run validation,
+TCP/telnet session bridging, credential-reference persistence, and local
+fake-server coverage.
 
 Possible future abstraction:
 

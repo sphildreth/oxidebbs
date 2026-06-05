@@ -1528,6 +1528,36 @@ allowed_origins = ["https://admin.example.test"]
     }
 
     #[tokio::test]
+    async fn expired_session_cannot_access_authenticated_api() {
+        let state = test_state();
+        seed_user(&state, "Sysop", "secret", true);
+        let (cookie_pair, _) = login_session(&state, "Sysop", "secret").await;
+        let session_id = cookie_pair
+            .split_once('=')
+            .expect("session cookie pair")
+            .1
+            .to_string();
+
+        {
+            let mut sessions = state.sessions.write().await;
+            let session = sessions
+                .sessions
+                .get_mut(&session_id)
+                .expect("stored session");
+            session.last_seen_at =
+                Instant::now() - session_timeout(&state.config) - Duration::from_secs(1);
+        }
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::COOKIE,
+            HeaderValue::from_str(&cookie_pair).expect("cookie header"),
+        );
+        let expired = api_nodes_handler(State(state), headers).await;
+        assert_handler_error(expired, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
     async fn mutation_stub_requires_csrf_replay_and_blocks_read_only() {
         let state = test_state();
         seed_user(&state, "Sysop", "secret", true);
@@ -1585,6 +1615,44 @@ allowed_origins = ["https://admin.example.test"]
             audits
                 .iter()
                 .any(|event| event.event_type == "admin_web_read_only_mutation_blocked")
+        );
+    }
+
+    #[tokio::test]
+    async fn mutation_stub_is_rate_limited_after_valid_security_checks() {
+        let state = test_state_with_rate_limit(2);
+        seed_user(&state, "Sysop", "secret", true);
+        let (cookie_pair, csrf_token) = login_session(&state, "Sysop", "secret").await;
+
+        for (index, expected) in [
+            StatusCode::FORBIDDEN,
+            StatusCode::FORBIDDEN,
+            StatusCode::TOO_MANY_REQUESTS,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut headers = csrf_headers(&cookie_pair, &csrf_token);
+            headers.insert(
+                REPLAY_NONCE_HEADER_NAME,
+                HeaderValue::from_str(&format!("mutation-rate-{index}")).expect("nonce header"),
+            );
+            headers.insert(
+                REPLAY_TIMESTAMP_HEADER_NAME,
+                HeaderValue::from_str(&OffsetDateTime::now_utc().unix_timestamp().to_string())
+                    .expect("timestamp header"),
+            );
+            let response = api_node_disconnect_handler(State(state.clone()), AxumPath(1), headers)
+                .await
+                .expect("mutation response");
+            assert_eq!(response.status(), expected);
+        }
+
+        let audits = list_audit_events(state.db.db(), 10).expect("audit events");
+        assert!(
+            audits
+                .iter()
+                .any(|event| event.event_type == "admin_web_mutation_rate_limited")
         );
     }
 

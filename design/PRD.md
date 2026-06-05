@@ -5,7 +5,7 @@
 OxideBBS is a modern BBS software package built in Rust. It targets sysops who want
 experience of a classic 1990s BBS with modern reliability, clean deployment,
 DecentDB-backed persistence, and first-class support for telnet callers, ANSI/
-CP437 screens, DOS door games, and future FTN-style message networking.
+CP437 screens, DOS door games, and FTN-style message networking.
 
 OxideBBS is software for running a board. It is not itself a single hosted board.
 
@@ -42,7 +42,7 @@ User story: As a C64 or C64 Ultimate user, I want to connect to OxideBBS using
 a native C64 terminal application so that I can use the BBS without needing a
 modern ANSI/80-column terminal.
 
-### Future user: message-network sysop
+### Secondary user: message-network sysop
 
 A sysop who wants FTN/FidoNet-style shared echomail and netmail using OxideBBS and
 possibly OxideNet.
@@ -54,8 +54,8 @@ possibly OxideNet.
 3. Use DecentDB as the only system database.
 4. Treat ANSI/CP437 as a first-class user experience.
 5. Make DOS door launching a core capability.
-6. Leave room for physical modem support without blocking v1.
-7. Leave room for FTN-style message networks without forcing them into v1.
+6. Support disabled-by-default physical modem/serial transport.
+7. Support FTN-style message networks without forcing every board to enable them.
 
 ## 4. v1 requirements
 
@@ -171,12 +171,13 @@ All items in this section have been completed as of the v1.2 release.
 - Message stats
 - Config inspection
 
-## 6. v1.2 candidates (previously v2 candidates)
+## 6. v1.2 shipped scope and post-v1.2 candidates
 
-**Note:** All v1.2 candidates have been implemented as of the v1.2 release.
+**Note:** The v1.2 release implements the former deferred-scope items listed in
+the active release plan.
 
-The following items were previously listed as v2 or future scope. They are now
-scoped into the active v1.2 deferred-scope release per
+The following items were previously listed as v2 or future scope and are now
+shipped in v1.2 per
 [`design/RELEASE_v1_2_PLAN.md`](./RELEASE_v1_2_PLAN.md) and
 [ADR 0018](./adr/0018-v1-2-completes-deferred-scope.md).
 
@@ -186,6 +187,9 @@ scoped into the active v1.2 deferred-scope release per
 - OxideNet network support
 - Web-based read-only status dashboard
 - Caller file-area transfers: ZMODEM primary and XMODEM-CRC fallback
+
+Post-v1.2 candidate:
+
 - Native door API for future Rust-native doors
 
 ## 7. Success criteria

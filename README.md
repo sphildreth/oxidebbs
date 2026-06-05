@@ -292,10 +292,11 @@ update the relevant design docs and ADRs.
 - DecentDB is the only system database.
 - Remote caller UI is ANSI/CP437 byte-oriented, not Unicode-first.
 - Ratatui is used only for the local sysop console, not caller screens.
-- Remote admin hardening and other remaining deferred features are tracked in the v1.2
-  release plan and are not all complete yet.
+- The v1.2 release plan is complete for the planned scope, including serial/modem
+  transport, caller file transfers, remote door providers, FTN, BinkP, OxideNet,
+  remote admin hardening, and release automation.
   See [`design/RELEASE_v1_2_PLAN.md`](design/RELEASE_v1_2_PLAN.md) for the
-  full deferred-scope implementation map.
+  full implementation map.
 - Caller file areas support ZMODEM send/receive as the primary protocol and
   XMODEM-CRC send/receive as the fallback protocol. Transfer history is stored
   in DecentDB, uploads are sanitized and pending sysop review by default, and

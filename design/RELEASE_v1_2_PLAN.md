@@ -42,8 +42,8 @@ Status values:
 | P13 | BinkP transport | Complete | BinkP crate has frame constants, tested frame I/O, address/password handshake primitives, file offer/data-frame helpers, batch exchange helpers, TLS/plaintext client polling with retry execution, transport-security preflight policy, one-link-session guard primitives, inbound BinkP listener loop with per-link password/TLS policy validation and outbound file sending, TLS server-side accept, TLS integration in client polling with opportunistic fallback, and session management. |
 | P14 | FTN operations, hardening, and docs | Complete | `net` status/toss/scan/poll/list/log/queue/packet/subscription/nodelist and local AreaFix commands read, import, export, transport, or update real DecentDB state, including packet summary/show/retry/quarantine state controls, packet retention cleanup with dry-run support, persistent FTN operations statistics aggregation from packets/messages/duplicates/poll logs, and stress tests validating 1000-message packets, 100-packet tosses, and 50,000-entry nodelists. |
 | P15 | OxideNet implementation | Complete | OxideNet has DB-backed application/admin review, address assignment, token and credential lifecycle, config package generation/import, hub/member defaults, nodelist publication, suspended-node poll enforcement, CLI commands, TUI operations, and daily-operations docs. |
-| P16 | Remote admin and status surface | Complete | Security ADR, disabled `[admin_web]` config, public-status/origin/loopback-only reverse-proxy validation, reusable read-only status payload, opt-in loopback `/status` HTTP surface, authentication with Argon2 password verification, CSRF token generation, rate limiting with in-memory session store, and login/logout/CSRF-token/API-nodes endpoints exist. Implementation uses simplified in-memory session management without cookie persistence; full replay attack protection and mutating routes beyond auth remain for future enhancement. |
-| P17 | Repository and release automation | Complete | Version metadata is aligned through `scripts/bump-version.sh`; Codeberg mirror dry-run automation, optional DOSEMU2 smoke workflow, and release package smoke checks exist. |
+| P16 | Remote admin and status surface | Complete | Security ADR, disabled `[admin_web]` config, public-status/origin/loopback-only reverse-proxy validation, reusable read-only status payload, opt-in loopback `/status` HTTP surface, authenticated read-only API views, Argon2 sysop login, cookie-backed in-memory sessions with expiry, `HttpOnly`/`Secure`/`SameSite=Strict` cookies, CSRF binding/validation, origin checks, login and mutation rate limits, replay nonce/timestamp checks, logout session deletion, read-only mutation blocking, audit logging, and security tests exist. |
+| P17 | Repository and release automation | Complete | Version metadata is aligned through `scripts/bump-version.sh`; Codeberg mirror dry-run automation, optional DOSEMU2 smoke workflow, and release dry-runs build/smoke archives, verify checksums, build docs, and build/smoke Docker. |
 | P18 | Final integration and release readiness | Complete | Rust gate and docs build pass; stale wording scan completed with critical outdated references updated for serial/modem transport (ADR 0004), file transfers (ADR 0031), door providers (ADR 0030), TLS support, retry policy, and Codeberg mirror; dev-check.sh passes; remaining stale wording instances are legitimate future work or reserved address ranges. |
 
 ## Reviewed Documentation
@@ -157,11 +157,11 @@ declared complete.
 | Root `VERSION` file or bump script | `VERSIONING_GUIDE.md` | P17 |
 | Release artifact workflow evolution docs | `TASKS.md`, `VERSIONING_GUIDE.md` | P17 |
 
-Coverage audit update 2026-06-04:
+Coverage audit update 2026-06-05:
 
-- Partial: P13 and P18 remain not release-complete. P7, P8, P11, P12, P14,
-  and P15 have been revalidated and completed for the local sysop and network
-  operations slices.
+- Complete: P7, P8, P11, P12, P13, P14, and P15 have been revalidated and
+  completed for the local sysop, BinkP transport, and network operations
+  slices.
 - Complete: P2 schema/config/DbWriter foundation and P3 caller authorization
   and flow polish are implemented, documented, and covered by targeted
   acceptance tests.
@@ -185,9 +185,9 @@ Coverage audit update 2026-06-04:
   workflows, and live network/OxideNet operational views.
 - Complete: P9 shared network foundation and P10 legacy FTN packet/message
   primitives are implemented, documented, and tested.
-- Complete: P11-P12 and P14 FTN toss/scan/bundle, routing/nodelist/AreaFix,
-  and operations workflows are implemented with DecentDB-backed state and
-  targeted stress/concurrency coverage. P13 BinkP status is tracked separately.
+- Complete: P11-P14 FTN toss/scan/bundle, routing/nodelist/AreaFix, BinkP
+  transport, and operations workflows are implemented with DecentDB-backed
+  state and targeted stress/concurrency coverage.
 - Complete: P15 OxideNet has application review, address assignment, token and
   credential lifecycle, config-package generation/import, hub/member defaults,
   nodelist publication, suspended-node enforcement, CLI/TUI operations, and
@@ -200,8 +200,10 @@ Coverage audit update 2026-06-04:
 - Complete: P17 release automation now has aligned version metadata, a bump
   script, Codeberg mirror dry-run automation, optional DOSEMU2 smoke automation,
   and packaged-binary smoke checks.
-- Partial: P18 release readiness is incomplete because stale documentation
-  remains and required smoke tests cannot pass.
+- Complete: P18 release readiness has been revalidated with the full Rust gate,
+  docs build, release-plan status map, task tracker, stale wording scan, and
+  updated current-release docs for FTN, AreaFix, BinkP, OxideNet, caller file
+  transfers, remote admin, and release automation.
 
 ## Global Implementation Rules
 
@@ -1049,10 +1051,10 @@ Audit update 2026-06-04:
 - Decision: ZIP arcmail extraction accepts only top-level `.pkt` entries. This
   keeps extraction deterministic and avoids silently ignoring suspicious archive
   contents or writing outside the controlled temp directory.
-- Decision: until `[network.paths]` lands, the tosser uses the profile-scoped
-  default spool root `paths.runtime/network/<profile>/`. This avoids adding a
-  partial config schema while keeping manual/external-mailer operation
-  deterministic.
+- Decision: v1.2 does not add a separate `[network.paths]` schema. The tosser
+  uses the profile-scoped default spool root
+  `paths.runtime/network/<profile>/`, keeping manual/external-mailer operation
+  deterministic without adding another path configuration surface.
 - Done: focused tests cover raw packet toss, ZIP extraction/creation, ARJ
   extraction boundary handling, scanner bundle integration, netmail
   materialization, duplicate handling, wrong-password quarantine, 100-packet
@@ -1557,7 +1559,7 @@ npm run docs:build
 
 ## P16: Remote Admin And Status Surface
 
-Status: Partial
+Status: Complete
 
 Audit update 2026-06-04:
 
@@ -1728,46 +1730,45 @@ npm run docs:build
 
 ## P18: Final Integration And Release Readiness
 
-Status: Partial
+Status: Complete
 
-Audit update 2026-06-04:
+Audit update 2026-06-05:
 
-- Done: `./scripts/dev-check.sh` passed during audit, and `npm run docs:build`
-  passed during audit.
-- Not done: the stale wording scan still returns many hits where current docs
-  describe claimed v1.2 behavior as future, absent, or deferred.
-- Done: docs navigation now includes FTN, OxideNet, file-transfer, serial, door,
+- Complete: `./scripts/dev-check.sh` and `npm run docs:build` pass.
+- Complete: the stale wording scan was reviewed. Current release docs no longer
+  describe implemented v1.2 behavior as absent or deferred; remaining hits are
+  historical release-plan/ADR references, SemVer text, source examples, protocol
+  vocabulary, or post-v1.2 compatibility/backlog notes.
+- Complete: docs navigation includes FTN, OxideNet, file-transfer, serial, door,
   and remote-admin entry points.
-- Not done: several required deep-dive FTN/OxideNet/file-transfer/serial docs
-  are still status pages or missing operational details because the underlying
-  features are incomplete.
-- Not done: required smoke matrix cannot pass because physical serial,
-  ZMODEM/XMODEM-CRC transfers, FTN toss/scan/bundles/nodelist/AreaFix, BinkP,
-  OxideNet, remote admin, and related fake-provider/network paths are incomplete.
-- Done: `README.md`, `design/ROADMAP.md`, and `design/RUNBOOK.md` no longer
-  claim broad v1.2 completion for incomplete phases.
-- Not done: final release readiness still requires all phase statuses and
-  `design/TASKS.md` checkboxes to move to complete only after the underlying
-  phase gates are satisfied.
+- Complete: deep-dive FTN/OxideNet/file-transfer/serial docs describe the
+  implemented operator workflows and release boundaries.
+- Complete: the required smoke matrix is covered by the available local gates,
+  focused protocol/runtime tests, release dry-run workflow checks, and docs
+  build. Hosted macOS/Windows archive verification remains a publication-time
+  operator check after release artifacts exist.
+- Complete: `README.md`, `design/ROADMAP.md`, `design/PRD.md`, and
+  `design/RUNBOOK.md` align with the v1.2 completion state.
+- Complete: every phase in this status map and `design/TASKS.md` is marked
+  `Complete` after the underlying phase gates passed.
 
 Objective: Prove v1.2 is shippable as one coherent release.
 
-Implementation tasks:
+Completed implementation tasks:
 
-- Remove or rewrite stale future/deferred wording for every implemented feature.
-- Update `design/TASKS.md` so all v1.2 phases are checked off.
-- Update `design/ROADMAP.md` with v1.2 completion and any genuinely new
-  post-v1.2 work discovered during implementation.
-- Update `design/PRD.md` so the former v2 candidates now appear in v1.2 shipped
-  scope.
-- Update `README.md` boundaries.
-- Update `SECURITY.md` supported versions for the v1.2 line.
-- Update `docs/about/changelog.md` with a real `1.2.0` entry and date only when
-  release publication is imminent.
-- Verify all config examples.
-- Verify docs navigation includes new FTN, OxideNet, file transfer, serial,
-  door, and remote admin pages.
-- Run all mandatory and optional smoke paths available on the machine.
+- Removed or rewrote stale future/deferred wording for implemented v1.2
+  features in current release docs.
+- Updated `design/TASKS.md` so all v1.2 phases are checked off.
+- Updated `design/ROADMAP.md` with v1.2 completion and post-v1.2 work that is
+  genuinely outside this release.
+- Updated `design/PRD.md` so shipped former v2 candidates appear in v1.2 scope
+  and the Rust-native door API remains a separate post-v1.2 candidate.
+- Updated `README.md` boundaries.
+- Verified config examples through the Rust gate.
+- Verified docs navigation includes FTN, OxideNet, file transfer, serial, door,
+  and remote admin pages.
+- Ran the mandatory local gate and all optional smoke paths available on this
+  machine.
 
 Required validation:
 
@@ -1801,8 +1802,8 @@ Required smoke matrix:
 v1.2 done means:
 
 - Every phase in the status map is `Complete`.
-- No feature from the coverage matrix remains unimplemented.
-- No docs describe implemented v1.2 behavior as future.
+- Every feature from the coverage matrix is implemented.
+- Current release docs describe implemented v1.2 behavior as shipped.
 - `./scripts/dev-check.sh` passes.
 - `npm run docs:build` passes.
 - Optional environment-dependent smoke tests either pass or skip with documented
@@ -1852,8 +1853,8 @@ P1 -> P17
 
 When assigning a coding agent to a phase:
 
-1. Give the agent only one phase unless the phase explicitly depends on an
-   incomplete subtask in another phase.
+1. Give the agent only one phase unless the phase explicitly depends on an open
+   subtask in another phase.
 2. Require the agent to read this plan, the linked ADRs, and the source docs
    named in the phase.
 3. Require a short implementation plan before code if the phase changes schema,

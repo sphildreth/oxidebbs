@@ -19,7 +19,7 @@ re-opening scope decisions.
 | P2 | Schema, config, and DbWriter foundation | Complete |
 | P3 | Caller authorization and flow polish | Complete |
 | P4 | Serial/modem transport and file transfers | Complete |
-| P5 | Door ecosystem expansion | Partial |
+| P5 | Door ecosystem expansion | Complete |
 | P6 | Database maintenance operations | Complete |
 | P7 | Sysop CLI completion | Complete |
 | P8 | Sysop TUI completion | Complete |
@@ -27,12 +27,12 @@ re-opening scope decisions.
 | P10 | Legacy FTN packet and message engine | Complete |
 | P11 | FTN toss, scan, and bundles | Complete |
 | P12 | FTN routing, nodelist, and AreaFix | Complete |
-| P13 | BinkP transport | Partial |
+| P13 | BinkP transport | Complete |
 | P14 | FTN operations, hardening, and docs | Complete |
 | P15 | OxideNet implementation | Complete |
 | P16 | Remote admin and status surface | Complete |
 | P17 | Repository and release automation | Complete |
-| P18 | Final integration and release readiness | Partial |
+| P18 | Final integration and release readiness | Complete |
 
 ## Caller Terminal Compatibility
 
@@ -106,13 +106,12 @@ v1.2 tasks; see the phase status map above for current completion state.
 - [x] Physical serial/modem caller transport.
 - [x] Caller file-area transfers: ZMODEM primary and XMODEM-CRC fallback.
 - [x] FTN implementation slice for packet parser/writer, tosser, scanner,
-  inbound bundle extraction, outbound ZIP bundle creation, nodelist import and
-  lookup, duplicate detection, netmail routing runtime integration, AreaFix,
-  rescan queue processing, packet retention, operations stats, and operational
-  CLI. Remaining FTN-adjacent release work is tracked in P13 BinkP transport
-  and P15 OxideNet.
+  inbound bundle extraction, outbound ZIP bundle creation, nodelist import,
+  lookup, count, differential apply, duplicate detection, netmail routing
+  runtime integration, AreaFix, rescan queue processing, packet retention,
+  operations stats, BinkP transport, OxideNet, and operational CLI.
 - [x] OxideNet implementation beyond the current foundation/design work.
-- [ ] Remote web admin or status dashboard with a full security model.
+- [x] Remote web admin or status dashboard with a full security model.
 - [ ] Native door API.
 - [x] Remote door-provider integrations with credential-reference storage and
   redacted CLI/TUI/audit/export paths.

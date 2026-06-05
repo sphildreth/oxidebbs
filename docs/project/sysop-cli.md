@@ -612,7 +612,8 @@ Packet retry/quarantine commands update DecentDB packet state only;
 they do not move spool files.
 `net areafix send` authenticates command text against the selected link
 password, applies AreaFix subscription changes, audits the activity, and prints
-the reply text. Reply netmail and rescan queueing remain future work.
+the reply text. It also queues the reply as outbound netmail and creates pending
+rescan rows for `+AREA !`.
 
 See [FTN CLI](../ftn/cli.md), [FTN Tosser](../ftn/tosser.md),
 [FTN Scanner](../ftn/scanner.md), and [FTN Nodelists](../ftn/nodelist.md) for

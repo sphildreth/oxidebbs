@@ -82,7 +82,8 @@ locally for a link after password authentication, mutates
 `network_area_subscriptions`, audits the activity, queues the reply as outbound
 netmail, prints the reply text, and creates pending rescan rows for `+AREA !`.
 `net rescan process` exports historical messages from the requested area to the
-requested link.
+requested link, materializes pending outbound netmail, and bundles the target
+link's ready packets when that link uses ZIP compression.
 
 `net nodelist import` parses a full nodelist file and atomically replaces the
 stored nodelist rows for the selected network profile. `net nodelist apply-diff`
@@ -93,7 +94,9 @@ nodelist, and uses the same atomic replacement path. `net nodelist list`,
 
 `net packets cleanup` applies configured or supplied retention thresholds.
 Dry-run output lists affected packet counts and examples; deletion only removes
-terminal processed/failed packet rows and dependent message/path metadata.
+terminal processed/failed packet rows and dependent message/path metadata. When
+`--network` is supplied, count, example, and delete operations are scoped to that
+network profile.
 
 Remaining network CLI gaps are OxideNet-specific workflows beyond the BinkP
 transport path.

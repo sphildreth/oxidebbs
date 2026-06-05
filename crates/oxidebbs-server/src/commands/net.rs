@@ -1219,15 +1219,24 @@ fn bundle_ready_packets_for_profile(
         .into_iter()
         .filter(|link| link.enabled && link.compression == "zip")
     {
-        if scanner
-            .bundle_ready_packets(&link)
-            .map_err(|error| CliError::Message(error.to_string()))?
-            .is_some()
-        {
+        if bundle_ready_packets_for_link(scanner, &link)? {
             bundles_created += 1;
         }
     }
     Ok(bundles_created)
+}
+
+fn bundle_ready_packets_for_link(
+    scanner: &Scanner<'_>,
+    link: &NetworkLinkRecord,
+) -> CliResult<bool> {
+    if !link.enabled || link.compression != "zip" {
+        return Ok(false);
+    }
+    Ok(scanner
+        .bundle_ready_packets(link)
+        .map_err(|error| CliError::Message(error.to_string()))?
+        .is_some())
 }
 
 fn run_net_toss(ctx: &AppContext, network: &str) -> CliResult<()> {
@@ -2028,10 +2037,11 @@ fn run_net_packets_cleanup(
     dry_run: bool,
 ) -> CliResult<()> {
     let db = open_database(&ctx.config)?;
-    let _profile = match network {
+    let profile = match network {
         Some(network) => Some(require_network_profile(&db, network)?),
         None => None,
     };
+    let network_id = profile.as_ref().map(|profile| profile.id.as_str());
 
     // Get retention settings from config or use provided values
     let retention_config = ctx.config.network.retention.as_ref();
@@ -2049,16 +2059,19 @@ fn run_net_packets_cleanup(
 
     if dry_run {
         // Count packets that would be affected
-        let archive_count = count_network_packets_before(db.db(), &archive_cutoff)?;
-        let delete_count = count_network_packets_before(db.db(), &delete_cutoff)?;
+        let archive_count = count_network_packets_before(db.db(), network_id, &archive_cutoff)?;
+        let delete_count = count_network_packets_before(db.db(), network_id, &delete_cutoff)?;
 
         // List some example packets
-        let archive_examples = list_network_packets_for_retention(db.db(), &archive_cutoff, 10)?;
-        let delete_examples = list_network_packets_for_retention(db.db(), &delete_cutoff, 10)?;
+        let archive_examples =
+            list_network_packets_for_retention(db.db(), network_id, &archive_cutoff, 10)?;
+        let delete_examples =
+            list_network_packets_for_retention(db.db(), network_id, &delete_cutoff, 10)?;
 
         if ctx.json {
             print_json(&json!({
                 "dry_run": true,
+                "network": profile.as_ref().map(network_profile_json),
                 "archive_days": archive_days,
                 "archive_cutoff": archive_cutoff,
                 "archive_count": archive_count,
@@ -2103,7 +2116,7 @@ fn run_net_packets_cleanup(
         }
     } else {
         // Actually delete packets
-        let deleted_count = delete_network_packets_older_than(db.db(), &delete_cutoff)?;
+        let deleted_count = delete_network_packets_older_than(db.db(), network_id, &delete_cutoff)?;
 
         audit(
             &db,
@@ -2111,23 +2124,36 @@ fn run_net_packets_cleanup(
             None,
             None,
             &format!(
-                "Deleted {} packets older than {} days",
-                deleted_count, delete_days
+                "Deleted {} packets older than {} days{}",
+                deleted_count,
+                delete_days,
+                profile
+                    .as_ref()
+                    .map(|profile| format!(" for network {}", profile.key))
+                    .unwrap_or_default()
             ),
         )?;
 
         if ctx.json {
             print_json(&json!({
                 "dry_run": false,
+                "network": profile.as_ref().map(network_profile_json),
                 "delete_days": delete_days,
                 "delete_cutoff": delete_cutoff,
                 "deleted_count": deleted_count,
             }))
         } else {
-            println!(
-                "Deleted {} packets older than {} days (before {})",
-                deleted_count, delete_days, delete_cutoff
-            );
+            if let Some(profile) = profile {
+                println!(
+                    "Deleted {} packets for network {} older than {} days (before {})",
+                    deleted_count, profile.key, delete_days, delete_cutoff
+                );
+            } else {
+                println!(
+                    "Deleted {} packets older than {} days (before {})",
+                    deleted_count, delete_days, delete_cutoff
+                );
+            }
             Ok(())
         }
     }
@@ -2792,9 +2818,18 @@ fn run_net_rescan_process(ctx: &AppContext, rescan_id: &str) -> CliResult<()> {
     let paths = ScannerPaths::under_runtime(&ctx.config.paths.runtime, &profile.key);
     let scanner = Scanner::new(db.db(), profile.clone(), paths);
 
-    let result = scanner
-        .rescan_for_link(&link, &area.area_tag)
-        .map_err(|e| CliError::Message(e.to_string()))?;
+    let result = match scanner.rescan_for_link(&link, &area.area_tag) {
+        Ok(result) => result,
+        Err(error) => {
+            let timestamp = current_timestamp(&db)?;
+            update_network_rescan_status(db.db(), rescan_id, "failed", Some(&timestamp))?;
+            return Err(CliError::Message(error.to_string()));
+        }
+    };
+    let netmail_materialized = scanner
+        .materialize_outbound_netmail()
+        .map_err(|error| CliError::Message(error.to_string()))?;
+    let bundles_created = usize::from(bundle_ready_packets_for_link(&scanner, &link)?);
 
     // Update status to completed
     let timestamp = current_timestamp(&db)?;
@@ -2806,14 +2841,20 @@ fn run_net_rescan_process(ctx: &AppContext, rescan_id: &str) -> CliResult<()> {
         None,
         None,
         &format!(
-            "processed rescan request {} for area {} on link {} (network {}): {} packets created",
-            rescan_id, area.area_tag, link.key, profile.key, result.packets_created
+            "processed rescan request {} for area {} on link {} (network {}): {} packets created, {} netmail packets materialized, {} bundles created",
+            rescan_id,
+            area.area_tag,
+            link.key,
+            profile.key,
+            result.packets_created,
+            netmail_materialized,
+            bundles_created
         ),
     )?;
 
     println!(
-        "Rescan completed: {} packets created for area {} on link {}",
-        result.packets_created, area.area_tag, link.key
+        "Rescan completed: {} packets created, {} netmail packets materialized, {} bundles created for area {} on link {}",
+        result.packets_created, netmail_materialized, bundles_created, area.area_tag, link.key
     );
 
     Ok(())

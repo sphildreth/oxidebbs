@@ -14,7 +14,7 @@ Implementation plan for FTN (FidoNet Technology Network) support in OxideBBS.
 - `design/SPEC.md` — section 13: FTN/OxideNet boundary
 - `design/PRD.md` — section 5: FTN-style networking foundation
 - `design/DECENTDB_SCHEMA.md` — current and planned DecentDB tables
-- `design/ROADMAP.md` — milestone 8 (complete) and future items
+- `design/ROADMAP.md` — milestone 8, v1.2 completion, and post-v1.2 items
 
 ## Purpose
 
@@ -50,28 +50,28 @@ What exists today:
   kludge composition, ADR 0023 SHA-256 duplicate-key construction with
   five-minute fallback clock-skew candidates, a DecentDB-backed duplicate
   detector over `network_duplicate_log`, raw/ZIP/ARJ bundle classification, raw
-  packet pass-through, safe ZIP packet extraction, and a common full-nodelist
-  parser for Zone/Host/node/point rows.
+  packet pass-through, safe ZIP and ARJ packet extraction, outbound ZIP bundle
+  creation, tosser/scanner integration, netmail routing, AreaFix processing, and
+  a common full-nodelist parser for Zone/Host/node/point rows with structured
+  location, sysop, phone, speed, and flag storage.
 - `oxidebbs-binkp` — tested command/data frame parser/writer, command
-  constants, and client/server handshake primitives for `M_ADR`, optional
-  `M_PWD`, `M_OK`, and `M_ERR`.
-- `oxidebbs-oxidenet` — default constants and basic data structs.
-- `oxidebbs-server net` — read-only status, link list, area list, poll-log, and
-  nodelist import/list/lookup commands backed by DecentDB network tables.
+  constants, client/server handshake primitives for `M_ADR`, optional `M_PWD`,
+  `M_OK`, and `M_ERR`, TLS/plaintext polling, listener-side TLS accept,
+  file-offer/data-frame exchange, retry/backoff, session guards, and poll logs.
+- `oxidebbs-oxidenet` — hub/member defaults, application review, address
+  assignment, token and credential lifecycle, config package generation/import,
+  nodelist generation, suspended-node enforcement, CLI commands, TUI operations,
+  and daily-operations docs.
+- `oxidebbs-server net` — status, toss, scan, poll, queue, packet, AreaFix,
+  rescan, subscription, link, area, log, and nodelist commands backed by
+  DecentDB network tables.
 
-What does not exist yet:
+Post-v1.2 compatibility topics:
 
-- Tosser (inbound packet processing)
-- Scanner (outbound message packing)
-- Bundle creation and ARJ extraction
-- Differential nodelist updates
-- Seen-by and PATH propagation
-- Netmail routing
-- AreaFix
-- Full BinkP client or server session state beyond initial handshake
-- CLI commands for toss, scan, poll, queue, packets, AreaFix, area
-  subscribe/unsubscribe, and link show
-- FTN adapter runtime code that consumes the shared `network_*` DecentDB tables
+- Additional Seen-by and PATH interoperability tuning after real-network
+  operator feedback.
+- Additional archive formats for outbound bundle creation beyond ZIP.
+- Non-OxideBBS OxideNet participation and an FTN-to-internal converter.
 
 ## FTN standards reference
 
@@ -130,8 +130,8 @@ oxidebbs-server
   -> oxidebbs-core
   -> oxidebbs-network
   -> oxidebbs-ftn
-  -> oxidebbs-binkp (future)
-  -> oxidebbs-oxidenet (future)
+  -> oxidebbs-binkp
+  -> oxidebbs-oxidenet
   -> oxidebbs-db
 
 oxidebbs-core
@@ -1174,7 +1174,7 @@ struct Tosser {
 A bundle file is a compressed archive containing one or more `.pkt` files. The tosser must support:
 
 - `.zip` bundles (most common)
-- `.arj` bundles (legacy, can be deferred)
+- `.arj` bundles (legacy inbound arcmail)
 - Uncompressed `.pkt` files (direct processing)
 
 Bundle extraction:
@@ -1515,14 +1515,14 @@ fn create_bundle(
 ) -> Result<PathBuf, BundleError>
 ```
 
-Supported compression formats for v1:
+Supported outbound compression formats for v1.2:
 
 - `none` — raw `.pkt` file without bundling (for local testing and filesystem-based exchange)
 - `zip` — ZIP compression (most common modern format)
 
-Future:
-
-- `arj` — ARJ compression (common in FidoNet, deferred)
+Inbound processing classifies raw `.pkt`, ZIP, and ARJ inputs and extracts
+top-level `.pkt` entries from ZIP and ARJ bundles. Outbound ARJ creation remains
+outside the v1.2 writer boundary; outbound arcmail creation is ZIP-only.
 
 #### `BundleExtractor`
 
@@ -1534,14 +1534,14 @@ fn extract_bundle(
 ```
 
 Classifies input and extracts all `.pkt` files from a compressed bundle. Current
-code handles raw packet pass-through and ZIP extraction. ZIP extraction accepts
-only top-level `.pkt` entries, rejects non-packet or nested entries, rejects
-duplicate output names case-insensitively, rejects output collisions, and returns
-typed errors for corrupt or empty archives. ARJ remains an explicit unsupported
-format until the ARJ policy is decided. Full extraction must handle:
+code handles raw packet pass-through plus ZIP and ARJ extraction. ZIP and ARJ
+extraction accept only top-level `.pkt` entries, reject non-packet or nested
+entries, reject duplicate output names case-insensitively, reject output
+collisions, and return typed errors for corrupt or empty archives. Full
+extraction handles:
 
 - `.zip` bundles
-- `.arj` bundles when the ARJ policy is decided
+- `.arj` bundles
 - Raw `.pkt` files (pass through)
 - Unknown formats (return error, do not crash)
 
@@ -1561,8 +1561,8 @@ enum BundleCompression {
 - Extract a known-good ZIP bundle — verify .pkt files are recovered
 - Classify raw `.pkt`, `.zip`, and `.arj` inputs
 - Extract a raw `.pkt` file (no compression) — verify pass-through
-- Return explicit unsupported-extraction errors for `.arj` until real extraction
-  exists
+- Extract safe top-level `.pkt` entries from ARJ bundles and reject unsafe ARJ
+  entries
 - Attempt to extract a corrupt bundle — verify error handling
 - Attempt to extract an empty ZIP bundle — verify no-packet error handling
 - Reject ZIP entries with nested paths, traversal-style paths, non-packet
@@ -1584,7 +1584,7 @@ enum BundleCompression {
 - [x] `BundleExtractor` handles raw packet pass-through and classifies ZIP/ARJ
   inputs
 - [x] `BundleExtractor` extracts packets from ZIP bundles
-- [ ] ARJ extraction policy is implemented or explicitly deferred
+- [x] ARJ extraction policy is implemented for inbound top-level `.pkt` entries
 - [ ] Day-of-week extensions are correct
 - [x] Focused bundle tests pass
 - [x] Rustdoc exists for the classifier/extraction-boundary APIs
@@ -1714,14 +1714,15 @@ Indexes:
   replaces DecentDB nodelist rows for the selected profile.
 - Nodelist files may be compressed (e.g., NODELIST.ZIP). The parser should accept a file path, not handle decompression itself — that is the caller's responsibility.
 - Compressed nodelist and nodediff archives must be extracted before import or
-  apply-diff. Nodediff CRC validation remains a later hardening item.
+  apply-diff. Nodediff CRC validation is available for headers that include a CRC;
+  headers without a CRC are accepted.
 - The phone field may contain `-` characters and non-numeric prefixes. Do not validate phone format strictly.
 - The speed field is a baud rate as an integer. Common values: 300, 1200, 2400, 9600, 14400, 28800, 33600, 56000.
 - Some nodelist entries use `Pvt` keyword with no phone number; these nodes are
   stored as concrete entries and the complete source row is preserved in
   `raw_entry`.
-- Flags are currently preserved in `raw_entry`; structured flag columns remain a
-  later P12 enhancement.
+- Flags are stored in the structured `flags` column while the complete source row
+  is preserved in `raw_entry`.
 - Building the nodelist index should be an idempotent operation — replacing the existing index with a new one.
 
 ### Tests required
@@ -1953,16 +1954,16 @@ Already subscribed: AREA.ALREADY
 ### Definition of done
 
 - [x] AreaFix command parser handles all command forms (%LIST, %QUERY, %HELP, +AREA, -AREA, rescan)
-- [~] Local `net areafix send` authenticates and executes all commands; inbound
-  netmail processing is not wired yet
+- [x] Local `net areafix send` authenticates and executes all commands; inbound
+  AreaFix netmail processing queues reply netmail and rescan requests
 - [x] Password authentication works for local AreaFix command execution
 - [x] Subscriptions are created and removed in DecentDB by local AreaFix command
   execution
-- [ ] Rescan sends recent messages
-- [ ] Reply netmail is generated correctly
-- [ ] All tests pass
+- [x] Rescan sends recent messages
+- [x] Reply netmail is generated correctly
+- [x] All tests pass
 - [ ] Rustdoc complete
-- [ ] `dev-check.sh` passes cleanly
+- [x] `dev-check.sh` passes cleanly
 
 ---
 
@@ -2041,10 +2042,12 @@ Listens for inbound BinkP connections, authenticates callers, receives their fil
 
 #### Transport security policy
 
-- OxideNet and new private-network profiles require TLS by default (via `tokio-rustls`).
+- OxideNet and new private-network profiles require TLS by default.
 - Legacy FTN links may use plaintext BinkP only when the link explicitly sets `transport_security = "plaintext_legacy"`.
 - Plaintext legacy mode must produce a startup warning and a poll-log warning because reusable BinkP passwords and message content are exposed.
-- `transport_security = "tls_opportunistic"` may be added later for deployments that can attempt TLS first and fall back for known legacy peers, but v1 should prefer either strict TLS or explicit plaintext legacy mode.
+- `transport_security = "tls_opportunistic"` attempts TLS first and falls back to
+  plaintext for known legacy peers; strict TLS or explicit plaintext legacy mode
+  remain the clearest operator choices.
 
 #### Poll result
 
@@ -2118,15 +2121,15 @@ struct PollResult {
 - [x] Command frames and data frames use the FSP-1011 high-bit/15-bit-length header
 - [x] Client/server handshake primitives validate address/password and produce
   `M_OK`/`M_ERR` responses
-- [ ] `BinkpClient` connects, runs full command sessions, and sends and receives files
-- [ ] `BinkpServer` accepts connections, runs full command sessions, and sends and receives files
-- [ ] TLS is enabled by default for OxideNet/private profiles, plaintext legacy FTN requires explicit per-link opt-in
-- [ ] Retry with exponential backoff works
-- [ ] Poll activity logged to `network_poll_log`
-- [ ] All tests pass
-- [ ] Rustdoc complete
-- [ ] ADR written for BinkP transport security policy
-- [ ] `dev-check.sh` passes cleanly
+- [x] `BinkpClient` connects, runs full command sessions, and sends and receives files
+- [x] `BinkpServer` accepts connections, runs full command sessions, and sends and receives files
+- [x] TLS is enabled by default for OxideNet/private profiles, plaintext legacy FTN requires explicit per-link opt-in
+- [x] Retry with exponential backoff works
+- [x] Poll activity logged to `network_poll_log`
+- [x] All tests pass
+- [x] Rustdoc complete
+- [x] ADR written for BinkP transport security policy
+- [x] `dev-check.sh` passes cleanly
 
 ---
 
@@ -2212,10 +2215,10 @@ oxidebbs net logs <link-name>
 
 - [ ] All CLI commands are implemented and functional
 - [x] Implemented commands have `--help` output through Clap
-- [~] Commands integrate with tosser, scanner, nodelist, BinkP, and local
+- [x] Commands integrate with tosser, scanner, nodelist, BinkP, and local
   AreaFix execution. `net toss`, `net scan`, `net poll`, `net areafix send`,
-  and nodelist commands are wired to real DecentDB-backed behavior; TLS-capable
-  BinkP sessions and inbound AreaFix netmail processing remain incomplete.
+  and nodelist commands are wired to real DecentDB-backed behavior, including
+  TLS-capable BinkP sessions and inbound AreaFix netmail processing.
 - [x] Status, link list, area list, poll logs, nodelist import, nodelist list,
   and nodelist lookup integrate with DecentDB network tables
 - [ ] Error messages are clear
@@ -2347,8 +2350,8 @@ Complete documentation for sysops, developers, and FTN network operators.
 | Outbound MSGID generation | Random hex vs. content hash vs. counter |
 | Netmail routing strategy | Direct, hub-routed, crash, hold |
 | BinkP transport security | TLS required for OxideNet/private profiles, explicit plaintext legacy mode for real FTN interop |
-| Bundle compression | ZIP for v1, ARJ deferred |
-| Nodelist differential updates | Full nodelist only for v1, incremental deferred |
+| Bundle compression | ZIP outbound creation; raw, ZIP, and ARJ inbound processing |
+| Nodelist differential updates | Full nodelist import plus conservative plain-text nodediff apply with optional CRC validation |
 
 ### Definition of done
 

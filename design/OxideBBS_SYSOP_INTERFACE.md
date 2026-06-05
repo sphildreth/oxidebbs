@@ -14,7 +14,7 @@ For v1, the sysop interface was **CLI-first**. A local Ratatui-based TUI shipped
 4. Preserve the retro BBS feel without making administration painful.
 5. Make door troubleshooting easy.
 6. Make DecentDB health and backups easy to reason about.
-7. Make the future Ratatui console a wrapper around the same command/service layer, not a separate admin system.
+7. Keep the Ratatui console as a wrapper around the same command/service layer, not a separate admin system.
 
 ## Interface layers
 
@@ -23,7 +23,7 @@ OxideBBS should have three admin layers over time:
 ```text
 v1      CLI admin commands
 v1.1    Local Ratatui sysop console
-v2+     Optional read-only status web dashboard, if desired
+v1.2    Optional loopback remote status/admin surface, if explicitly enabled
 ```
 
 The CLI should be the source of truth. The TUI should call the same underlying services.
@@ -318,15 +318,15 @@ cleanup only when control is connected.
 
 ### Notes
 
-`nodes watch` can be simple in v1: refresh every few seconds and print a table.
-The Ratatui console can replace this later with a real live dashboard. When the
-server is running, these states come from the local runtime registry and include
-heartbeat age for stale-session diagnosis. `nodes reset-stale` should use the
-live control channel when available and fall back to audited intent when the
-server is unreachable.
+`nodes watch` refreshes every few seconds and prints a table. The Ratatui console
+uses the same service-layer state for its dashboard. When the server is running,
+these states come from the local runtime registry and include heartbeat age for
+stale-session diagnosis. `nodes reset-stale` should use the live control channel
+when available and fall back to audited intent when the server is unreachable.
 
-Future web-based admin interfaces are not in v1 and, if introduced, must not
-proceed until CSRF and replay protections are in place.
+The opt-in loopback remote admin surface validates CSRF and replay protections
+before accepting authenticated read-only API requests or audited mutation
+attempts.
 
 ## Message commands
 
@@ -416,8 +416,8 @@ oxidebbs-server doors dropfile lord --user sysop --node 1 --format dorinfo1.def
 
 ## File commands
 
-File-transfer administration is implemented as a local sysop CLI surface. It
-does not yet imply caller-facing file menus or live ZMODEM/XMODEM workflows.
+File-transfer administration is implemented as a local sysop CLI surface and is
+paired with caller-facing file menus plus live ZMODEM/XMODEM-CRC workflows.
 
 ```bash
 oxidebbs-server files areas list
@@ -626,10 +626,10 @@ oxidebbs-server logs tail
 oxidebbs-server audit recent
 ```
 
-## Commands that can wait
+## Completed former wait-list commands
 
-These no longer block the v1.2 CLI surface, but related TUI/network workflows
-remain tracked in the v1.2 plan:
+These commands no longer block the v1.2 CLI surface; the related TUI and network
+workflows are complete in the v1.2 plan:
 
 ```bash
 oxidebbs-server users delete

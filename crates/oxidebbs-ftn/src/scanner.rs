@@ -308,7 +308,12 @@ impl<'db> Scanner<'db> {
     pub fn materialize_outbound_netmail(&self) -> Result<usize, FtnError> {
         let packets = list_network_packets(self.db)?
             .into_iter()
-            .filter(|p| p.direction == "outbound" && p.status == "pending" && p.link_id.is_some())
+            .filter(|p| {
+                p.network_id == self.profile.id
+                    && p.direction == "outbound"
+                    && p.status == "pending"
+                    && p.link_id.is_some()
+            })
             .collect::<Vec<_>>();
 
         if packets.is_empty() {
@@ -1086,6 +1091,119 @@ mod tests {
             updated.size_bytes,
             fs::metadata(&updated.filename).expect("metadata").len() as i64
         );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn materialize_outbound_netmail_is_scoped_to_scanner_profile() {
+        use oxidebbs_db::{
+            NetworkMessageRecord, NetworkPacketRecord, insert_network_message,
+            insert_network_packet, list_network_packets,
+        };
+
+        let db = test_db();
+        let root = temp_root("netmail-profile-scope");
+        let other_profile = NetworkProfileRecord {
+            id: "00000000-0000-4000-8000-000000003101".to_string(),
+            key: "othernet".to_string(),
+            name: "OtherNet".to_string(),
+            ..profile()
+        };
+        let other_link = NetworkLinkRecord {
+            id: "00000000-0000-4000-8000-000000003102".to_string(),
+            key: "otherhub".to_string(),
+            network_id: other_profile.id.clone(),
+            ..link()
+        };
+        insert_network_profile(db.db(), &other_profile).expect("insert other profile");
+        insert_network_link(db.db(), &other_link).expect("insert other link");
+
+        for (packet_id, message_id, network_id, link_id) in [
+            (
+                "00000000-0000-4000-8000-000000003103",
+                "00000000-0000-4000-8000-000000003104",
+                PROFILE_ID,
+                LINK_ID,
+            ),
+            (
+                "00000000-0000-4000-8000-000000003105",
+                "00000000-0000-4000-8000-000000003106",
+                other_profile.id.as_str(),
+                other_link.id.as_str(),
+            ),
+        ] {
+            insert_network_packet(
+                db.db(),
+                &NetworkPacketRecord {
+                    id: packet_id.to_string(),
+                    network_id: network_id.to_string(),
+                    direction: "outbound".to_string(),
+                    link_id: Some(link_id.to_string()),
+                    filename: format!("{packet_id}.pkt"),
+                    sha256: "abc123".to_string(),
+                    size_bytes: 100,
+                    status: "pending".to_string(),
+                    error_message: None,
+                    received_at: None,
+                    processed_at: None,
+                    created_at: "2026-06-04T00:00:00Z".to_string(),
+                },
+            )
+            .expect("insert packet");
+            insert_network_message(
+                db.db(),
+                &NetworkMessageRecord {
+                    id: message_id.to_string(),
+                    network_id: network_id.to_string(),
+                    local_message_id: None,
+                    message_type: "netmail".to_string(),
+                    area_tag: None,
+                    origin_address: "1:105/42".to_string(),
+                    destination_address: Some("1:105/1".to_string()),
+                    from_name: "AreaFix".to_string(),
+                    to_name: Some("Sysop".to_string()),
+                    subject: "AreaFix Response".to_string(),
+                    raw_text: b"AreaFix reply body".to_vec(),
+                    display_body: "AreaFix reply body".to_string(),
+                    msgid: None,
+                    replyid: None,
+                    created_at: "2026-06-04T00:00:00Z".to_string(),
+                    imported_at: None,
+                    exported_at: None,
+                    duplicate_hash: None,
+                    packet_id: Some(packet_id.to_string()),
+                    status: "pending".to_string(),
+                },
+            )
+            .expect("insert message");
+        }
+
+        let scanner = Scanner::new(
+            db.db(),
+            profile(),
+            ScannerPaths::under_runtime(&root, "fidonet"),
+        );
+
+        let materialized = scanner.materialize_outbound_netmail().expect("materialize");
+
+        assert_eq!(materialized, 1);
+        let packets = list_network_packets(db.db()).expect("packets");
+        let local_packet = packets
+            .iter()
+            .find(|packet| packet.network_id == PROFILE_ID)
+            .expect("local packet");
+        let other_packet = packets
+            .iter()
+            .find(|packet| packet.network_id == other_profile.id)
+            .expect("other packet");
+        assert!(Path::new(&local_packet.filename).exists());
+        assert_eq!(
+            other_packet.filename,
+            "00000000-0000-4000-8000-000000003105.pkt"
+        );
+        let other_ready_dir = root.join("network/fidonet/outbound/otherhub/ready");
+        assert!(!other_ready_dir.exists());
 
         let _ = fs::remove_dir_all(root);
     }
