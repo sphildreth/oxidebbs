@@ -33,6 +33,7 @@ pub struct ScreenAsset {
 pub enum MenuAction {
     Doors,
     Messages,
+    Files,
     Logoff,
     NewUser,
     Login,

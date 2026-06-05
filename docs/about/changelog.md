@@ -91,6 +91,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   loopback-only enabled binds, public-status opt-in, origin allowlists,
   reverse-proxy TLS policy, read-only mode, CSRF/replay timing, and rate-limit
   settings.
+- Remote admin authentication with Argon2 password verification, CSRF token
+  generation, rate limiting with in-memory session store, and login/logout/
+  CSRF-token/API-nodes HTTP endpoints. Implementation uses simplified in-memory
+  session management without cookie persistence.
 - Reusable read-only admin status JSON payload helper shared by the existing
   `status --json` command and the opt-in loopback `/status` route.
 - C64/C64 Ultimate caller compatibility requirement with a named `c64`

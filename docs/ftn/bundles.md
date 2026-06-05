@@ -36,7 +36,7 @@ classifier intentionally recognizes only unambiguous suffixes.
 
 Remaining work:
 
-- decide whether ARJ support is built in, external-tool based, or deferred
+- ARJ support is implemented with built-in extraction
 - connect outbound ZIP bundle creation to scanner/mailer workflows
 - implement arcmail bundle naming
 - connect bundle extraction to the tosser quarantine/archive workflow

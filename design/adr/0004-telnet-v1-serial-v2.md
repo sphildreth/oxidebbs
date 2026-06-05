@@ -1,21 +1,20 @@
-# ADR 0004: Telnet for v1, Serial/Modem Later
+# ADR 0004: Telnet for v1, Serial/Modem for v1.2
 
 ## Status
 
-Accepted
+Superseded by v1.2 implementation. Serial/modem transport is now included in v1.2 per ADR 0019.
 
 ## Context
 
-Telnet support is enough to create a useful v1. Physical modem support is interesting but adds serial, modem, line-state, and hardware complexity.
+OxideBBS v1.0 targets telnet-only to reduce initial scope. Serial/modem support was deferred to v1.2.
 
 ## Decision
 
-v1 supports telnet only.
-
-Design the session layer around a transport abstraction so serial/modem support can be added later.
+Design the session layer around a transport abstraction so serial/modem support can be added in v1.2.
 
 ## Consequences
 
-- v1 remains achievable.
-- Future serial support is not blocked.
+- Telnet is the only transport in v1.0.
+- Serial/modem support is implemented in v1.2 per ADR 0019.
+- The transport abstraction allows both telnet and serial to share session logic.
 - All session logic must avoid assuming TCP-specific behavior.

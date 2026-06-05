@@ -60,8 +60,8 @@ packet rows as `pending` and network-message rows as `exported`.
 the peer batch into `paths.runtime/network/<network>/inbound/drop`, marks sent
 packet rows processed after `M_GOT`, and records `network_poll_log` state.
 `net poll --all` repeats that workflow for enabled links. TLS-required and
-TLS-opportunistic links still require future TLS session support; use
-`--dry-run` to inspect their security plan.
+TLS-opportunistic links use the implemented TLS session support with opportunistic
+fallback; use `--dry-run` to inspect their security plan.
 
 `net packets summary`, `net packets show`, `net packets retry`, and
 `net packets mark-quarantined` operate on DecentDB packet state. `retry` resets

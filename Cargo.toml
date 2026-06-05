@@ -41,4 +41,9 @@ nix = { version = "0.31.3", features = ["term", "fs", "user"] }
 crossterm = "0.28"
 fuzzy-matcher = "0.3"
 sha2 = "0.11.0"
+hex = "0.4"
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+serialport = { version = "4", default-features = false }
+tower-cookies = "0.10"
+tower-sessions = "0.13"
+time = "0.3"

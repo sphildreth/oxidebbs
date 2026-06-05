@@ -11,24 +11,25 @@ use crate::{
     sysop_cli::{AppContext, CliError, CliResult, emit_ok, open_database, print_json},
 };
 use oxidebbs_db::{
-    AuditEventRecord, AuthAttemptRecord, Db, DoorDefinitionRecord, DoorRunRecord,
-    MessageAreaRecord, MessageRecord, NetworkAreaRecord, NetworkDuplicateLogRecord,
+    AuditEventRecord, AuthAttemptRecord, Db, DoorDefinitionRecord, DoorProviderCredentialRecord,
+    DoorRunRecord, MessageAreaRecord, MessageRecord, NetworkAreaRecord, NetworkDuplicateLogRecord,
     NetworkLinkRecord, NetworkMessageRecord, NetworkNodelistRecord, NetworkPacketRecord,
     NetworkPathNode, NetworkPollLogRecord, NetworkProfileRecord, NetworkSeenByNode,
     NetworkSubscriptionRecord, OxideNetApplicationRecord, OxideNetCredentialRecord,
     OxideNetNodeRecord, SessionRecord, UserRecord, Value, evict_shared_wal,
     insert_audit_event_preserving_record, insert_auth_attempt, insert_door_definition,
-    insert_door_run, insert_message, insert_message_area, insert_network_area,
-    insert_network_duplicate_log, insert_network_link, insert_network_message,
+    insert_door_provider_credential, insert_door_run, insert_message, insert_message_area,
+    insert_network_area, insert_network_duplicate_log, insert_network_link, insert_network_message,
     insert_network_nodelist_entry, insert_network_packet, insert_network_path_node,
     insert_network_poll_log, insert_network_profile, insert_network_seen_by,
     insert_network_subscription, insert_oxidenet_application, insert_oxidenet_credential,
     insert_oxidenet_node, insert_session, insert_user, list_auth_attempts, list_door_definitions,
-    list_message_areas, list_messages, list_network_areas, list_network_duplicates,
-    list_network_links, list_network_messages, list_network_nodelist_entries, list_network_packets,
-    list_network_path, list_network_poll_logs, list_network_profiles, list_network_seen_by,
-    list_network_subscriptions, list_oxidenet_applications, list_oxidenet_credentials_for_node,
-    list_oxidenet_nodes, list_users, read_schema_version,
+    list_door_provider_credentials, list_message_areas, list_messages, list_network_areas,
+    list_network_duplicates, list_network_links, list_network_messages,
+    list_network_nodelist_entries, list_network_packets, list_network_path, list_network_poll_logs,
+    list_network_profiles, list_network_seen_by, list_network_subscriptions,
+    list_oxidenet_applications, list_oxidenet_credentials_for_node, list_oxidenet_nodes,
+    list_users, read_schema_version,
 };
 
 #[derive(Debug, Clone, Deserialize)]
@@ -42,6 +43,8 @@ struct ImportSchema {
     sessions: Vec<ImportSessionRecord>,
     doors: Vec<ImportDoorDefinitionRecord>,
     door_runs: Vec<ImportDoorRunRecord>,
+    #[serde(default)]
+    door_provider_credentials: Vec<ImportDoorProviderCredentialRecord>,
     audit_events: Vec<ImportAuditEventRecord>,
     #[serde(default)]
     network_profiles: Vec<ImportNetworkProfileRecord>,
@@ -176,6 +179,16 @@ struct ImportDoorRunRecord {
     disconnect_forced: bool,
     bytes_in: i64,
     bytes_out: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ImportDoorProviderCredentialRecord {
+    id: String,
+    door_id: String,
+    provider_name: String,
+    credential_ref: String,
+    created_at: String,
+    updated_at: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -539,6 +552,19 @@ impl From<ImportDoorRunRecord> for DoorRunRecord {
             disconnect_forced: record.disconnect_forced,
             bytes_in: record.bytes_in,
             bytes_out: record.bytes_out,
+        }
+    }
+}
+
+impl From<ImportDoorProviderCredentialRecord> for DoorProviderCredentialRecord {
+    fn from(record: ImportDoorProviderCredentialRecord) -> Self {
+        Self {
+            id: record.id,
+            door_id: record.door_id,
+            provider_name: record.provider_name,
+            credential_ref: record.credential_ref,
+            created_at: record.created_at,
+            updated_at: record.updated_at,
         }
     }
 }
@@ -1049,6 +1075,17 @@ fn door_run_json(run: &oxidebbs_db::DoorRunRecord) -> JsonValue {
     })
 }
 
+fn door_provider_credential_json(credential: &DoorProviderCredentialRecord) -> JsonValue {
+    serde_json::json!({
+        "id": credential.id,
+        "door_id": credential.door_id,
+        "provider_name": credential.provider_name,
+        "credential_ref": "[redacted]",
+        "created_at": credential.created_at,
+        "updated_at": credential.updated_at
+    })
+}
+
 fn db_stats(db: &Db, active_sessions: i64) -> CliResult<JsonValue> {
     let open_sessions = db_scalar_i64(db, "SELECT COUNT(*) FROM sessions WHERE ended_at IS NULL")?;
     Ok(serde_json::json!({
@@ -1368,6 +1405,12 @@ fn db_export(db: &Db) -> CliResult<JsonValue> {
         oxidenet_credentials.extend(list_oxidenet_credentials_for_node(db, &node.id)?);
     }
 
+    let doors = list_door_definitions(db)?;
+    let mut door_provider_credentials = Vec::new();
+    for door in &doors {
+        door_provider_credentials.extend(list_door_provider_credentials(db, &door.id)?);
+    }
+
     Ok(serde_json::json!({
         "schema_version": read_schema_version(db)?,
         "users": list_users(db)?.iter().map(user_json).collect::<Vec<_>>(),
@@ -1375,8 +1418,9 @@ fn db_export(db: &Db) -> CliResult<JsonValue> {
         "message_areas": list_message_areas(db)?.iter().map(area_json).collect::<Vec<_>>(),
         "messages": list_messages(db)?.iter().map(message_json).collect::<Vec<_>>(),
         "sessions": list_all_sessions_for_export(db)?.iter().map(session_json).collect::<Vec<_>>(),
-        "doors": list_door_definitions(db)?.iter().map(door_json).collect::<Vec<_>>(),
+        "doors": doors.iter().map(door_json).collect::<Vec<_>>(),
         "door_runs": list_all_door_runs_for_export(db)?.iter().map(door_run_json).collect::<Vec<_>>(),
+        "door_provider_credentials": door_provider_credentials.iter().map(door_provider_credential_json).collect::<Vec<_>>(),
         "audit_events": list_all_audit_events_for_export(db)?.iter().map(audit_json).collect::<Vec<_>>(),
         "network_profiles": list_network_profiles(db)?.iter().map(network_profile_json).collect::<Vec<_>>(),
         "network_links": list_network_links(db)?.iter().map(network_link_json).collect::<Vec<_>>(),
@@ -2035,6 +2079,12 @@ fn perform_db_import(db: &oxidebbs_db::OxideDb, payload: ImportSchema) -> CliRes
     let sessions: Vec<SessionRecord> = payload.sessions.into_iter().map(Into::into).collect();
     let doors: Vec<DoorDefinitionRecord> = payload.doors.into_iter().map(Into::into).collect();
     let door_runs: Vec<DoorRunRecord> = payload.door_runs.into_iter().map(Into::into).collect();
+    let door_provider_credentials: Vec<DoorProviderCredentialRecord> = payload
+        .door_provider_credentials
+        .into_iter()
+        .filter(|c| c.credential_ref != "[redacted]")
+        .map(Into::into)
+        .collect();
     let audit_events: Vec<AuditEventRecord> =
         payload.audit_events.into_iter().map(Into::into).collect();
     let network_profiles: Vec<NetworkProfileRecord> = payload
@@ -2159,6 +2209,9 @@ fn perform_db_import(db: &oxidebbs_db::OxideDb, payload: ImportSchema) -> CliRes
         }
         for run in &door_runs {
             insert_door_run(db, run)?;
+        }
+        for credential in &door_provider_credentials {
+            insert_door_provider_credential(db, credential)?;
         }
         for event in &audit_events {
             insert_audit_event_preserving_record(db, event)?;

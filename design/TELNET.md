@@ -218,7 +218,7 @@ window is separate and must not be treated as caller idle timeout.
 
 ## Transport Abstraction
 
-The BBS session should not know whether the caller is telnet or a future serial
+The BBS session should not know whether the caller is telnet or a serial
 transport. Transport code exposes byte reads, byte writes, and hangup:
 
 ```rust

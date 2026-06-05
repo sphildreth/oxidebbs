@@ -14,17 +14,23 @@ oxidebbs-door = { path = "../oxidebbs-door" }
 oxidebbs-sysop = { path = "../oxidebbs-sysop" }
 oxidebbs-ftn = { path = "../oxidebbs-ftn" }
 oxidebbs-binkp = { path = "../oxidebbs-binkp" }
+oxidebbs-transfer = { path = "../oxidebbs-transfer" }
 argon2.workspace = true
+axum.workspace = true
 clap.workspace = true
+hex.workspace = true
 rand_core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
+time.workspace = true
 tokio.workspace = true
 toml.workspace = true
+tower-cookies.workspace = true
+tower-sessions.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-axum.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 nix.workspace = true

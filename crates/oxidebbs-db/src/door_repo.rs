@@ -40,6 +40,16 @@ pub struct DoorRunFinish {
     pub bytes_out: i64,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct DoorProviderCredentialRecord {
+    pub id: String,
+    pub door_id: String,
+    pub provider_name: String,
+    pub credential_ref: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 pub fn insert_door_definition(db: &Db, door: &DoorDefinitionRecord) -> decentdb::Result<()> {
     db.execute_with_params(
         "INSERT INTO doors (id, key, name, runner, working_dir, command, drop_file, exclusive, time_limit_minutes, enabled, min_security_level)
@@ -178,6 +188,81 @@ pub fn find_active_door_run_by_door_id(
     Ok(result.rows().first().map(row_to_run))
 }
 
+pub fn insert_door_provider_credential(
+    db: &Db,
+    credential: &DoorProviderCredentialRecord,
+) -> decentdb::Result<()> {
+    db.execute_with_params(
+        "INSERT INTO door_provider_credentials (id, door_id, provider_name, credential_ref, created_at, updated_at)
+         VALUES (UUID_PARSE($1), UUID_PARSE($2), $3, $4, $5, $6)",
+        &[
+            Value::Text(credential.id.clone()),
+            Value::Text(credential.door_id.clone()),
+            Value::Text(credential.provider_name.clone()),
+            Value::Text(credential.credential_ref.clone()),
+            Value::Text(credential.created_at.clone()),
+            Value::Text(credential.updated_at.clone()),
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn list_door_provider_credentials(
+    db: &Db,
+    door_id: &str,
+) -> decentdb::Result<Vec<DoorProviderCredentialRecord>> {
+    let result = db.execute_with_params(
+        "SELECT UUID_TO_STRING(id), UUID_TO_STRING(door_id), provider_name, credential_ref, CAST(created_at AS TEXT), CAST(updated_at AS TEXT)
+         FROM door_provider_credentials
+         WHERE door_id = UUID_PARSE($1)
+         ORDER BY provider_name",
+        &[Value::Text(door_id.to_string())],
+    )?;
+    Ok(result.rows().iter().map(row_to_credential).collect())
+}
+
+pub fn find_door_provider_credential(
+    db: &Db,
+    door_id: &str,
+    provider_name: &str,
+) -> decentdb::Result<Option<DoorProviderCredentialRecord>> {
+    let result = db.execute_with_params(
+        "SELECT UUID_TO_STRING(id), UUID_TO_STRING(door_id), provider_name, credential_ref, CAST(created_at AS TEXT), CAST(updated_at AS TEXT)
+         FROM door_provider_credentials
+         WHERE door_id = UUID_PARSE($1) AND provider_name = $2",
+        &[
+            Value::Text(door_id.to_string()),
+            Value::Text(provider_name.to_string()),
+        ],
+    )?;
+    Ok(result.rows().first().map(row_to_credential))
+}
+
+pub fn update_door_provider_credential(
+    db: &Db,
+    credential: &DoorProviderCredentialRecord,
+) -> decentdb::Result<()> {
+    db.execute_with_params(
+        "UPDATE door_provider_credentials
+         SET credential_ref = $1, updated_at = $2
+         WHERE id = UUID_PARSE($3)",
+        &[
+            Value::Text(credential.credential_ref.clone()),
+            Value::Text(credential.updated_at.clone()),
+            Value::Text(credential.id.clone()),
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn delete_door_provider_credential(db: &Db, id: &str) -> decentdb::Result<()> {
+    db.execute_with_params(
+        "DELETE FROM door_provider_credentials WHERE id = UUID_PARSE($1)",
+        &[Value::Text(id.to_string())],
+    )?;
+    Ok(())
+}
+
 fn row_to_door(row: &decentdb::QueryRow) -> DoorDefinitionRecord {
     let values = row.values();
     DoorDefinitionRecord {
@@ -209,6 +294,18 @@ fn row_to_run(row: &decentdb::QueryRow) -> DoorRunRecord {
         disconnect_forced: bool_value(&values[8]),
         bytes_in: int_value(&values[9]),
         bytes_out: int_value(&values[10]),
+    }
+}
+
+fn row_to_credential(row: &decentdb::QueryRow) -> DoorProviderCredentialRecord {
+    let values = row.values();
+    DoorProviderCredentialRecord {
+        id: text_value(&values[0]),
+        door_id: text_value(&values[1]),
+        provider_name: text_value(&values[2]),
+        credential_ref: text_value(&values[3]),
+        created_at: text_value(&values[4]),
+        updated_at: text_value(&values[5]),
     }
 }
 
@@ -446,6 +543,93 @@ mod tests {
         let db = test_db();
         let result = insert_door_run(&db, &sample_run());
 
+        assert!(result.is_err());
+    }
+
+    const CREDENTIAL_1: &str = "00000000-0000-4000-8000-000000000601";
+
+    fn sample_credential() -> DoorProviderCredentialRecord {
+        DoorProviderCredentialRecord {
+            id: CREDENTIAL_1.to_string(),
+            door_id: DOOR_LORD.to_string(),
+            provider_name: "bbslink".to_string(),
+            credential_ref: "vault://doors/lord/bbslink".to_string(),
+            created_at: "2026-01-01T00:00:00.000000Z".to_string(),
+            updated_at: "2026-01-01T00:00:00.000000Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn inserts_and_lists_door_provider_credentials() {
+        let db = test_db();
+        insert_door_definition(&db, &sample_door()).expect("insert door");
+        insert_door_provider_credential(&db, &sample_credential()).expect("insert credential");
+
+        let credentials = list_door_provider_credentials(&db, DOOR_LORD).expect("list");
+
+        assert_eq!(credentials.len(), 1);
+        assert_eq!(credentials[0].provider_name, "bbslink");
+        assert_eq!(credentials[0].credential_ref, "vault://doors/lord/bbslink");
+    }
+
+    #[test]
+    fn finds_door_provider_credential() {
+        let db = test_db();
+        insert_door_definition(&db, &sample_door()).expect("insert door");
+        insert_door_provider_credential(&db, &sample_credential()).expect("insert credential");
+
+        let found = find_door_provider_credential(&db, DOOR_LORD, "bbslink").expect("find");
+
+        assert_eq!(found, Some(sample_credential()));
+    }
+
+    #[test]
+    fn updates_door_provider_credential() {
+        let db = test_db();
+        insert_door_definition(&db, &sample_door()).expect("insert door");
+        insert_door_provider_credential(&db, &sample_credential()).expect("insert credential");
+
+        let mut updated = sample_credential();
+        updated.credential_ref = "vault://doors/lord/bbslink-v2".to_string();
+        updated.updated_at = "2026-01-02T00:00:00.000000Z".to_string();
+
+        update_door_provider_credential(&db, &updated).expect("update");
+
+        let found = find_door_provider_credential(&db, DOOR_LORD, "bbslink")
+            .expect("find")
+            .unwrap();
+        assert_eq!(found.credential_ref, "vault://doors/lord/bbslink-v2");
+        assert_eq!(found.updated_at, "2026-01-02T00:00:00.000000Z");
+    }
+
+    #[test]
+    fn deletes_door_provider_credential() {
+        let db = test_db();
+        insert_door_definition(&db, &sample_door()).expect("insert door");
+        insert_door_provider_credential(&db, &sample_credential()).expect("insert credential");
+
+        delete_door_provider_credential(&db, CREDENTIAL_1).expect("delete");
+
+        let found = find_door_provider_credential(&db, DOOR_LORD, "bbslink").expect("find");
+        assert!(found.is_none());
+    }
+
+    #[test]
+    fn door_provider_credential_unique_constraint() {
+        let db = test_db();
+        insert_door_definition(&db, &sample_door()).expect("insert door");
+        insert_door_provider_credential(&db, &sample_credential()).expect("insert first");
+
+        let duplicate = DoorProviderCredentialRecord {
+            id: "00000000-0000-4000-8000-000000000602".to_string(),
+            door_id: DOOR_LORD.to_string(),
+            provider_name: "bbslink".to_string(),
+            credential_ref: "vault://doors/lord/bbslink-dup".to_string(),
+            created_at: "2026-01-01T00:00:00.000000Z".to_string(),
+            updated_at: "2026-01-01T00:00:00.000000Z".to_string(),
+        };
+
+        let result = insert_door_provider_credential(&db, &duplicate);
         assert!(result.is_err());
     }
 }

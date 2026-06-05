@@ -17,7 +17,7 @@ mod schema;
 mod session_repo;
 mod user_repo;
 
-pub const SCHEMA_VERSION: i64 = 6;
+pub const SCHEMA_VERSION: i64 = 7;
 
 pub use audit_repo::{
     AuditEventRecord, insert_audit_event, insert_audit_event_preserving_record, list_audit_events,
@@ -29,10 +29,12 @@ pub use auth_repo::{
 };
 pub use db_writer::{DbWriteTicket, DbWriter, DbWriterError, DbWriterResult};
 pub use door_repo::{
-    DoorDefinitionRecord, DoorRunFinish, DoorRunRecord, find_active_door_run_by_door_id,
-    find_door_by_key, find_door_run_by_id, finish_door_run, insert_door_definition,
-    insert_door_run, list_door_definitions, list_door_runs, update_door_definition,
-    update_door_enabled,
+    DoorDefinitionRecord, DoorProviderCredentialRecord, DoorRunFinish, DoorRunRecord,
+    delete_door_provider_credential, find_active_door_run_by_door_id, find_door_by_key,
+    find_door_provider_credential, find_door_run_by_id, finish_door_run, insert_door_definition,
+    insert_door_provider_credential, insert_door_run, list_door_definitions,
+    list_door_provider_credentials, list_door_runs, update_door_definition, update_door_enabled,
+    update_door_provider_credential,
 };
 pub use file_repo::{
     FileAreaRecord, FileEntryRecord, FileTransferRecord, find_file_area_by_key,

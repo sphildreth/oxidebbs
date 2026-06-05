@@ -443,6 +443,18 @@ fn create_full_schema(db: &Db) -> decentdb::Result<()> {
 
         CREATE INDEX IF NOT EXISTS idx_audit_events_created_at ON audit_events (created_at);
         CREATE INDEX IF NOT EXISTS idx_audit_events_user_id ON audit_events (user_id);
+
+        CREATE TABLE IF NOT EXISTS door_provider_credentials (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            door_id UUID NOT NULL REFERENCES doors(id) ON DELETE CASCADE,
+            provider_name TEXT NOT NULL CHECK (LENGTH(TRIM(provider_name)) > 0),
+            credential_ref TEXT NOT NULL CHECK (LENGTH(TRIM(credential_ref)) > 0),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (door_id, provider_name)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_door_provider_credentials_door_id ON door_provider_credentials (door_id);
         CREATE INDEX IF NOT EXISTS idx_messages_area_created_at ON messages (area_id, created_at);
         CREATE INDEX IF NOT EXISTS idx_messages_author_user_id ON messages (author_user_id);
         CREATE INDEX IF NOT EXISTS idx_messages_author_kind ON messages (author_kind);
@@ -663,6 +675,7 @@ mod tests {
             "sessions",
             "doors",
             "door_runs",
+            "door_provider_credentials",
             "file_areas",
             "file_entries",
             "file_transfers",

@@ -22,7 +22,7 @@ The `oxidebbs-binkp` crate currently provides tested frame primitives:
 - session-level filename validation that rejects path-like names
 - transport-security preflight policy for `tls_required`,
   `tls_opportunistic`, and `plaintext_legacy`
-- exponential retry policy calculation for future poll loops
+- exponential retry policy calculation for poll loops
 - in-process one-active-session-per-link guard primitive
 
 Implemented command constants include `M_NUL`, `M_ADR`, `M_PWD`, `M_FILE`,

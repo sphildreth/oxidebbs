@@ -18,6 +18,7 @@ pub fn migrate_to_current(db: &Db) -> decentdb::Result<()> {
             3 => migrate_3_to_4(db)?,
             4 => migrate_4_to_5(db)?,
             5 => migrate_5_to_6(db)?,
+            6 => migrate_6_to_7(db)?,
             unknown => {
                 return Err(DbError::sql(format!(
                     "Unsupported migration source schema version {unknown}; expected {SCHEMA_VERSION} or older known versions"
@@ -104,6 +105,33 @@ fn migrate_5_to_6(db: &Db) -> decentdb::Result<()> {
         ))),
         None => Err(DbError::sql(
             "Cannot apply migration 5 -> 6 because schema_version marker is missing",
+        )),
+    }
+}
+
+fn migrate_6_to_7(db: &Db) -> decentdb::Result<()> {
+    match existing_schema_version(db)? {
+        Some(6) => {
+            db.execute_batch(
+                "CREATE TABLE IF NOT EXISTS door_provider_credentials (
+                    id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+                    door_id UUID NOT NULL REFERENCES doors(id) ON DELETE CASCADE,
+                    provider_name TEXT NOT NULL CHECK (LENGTH(TRIM(provider_name)) > 0),
+                    credential_ref TEXT NOT NULL CHECK (LENGTH(TRIM(credential_ref)) > 0),
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (door_id, provider_name)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_door_provider_credentials_door_id ON door_provider_credentials (door_id);",
+            )?;
+            set_schema_version(db, 7)
+        }
+        Some(other) => Err(DbError::sql(format!(
+            "Cannot apply migration 6 -> 7 from schema version {other}"
+        ))),
+        None => Err(DbError::sql(
+            "Cannot apply migration 6 -> 7 because schema_version marker is missing",
         )),
     }
 }
@@ -1127,6 +1155,9 @@ mod tests {
         migrate_5_to_6(&db).expect("apply migration 5->6");
         assert_eq!(schema::schema_version(&db).expect("schema after 5->6"), 6);
 
+        migrate_6_to_7(&db).expect("apply migration 6->7");
+        assert_eq!(schema::schema_version(&db).expect("schema after 6->7"), 7);
+
         assert_eq!(
             schema::schema_version(&db).expect("schema version"),
             SCHEMA_VERSION
@@ -1440,8 +1471,10 @@ mod tests {
 
         db.execute_batch(
             "DELETE FROM door_runs;
+             DELETE FROM door_provider_credentials;
              DELETE FROM doors;
 
+             DROP TABLE door_provider_credentials;
              DROP TABLE door_runs;
              DROP TABLE doors;
 

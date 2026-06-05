@@ -665,6 +665,25 @@ pub trait RemoteDoorProvider: Send + Sync {
     fn validate_config(&self) -> Result<(), DoorError>;
 
     fn dry_run_session(&self, caller: &DoorCaller) -> Result<DoorRunResult, DoorError>;
+
+    fn launch_session(
+        &self,
+        caller: &DoorCaller,
+        io: &mut dyn RemoteSessionIo,
+    ) -> Result<DoorRunResult, DoorError>;
+}
+
+pub trait RemoteSessionIo {
+    fn read_byte(&mut self) -> std::io::Result<Option<u8>>;
+    fn write_all(&mut self, bytes: &[u8]) -> std::io::Result<()>;
+    fn flush(&mut self) -> std::io::Result<()>;
+    fn has_remote_data(&self) -> bool;
+    fn has_caller_data(&self) -> bool;
+    fn is_remote_closed(&self) -> bool;
+    fn read_caller_byte(&mut self) -> std::io::Result<Option<u8>>;
+    fn write_remote(&mut self, bytes: &[u8]) -> std::io::Result<()>;
+    fn read_remote_byte(&mut self) -> std::io::Result<Option<u8>>;
+    fn write_caller(&mut self, bytes: &[u8]) -> std::io::Result<()>;
 }
 
 impl RemoteDoorProvider for BbsLinkProvider {
@@ -682,6 +701,30 @@ impl RemoteDoorProvider for BbsLinkProvider {
             timed_out: false,
         })
     }
+
+    fn launch_session(
+        &self,
+        caller: &DoorCaller,
+        io: &mut dyn RemoteSessionIo,
+    ) -> Result<DoorRunResult, DoorError> {
+        self.validate_config()?;
+        validate_required_field("caller alias", &caller.alias)?;
+
+        let auth_line = format!(
+            "SYS {} AUTH {}\r\n",
+            self.config.system_id,
+            self.config.auth_code.expose_secret()
+        );
+        io.write_all(auth_line.as_bytes()).map_err(DoorError::Io)?;
+        io.flush().map_err(DoorError::Io)?;
+
+        let caller_line = format!("USER {} SEC {}\r\n", caller.alias, caller.security_level);
+        io.write_all(caller_line.as_bytes())
+            .map_err(DoorError::Io)?;
+        io.flush().map_err(DoorError::Io)?;
+
+        bridge_remote_session(io)
+    }
 }
 
 impl RemoteDoorProvider for DoorPartyProvider {
@@ -698,6 +741,77 @@ impl RemoteDoorProvider for DoorPartyProvider {
             exit_code: Some(0),
             timed_out: false,
         })
+    }
+
+    fn launch_session(
+        &self,
+        caller: &DoorCaller,
+        io: &mut dyn RemoteSessionIo,
+    ) -> Result<DoorRunResult, DoorError> {
+        self.validate_config()?;
+        validate_required_field("caller alias", &caller.alias)?;
+
+        let auth_line = format!(
+            "ACCT {} PASS {}\r\n",
+            self.config.account,
+            self.config.password.expose_secret()
+        );
+        io.write_all(auth_line.as_bytes()).map_err(DoorError::Io)?;
+        io.flush().map_err(DoorError::Io)?;
+
+        let caller_line = format!("USER {} SEC {}\r\n", caller.alias, caller.security_level);
+        io.write_all(caller_line.as_bytes())
+            .map_err(DoorError::Io)?;
+        io.flush().map_err(DoorError::Io)?;
+
+        bridge_remote_session(io)
+    }
+}
+
+fn bridge_remote_session(io: &mut dyn RemoteSessionIo) -> Result<DoorRunResult, DoorError> {
+    let mut remote_closed = false;
+    let mut caller_closed = false;
+    loop {
+        if !remote_closed && io.has_remote_data() {
+            match io.read_remote_byte() {
+                Ok(Some(byte)) => {
+                    io.write_caller(&[byte]).map_err(DoorError::Io)?;
+                }
+                Ok(None) => {
+                    remote_closed = true;
+                }
+                Err(e) => {
+                    return Err(DoorError::Io(e));
+                }
+            }
+        } else if !remote_closed && io.is_remote_closed() {
+            remote_closed = true;
+        }
+
+        if !caller_closed && io.has_caller_data() {
+            match io.read_caller_byte() {
+                Ok(Some(byte)) => {
+                    io.write_remote(&[byte]).map_err(DoorError::Io)?;
+                }
+                Ok(None) => {
+                    caller_closed = true;
+                }
+                Err(e) => {
+                    return Err(DoorError::Io(e));
+                }
+            }
+        }
+
+        if remote_closed || caller_closed {
+            return Ok(DoorRunResult {
+                exit_code: Some(0),
+                timed_out: false,
+            });
+        }
+
+        if !io.has_remote_data() && !io.has_caller_data() {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
     }
 }
 
@@ -1442,6 +1556,17 @@ command = "LORD.EXE"
                     timed_out: false,
                 })
             }
+
+            fn launch_session(
+                &self,
+                _caller: &DoorCaller,
+                _io: &mut dyn RemoteSessionIo,
+            ) -> Result<DoorRunResult, DoorError> {
+                Ok(DoorRunResult {
+                    exit_code: Some(0),
+                    timed_out: false,
+                })
+            }
         }
 
         let mut registry = ProviderRegistry::new();
@@ -1474,5 +1599,166 @@ command = "LORD.EXE"
         assert!(drop_file.contains("COM1\r\n"));
 
         cleanup_node_runtime_dir(&base).expect("cleanup");
+    }
+
+    struct FakeRemoteSessionIo {
+        remote_input: Vec<u8>,
+        remote_output: Vec<u8>,
+        caller_input: Vec<u8>,
+        caller_output: Vec<u8>,
+        remote_pos: usize,
+        caller_pos: usize,
+    }
+
+    impl FakeRemoteSessionIo {
+        fn new(remote_responses: &[u8], caller_inputs: &[u8]) -> Self {
+            Self {
+                remote_input: remote_responses.to_vec(),
+                remote_output: Vec::new(),
+                caller_input: caller_inputs.to_vec(),
+                caller_output: Vec::new(),
+                remote_pos: 0,
+                caller_pos: 0,
+            }
+        }
+
+        fn remote_received(&self) -> &[u8] {
+            &self.remote_output
+        }
+
+        fn caller_received(&self) -> &[u8] {
+            &self.caller_output
+        }
+    }
+
+    impl RemoteSessionIo for FakeRemoteSessionIo {
+        fn read_byte(&mut self) -> std::io::Result<Option<u8>> {
+            self.read_remote_byte()
+        }
+
+        fn write_all(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+            self.write_remote(bytes)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+
+        fn has_remote_data(&self) -> bool {
+            self.remote_pos < self.remote_input.len()
+        }
+
+        fn has_caller_data(&self) -> bool {
+            self.caller_pos < self.caller_input.len()
+        }
+
+        fn is_remote_closed(&self) -> bool {
+            self.remote_pos >= self.remote_input.len()
+        }
+
+        fn read_caller_byte(&mut self) -> std::io::Result<Option<u8>> {
+            if self.caller_pos < self.caller_input.len() {
+                let byte = self.caller_input[self.caller_pos];
+                self.caller_pos += 1;
+                Ok(Some(byte))
+            } else {
+                Ok(None)
+            }
+        }
+
+        fn write_remote(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+            self.remote_output.extend_from_slice(bytes);
+            Ok(())
+        }
+
+        fn read_remote_byte(&mut self) -> std::io::Result<Option<u8>> {
+            if self.remote_pos < self.remote_input.len() {
+                let byte = self.remote_input[self.remote_pos];
+                self.remote_pos += 1;
+                Ok(Some(byte))
+            } else {
+                Ok(None)
+            }
+        }
+
+        fn write_caller(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+            self.caller_output.extend_from_slice(bytes);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn bbslink_provider_launch_session_sends_auth_and_user() {
+        let provider = BbsLinkProvider::new(BbsLinkConfig::new(
+            "oxide-system",
+            "bbslink-auth-code",
+            "bbslink.example:23",
+        ));
+
+        let remote_responses = b"OK\r\nWelcome to Door\r\n";
+        let caller_inputs = b"";
+        let mut io = FakeRemoteSessionIo::new(remote_responses, caller_inputs);
+
+        let result = provider.launch_session(&caller(), &mut io).expect("launch");
+
+        assert_eq!(result.exit_code, Some(0));
+        assert!(!result.timed_out);
+
+        let sent = String::from_utf8_lossy(io.remote_received());
+        assert!(sent.contains("SYS oxide-system AUTH bbslink-auth-code"));
+        assert!(sent.contains("USER Alice SEC 50"));
+    }
+
+    #[test]
+    fn doorparty_provider_launch_session_sends_auth_and_user() {
+        let provider = DoorPartyProvider::new(DoorPartyConfig::new(
+            "oxide-account",
+            "doorparty-password",
+            "doorparty.example:23",
+        ));
+
+        let remote_responses = b"OK\r\nWelcome to Door\r\n";
+        let caller_inputs = b"";
+        let mut io = FakeRemoteSessionIo::new(remote_responses, caller_inputs);
+
+        let result = provider.launch_session(&caller(), &mut io).expect("launch");
+
+        assert_eq!(result.exit_code, Some(0));
+        assert!(!result.timed_out);
+
+        let sent = String::from_utf8_lossy(io.remote_received());
+        assert!(sent.contains("ACCT oxide-account PASS doorparty-password"));
+        assert!(sent.contains("USER Alice SEC 50"));
+    }
+
+    #[test]
+    fn bbslink_provider_launch_session_bridges_remote_to_caller() {
+        let provider = BbsLinkProvider::new(BbsLinkConfig::new(
+            "oxide-system",
+            "bbslink-auth-code",
+            "bbslink.example:23",
+        ));
+
+        let remote_responses = b"OK\r\nHello from door\r\n";
+        let caller_inputs = b"";
+        let mut io = FakeRemoteSessionIo::new(remote_responses, caller_inputs);
+
+        let result = provider.launch_session(&caller(), &mut io).expect("launch");
+
+        assert_eq!(result.exit_code, Some(0));
+        let caller_received = String::from_utf8_lossy(io.caller_received());
+        assert!(caller_received.contains("OK"));
+        assert!(caller_received.contains("Hello from door"));
+    }
+
+    #[test]
+    fn doorparty_provider_launch_session_rejects_invalid_config() {
+        let provider =
+            DoorPartyProvider::new(DoorPartyConfig::new("", "password", "doorparty.example:23"));
+
+        let mut io = FakeRemoteSessionIo::new(b"", b"");
+        let result = provider.launch_session(&caller(), &mut io);
+
+        assert!(result.is_err());
     }
 }

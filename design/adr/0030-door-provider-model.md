@@ -6,9 +6,8 @@ Accepted
 
 ## Context
 
-v1 door execution is centered on local DOS doors through DOSEMU2. Documentation
-also identifies native local doors and BBSLink/DoorParty-style remote providers
-as future work.
+v1 door execution is centered on local DOS doors through DOSEMU2. v1.2 extends
+support to native local doors and BBSLink/DoorParty-style remote providers.
 
 ## Decision
 

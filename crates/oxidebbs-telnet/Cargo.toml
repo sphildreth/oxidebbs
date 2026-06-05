@@ -8,3 +8,5 @@ authors.workspace = true
 [dependencies]
 thiserror.workspace = true
 tokio.workspace = true
+serialport.workspace = true
+tracing.workspace = true

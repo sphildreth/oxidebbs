@@ -6,9 +6,9 @@ Accepted
 
 ## Context
 
-Caller file transfers were deferred from the v1 release line. These protocols
-are byte-oriented and interact directly with caller transport timing and
-terminal negotiation.
+Caller file transfers were deferred from the v1 release line and are now
+implemented in v1.2. These protocols are byte-oriented and interact directly
+with caller transport timing and terminal negotiation.
 
 FTN/FidoNet network mail exchange is a separate transport concern. It uses
 BinkP in v1.2 and must not depend on caller file-transfer protocols such as

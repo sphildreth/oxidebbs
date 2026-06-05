@@ -33,16 +33,15 @@ use oxidebbs_db::{
     record_auth_failure, update_session_user, update_user_login,
 };
 use oxidebbs_telnet::telnet::{
-    DO, IAC, SB, SE, TELOPT_ECHO, TELOPT_SUPPRESS_GO_AHEAD, TELOPT_TTYPE_SEND, WILL,
+    DO, IAC, SB, SE, TELOPT_ECHO, TELOPT_NAWS, TELOPT_SUPPRESS_GO_AHEAD, TELOPT_TERMINAL_TYPE,
+    TELOPT_TTYPE_SEND, TelnetCommand, TelnetEvent, TelnetParser, WILL,
 };
-use oxidebbs_telnet::{
-    TELOPT_NAWS, TELOPT_TERMINAL_TYPE, TcpTransport, TelnetCommand, TelnetEvent, TelnetParser,
-    Transport, TransportError,
-};
+use oxidebbs_telnet::{TcpTransport, Transport, TransportError};
 use oxidebbs_term::{
     LoadedScreen, ScreenAsset as TermScreenAsset, TerminalCapabilities, TerminalProfile,
     encode_cp437,
 };
+use oxidebbs_transfer::adapter::TransportAdapter;
 
 use crate::config::{Argon2Config, AuthConfig, OxideConfig};
 use crate::control::{
@@ -823,6 +822,27 @@ async fn handle_caller_transport<T: Transport>(
                                 MenuFlowResult::Exit => {
                                     break;
                                 }
+                            }
+                        }
+                        Some(MenuAction::Files) => {
+                            debug!(node = %node_number, "caller selected files");
+                            match run_files_flow(
+                                authenticated_user.as_ref(),
+                                &mut transport,
+                                &mut input,
+                                db.as_ref(),
+                                config.as_ref(),
+                                idle_timeout,
+                                &mut disconnect_reason,
+                                node_number_u16,
+                            )
+                            .await?
+                            {
+                                MenuFlowResult::Continue => {
+                                    runtime.mark_node_main_menu(node_number_u16);
+                                    send_menu_prompt(&mut transport, &current_menu).await?;
+                                }
+                                MenuFlowResult::Exit => break,
                             }
                         }
                         Some(MenuAction::NewUser) => {
@@ -2133,6 +2153,225 @@ async fn run_messages_flow(
                 Some(_) => {
                     send_text(transport, "Unknown command.\r\n").await?;
                 }
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_files_flow<T: Transport>(
+    authenticated_user: Option<&User>,
+    transport: &mut T,
+    input: &mut InputSession,
+    db: &OxideDb,
+    _config: &OxideConfig,
+    idle_timeout: Duration,
+    disconnect_reason: &mut String,
+    node_number: u16,
+) -> ServeResult<MenuFlowResult> {
+    let Some(user) = authenticated_user else {
+        send_text(transport, "You must be signed in to use file areas.\r\n").await?;
+        return Ok(MenuFlowResult::Continue);
+    };
+
+    let file_areas = oxidebbs_db::list_file_areas(db.db())?
+        .into_iter()
+        .filter(|area| area.enabled)
+        .collect::<Vec<_>>();
+
+    if file_areas.is_empty() {
+        send_text(transport, "No file areas are configured.\r\n").await?;
+        return Ok(MenuFlowResult::Continue);
+    }
+
+    loop {
+        send_text(transport, "\r\nFile areas:\r\n").await?;
+        for (index, area) in file_areas.iter().enumerate() {
+            let accessible = user.security_level >= area.read_security_level as i32;
+            let marker = if accessible { " " } else { "*" };
+            send_text(
+                transport,
+                &format!(
+                    "{}[{}] {} - {}\r\n",
+                    marker,
+                    index + 1,
+                    area.key,
+                    area.description
+                ),
+            )
+            .await?;
+        }
+
+        let selection = match prompt_for_line(
+            transport,
+            input,
+            idle_timeout,
+            true,
+            false,
+            "Area number (blank to return): ",
+        )
+        .await?
+        {
+            PromptLineResult::Value(value) => value,
+            PromptLineResult::Disconnected => {
+                *disconnect_reason = "caller_dropped_during_files".to_string();
+                return Ok(MenuFlowResult::Exit);
+            }
+            PromptLineResult::IdleTimeout => {
+                *disconnect_reason = "idle_timeout".to_string();
+                send_text(transport, "Idle timeout. Goodbye.\r\n").await?;
+                return Ok(MenuFlowResult::Exit);
+            }
+            PromptLineResult::Rejected => {
+                send_text(transport, CP437_INPUT_REJECT_LINE).await?;
+                continue;
+            }
+        };
+
+        let trimmed = selection.trim();
+        if trimmed.is_empty() {
+            return Ok(MenuFlowResult::Continue);
+        }
+
+        let area_index = match trimmed.parse::<usize>() {
+            Ok(n) if n >= 1 && n <= file_areas.len() => n - 1,
+            _ => {
+                send_text(transport, "Invalid selection.\r\n").await?;
+                continue;
+            }
+        };
+
+        let area = &file_areas[area_index];
+        if user.security_level < area.read_security_level as i32 {
+            send_text(transport, "Access denied. Security level too low.\r\n").await?;
+            continue;
+        }
+
+        let files = oxidebbs_db::list_file_entries(db.db())?
+            .into_iter()
+            .filter(|entry| entry.approved && entry.area_id == area.id)
+            .collect::<Vec<_>>();
+
+        if files.is_empty() {
+            send_text(transport, "No files in this area.\r\n").await?;
+            continue;
+        }
+
+        send_text(transport, &format!("\r\nFiles in {}:\r\n", area.name)).await?;
+        for (index, file) in files.iter().enumerate() {
+            send_text(
+                transport,
+                &format!(
+                    "[{}] {} ({} bytes)\r\n",
+                    index + 1,
+                    file.display_name,
+                    file.size_bytes
+                ),
+            )
+            .await?;
+        }
+
+        let file_selection = match prompt_for_line(
+            transport,
+            input,
+            idle_timeout,
+            true,
+            false,
+            "File number (blank to return): ",
+        )
+        .await?
+        {
+            PromptLineResult::Value(value) => value,
+            PromptLineResult::Disconnected => {
+                *disconnect_reason = "caller_dropped_during_files".to_string();
+                return Ok(MenuFlowResult::Exit);
+            }
+            PromptLineResult::IdleTimeout => {
+                *disconnect_reason = "idle_timeout".to_string();
+                send_text(transport, "Idle timeout. Goodbye.\r\n").await?;
+                return Ok(MenuFlowResult::Exit);
+            }
+            PromptLineResult::Rejected => {
+                send_text(transport, CP437_INPUT_REJECT_LINE).await?;
+                continue;
+            }
+        };
+
+        let file_trimmed = file_selection.trim();
+        if file_trimmed.is_empty() {
+            continue;
+        }
+
+        let file_index = match file_trimmed.parse::<usize>() {
+            Ok(n) if n >= 1 && n <= files.len() => n - 1,
+            _ => {
+                send_text(transport, "Invalid selection.\r\n").await?;
+                continue;
+            }
+        };
+
+        let file = &files[file_index];
+        if user.security_level < area.download_security_level as i32 {
+            send_text(
+                transport,
+                "Access denied. Security level too low for download.\r\n",
+            )
+            .await?;
+            continue;
+        }
+
+        let file_path = Path::new(&area.root_path)
+            .join("files")
+            .join(&file.id)
+            .join(&file.storage_name);
+
+        if !file_path.exists() {
+            send_text(transport, "File not found on disk.\r\n").await?;
+            continue;
+        }
+
+        let file_bytes = match std::fs::read(&file_path) {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                send_text(transport, "Cannot read file.\r\n").await?;
+                continue;
+            }
+        };
+
+        send_text(
+            transport,
+            &format!(
+                "\r\nSending {} ({} bytes) via XMODEM-CRC...\r\n",
+                file.display_name, file.size_bytes
+            ),
+        )
+        .await?;
+
+        let transfer_result = oxidebbs_transfer::xmodem::send_xmodem_crc(
+            &mut TransportAdapter::new(&mut *transport),
+            &file_bytes,
+        )
+        .await;
+
+        match transfer_result {
+            Ok(()) => {
+                send_text(transport, "\r\nTransfer complete.\r\n").await?;
+                debug!(
+                    node = %node_number,
+                    user_id = %user.id,
+                    file_id = %file.id,
+                    "caller downloaded file"
+                );
+            }
+            Err(error) => {
+                send_text(transport, &format!("\r\nTransfer failed: {error}\r\n")).await?;
+                debug!(
+                    node = %node_number,
+                    user_id = %user.id,
+                    file_id = %file.id,
+                    %error,
+                    "file transfer failed"
+                );
             }
         }
     }
