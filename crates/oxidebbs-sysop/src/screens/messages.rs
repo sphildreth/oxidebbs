@@ -29,6 +29,12 @@ pub struct MessagesScreen {
     pub search_query: String,
     pub search_results: Vec<MessageRecord>,
     pub search_state: TableState,
+    pub pending_action: Option<MessagePendingAction>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MessagePendingAction {
+    SetAreaEnabled { area_id: String, enabled: bool },
 }
 
 impl MessagesScreen {
@@ -51,6 +57,7 @@ impl MessagesScreen {
             search_query: String::new(),
             search_results: Vec::new(),
             search_state,
+            pending_action: None,
         }
     }
 
@@ -113,6 +120,32 @@ impl MessagesScreen {
                         return UiAction::Refresh;
                     }
                 }
+                KeyCode::Char('d') if !readonly => {
+                    if let Some(id) = self.selected_area_id()
+                        && let Some(area) = self.areas.iter().find(|area| area.id == id)
+                    {
+                        let enabled = !area.enabled;
+                        self.pending_action = Some(MessagePendingAction::SetAreaEnabled {
+                            area_id: area.id.clone(),
+                            enabled,
+                        });
+                        return UiAction::OpenModal(ModalKind::Confirm(ConfirmModal {
+                            title: if enabled {
+                                "Enable Message Area".to_string()
+                            } else {
+                                "Disable Message Area".to_string()
+                            },
+                            message: format!(
+                                "{} message area {}?",
+                                if enabled { "Enable" } else { "Disable" },
+                                area.key
+                            ),
+                            detail: Some(area.name.clone()),
+                            confirm_label: "Confirm".to_string(),
+                            cancel_label: "Cancel".to_string(),
+                        }));
+                    }
+                }
                 KeyCode::Esc => {
                     return UiAction::Navigate(ScreenId::Dashboard);
                 }
@@ -147,6 +180,29 @@ impl MessagesScreen {
             _ => {}
         }
         UiAction::None
+    }
+
+    pub fn confirm_pending_action(
+        &mut self,
+        db: &Option<OxideDb>,
+    ) -> Result<(), crate::SysopError> {
+        let Some(action) = self.pending_action.take() else {
+            return Ok(());
+        };
+        let Some(db) = db else {
+            return Err(crate::SysopError::Message(
+                "database is unavailable for message action".to_string(),
+            ));
+        };
+        match action {
+            MessagePendingAction::SetAreaEnabled { area_id, enabled } => {
+                MessageAdminService::set_area_enabled(db.db(), &area_id, enabled)
+            }
+        }
+    }
+
+    pub fn cancel_pending_action(&mut self) {
+        self.pending_action = None;
     }
 
     fn handle_search_event(&mut self, event: UiEvent, db: &Option<OxideDb>) -> UiAction {
@@ -383,7 +439,7 @@ impl MessagesScreen {
             &mut area_table_state,
         );
 
-        let hints = "↑↓ Move | Enter Open Area | F3 Search | Esc Back";
+        let hints = "↑↓ Move | Enter Open Area | D Enable/Disable | F3 Search | Esc Back";
         Paragraph::new(hints)
             .style(self.theme.muted_style())
             .block(Block::default().borders(Borders::ALL))
@@ -592,6 +648,18 @@ impl MessagesScreen {
                 lines.push(Line::from(vec![
                     Span::styled("Reply To: ", self.theme.label_style()),
                     Span::styled(reply.as_str(), self.theme.normal_style()),
+                ]));
+            }
+            if let Some(ref network_message_id) = m.network_message_id {
+                lines.push(Line::from(vec![
+                    Span::styled("Network Message: ", self.theme.label_style()),
+                    Span::styled(network_message_id.as_str(), self.theme.normal_style()),
+                ]));
+            }
+            if let Some(ref address) = m.author_network_address {
+                lines.push(Line::from(vec![
+                    Span::styled("Origin Address: ", self.theme.label_style()),
+                    Span::styled(address.as_str(), self.theme.normal_style()),
                 ]));
             }
             lines.push(Line::from(""));

@@ -13,6 +13,10 @@ Current v1.2 behavior:
 - records outbound `network_packets` rows with `status = 'pending'`
 - records exported `network_messages` rows
 - avoids exporting the same local message to the same link more than once
+- materializes pending outbound netmail rows into `.pkt` files for the target
+  link
+- bundles ready packet files into pending ZIP arcmail rows for links configured
+  with ZIP compression
 
 Run it manually:
 
@@ -21,15 +25,13 @@ oxidebbs-server net scan fidonet
 oxidebbs-server --json net scan fidonet
 ```
 
-Current limitations:
+Runtime notes:
 
-- netmail packet creation is not wired yet
-- advanced SEEN-BY/PATH loop prevention is still limited
-- `oxidebbs-ftn` can create ZIP bundles, but `net scan` still writes raw `.pkt`
-  files and does not yet call the bundle creator
-- ARJ bundle creation is not implemented
-- BinkP poll execution is responsible for transporting ready packet files and is
-  a separate remaining phase
+- BinkP poll execution transports pending outbound packet or bundle rows and
+  marks them processed after acknowledgement
+- outbound arcmail creation uses ZIP; inbound ARJ extraction is supported by the
+  tosser
+- advanced SEEN-BY/PATH loop prevention remains intentionally conservative
 
 The default outbound layout for profile `fidonet` and link `hub` is:
 
@@ -38,8 +40,5 @@ runtime/network/fidonet/
   outbound/
     hub/
       ready/
-      busy/
-      sent/
-      hold/
-      temp/
+      bundled/
 ```

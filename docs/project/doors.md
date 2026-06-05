@@ -16,14 +16,29 @@ Current capabilities:
 - Doors marked `exclusive = true` cannot be launched a second time while an
   unfinished run for that same door exists in DecentDB.
 - Remote door-provider abstractions, BBSLink-style dry runs, DoorParty-style dry
-  runs, and secret redaction primitives exist.
+  runs, TCP/telnet live connectors, and localhost fake-server tests exist.
+- Provider credential references are stored in DecentDB through CLI and sysop
+  service methods. CLI output, TUI detail display, audit details, and JSON
+  exports show provider credential refs only as `[redacted]`.
 
-Remaining v1.2 work:
+Remote provider definitions use the existing door fields:
 
-- Live remote-provider connectors with fake-server integration tests.
-- Secret-reference storage and redaction coverage across every CLI, TUI, log,
-  backup, and export path.
-- Full TUI reuse of the same door mutation service layer.
+- `runner = "remote:bbslink"` or `runner = "remote:doorparty"`
+- `working_dir` stores the provider endpoint, such as `telnet://host:port`
+- `command` stores the provider-side door key or command
+
+Add a remote door with a secret reference, not a raw provider secret:
+
+```bash
+oxidebbs-server doors add bbslink-lord "BBSLink LORD" \
+  --provider bbslink \
+  --endpoint telnet://bbslink.example:23 \
+  --credential-ref env:BBSLINK_AUTH_CODE \
+  . LORD
+```
+
+The `.` argument satisfies the legacy local working-directory positional; for a
+remote provider door, `--endpoint` is the value stored as the provider endpoint.
 
 OxideBBS does not bundle copyrighted or abandonware DOS doors. Operators provide
 their own door binaries or use the project-owned Oxide Door Check fixture for

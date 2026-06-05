@@ -317,33 +317,29 @@ transport_security = "plaintext_legacy"
 legacy_compatible = true
 ```
 
-P13 must add the BinkP runtime settings below unless an accepted ADR replaces
-them before implementation:
+The implemented BinkP listener runtime settings are:
 
 ```toml
-[network.binkp]
-listener_enabled = false
+[network.binkp_listener]
+enabled = false
 bind = "0.0.0.0:24554"
-poller_enabled = true
-poll_on_startup = false
-max_concurrent_sessions = 8
-session_timeout_seconds = 300
-connect_timeout_seconds = 30
+max_connections = 10
+tls_cert_path = "./certs/binkp.crt"
+tls_key_path = "./certs/binkp.key"
 ```
 
 Rules:
 
 - If `network.enabled = false`, no network scanner, tosser scheduler, BinkP
   listener, or BinkP poller starts.
-- If `network.binkp.listener_enabled = false`, OxideBBS does not bind a BinkP
+- If `network.binkp_listener.enabled = false`, OxideBBS does not bind a BinkP
   listening socket.
-- If `network.binkp.poller_enabled = false`, automatic scheduled polling does
-  not run. Manual `net poll` commands still work.
-- `poll_on_startup = false` means the scheduler waits until each link's first
-  due interval before the first automatic poll. A sysop can run `net poll`
-  manually immediately after startup.
-- `max_concurrent_sessions` is global. A second session for the same link is
-  rejected even if the global limit has capacity.
+- If a listener is enabled for any TLS-required link, `tls_cert_path` and
+  `tls_key_path` must point at a readable PEM certificate chain and PKCS#8 key.
+- Manual `net poll` commands work independently of whether the inbound listener
+  is enabled.
+- `max_connections` is the listener-wide connection limit. A second session for
+  the same link is rejected even if the global limit has capacity.
 - `bind` must be parsed as a socket address. Public exposure is an operator
   decision and must be documented with security warnings.
 
@@ -729,17 +725,18 @@ this document:
 - [ ] Add `network.binkp` runtime config.
 - [ ] Add or derive `network.paths` spool config.
 - [ ] Create the spool directories during setup/runtime initialization.
-- [ ] Implement `oxidebbs-binkp`.
-- [ ] Keep `oxidebbs-binkp` independent from `oxidebbs-transfer`.
-- [ ] Keep BinkP independent from FTN packet parsing.
-- [ ] Implement outbound poll lifecycle.
-- [ ] Implement inbound listener lifecycle.
-- [ ] Implement per-link session guard.
+- [x] Implement `oxidebbs-binkp`.
+- [x] Keep `oxidebbs-binkp` independent from `oxidebbs-transfer`.
+- [x] Keep BinkP independent from FTN packet parsing.
+- [x] Implement outbound poll lifecycle.
+- [x] Implement inbound listener lifecycle.
+- [x] Implement per-link session guard.
 - [ ] Implement scheduled polling.
-- [ ] Implement poll logging.
-- [ ] Implement plaintext legacy warnings.
-- [ ] Implement file-only inbound and outbound workflows.
+- [x] Implement poll logging.
+- [x] Implement plaintext legacy warnings.
+- [x] Implement file-only inbound and outbound workflows.
 - [ ] Document external-mailer directory drop mode.
 - [ ] Add CLI status and queue views.
-- [ ] Add sysop docs in `docs/ftn/architecture.md` and `docs/ftn/binkp.md`.
+- [x] Add sysop docs in `docs/ftn/architecture.md`, `docs/ftn/binkp.md`,
+  `docs/ftn/configuration.md`, and `docs/ftn/troubleshooting.md`.
 - [ ] Pass `./scripts/dev-check.sh`.

@@ -351,6 +351,10 @@ pub struct BinkpListenerConfig {
     pub bind: String,
     #[serde(default = "default_binkp_max_connections")]
     pub max_connections: u32,
+    #[serde(default)]
+    pub tls_cert_path: Option<PathBuf>,
+    #[serde(default)]
+    pub tls_key_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -430,8 +434,24 @@ pub struct SerialDeviceConfig {
     pub path: String,
     #[serde(default = "default_serial_baud_rate")]
     pub baud_rate: u32,
+    #[serde(default = "default_serial_data_bits")]
+    pub data_bits: u8,
+    #[serde(default = "default_serial_parity")]
+    pub parity: String,
+    #[serde(default = "default_serial_stop_bits")]
+    pub stop_bits: u8,
     #[serde(default = "default_serial_flow_control")]
     pub flow_control: String,
+    #[serde(default)]
+    pub init_strings: Vec<String>,
+    #[serde(default)]
+    pub answer_string: Option<String>,
+    #[serde(default)]
+    pub require_carrier_detect: bool,
+    #[serde(default = "default_true")]
+    pub drop_dtr_on_hangup: bool,
+    #[serde(default = "default_serial_read_timeout_ms")]
+    pub read_timeout_ms: u64,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -578,6 +598,8 @@ impl OxideConfig {
         self.validate_screens()?;
         self.validate_menus()?;
         self.validate_network()?;
+        self.validate_serial()?;
+        self.validate_file_transfers()?;
         self.validate_admin_web()?;
         Ok(())
     }
@@ -801,6 +823,34 @@ impl OxideConfig {
     }
 
     fn validate_network(&self) -> Result<(), ConfigError> {
+        if let Some(listener) = &self.network.binkp_listener {
+            if listener.max_connections == 0 {
+                return Err(ConfigError::Validation(
+                    "network.binkp_listener.max_connections must be greater than 0".to_string(),
+                ));
+            }
+            if listener.tls_cert_path.is_some() != listener.tls_key_path.is_some() {
+                return Err(ConfigError::Validation(
+                    "network.binkp_listener TLS requires both tls_cert_path and tls_key_path"
+                        .to_string(),
+                ));
+            }
+            if listener.enabled
+                && listener.tls_cert_path.is_none()
+                && self.network.links.values().any(|link| {
+                    link.enabled
+                        && link
+                            .transport_security
+                            .trim()
+                            .eq_ignore_ascii_case("tls_required")
+                })
+            {
+                return Err(ConfigError::Validation(
+                    "network.binkp_listener needs tls_cert_path and tls_key_path when enabled links require TLS".to_string(),
+                ));
+            }
+        }
+
         for (key, profile) in &self.network.profiles {
             validate_config_key("network.profiles", key)?;
             validate_network_adapter(&profile.adapter).map_err(ConfigError::Validation)?;
@@ -883,6 +933,65 @@ impl OxideConfig {
             }
         }
 
+        Ok(())
+    }
+
+    fn validate_serial(&self) -> Result<(), ConfigError> {
+        if self.serial.enabled && self.serial.devices.is_empty() {
+            return Err(ConfigError::Validation(
+                "serial.devices must include at least one device when serial.enabled = true".into(),
+            ));
+        }
+        let mut names = HashSet::new();
+        for device in &self.serial.devices {
+            let name = device.name.trim();
+            if name.is_empty() {
+                return Err(ConfigError::Validation(
+                    "serial device name must not be blank".into(),
+                ));
+            }
+            if !names.insert(name.to_ascii_lowercase()) {
+                return Err(ConfigError::Validation(format!(
+                    "serial device name {name:?} is duplicated"
+                )));
+            }
+            if device.path.trim().is_empty() {
+                return Err(ConfigError::Validation(format!(
+                    "serial.devices.{name}.path must not be blank"
+                )));
+            }
+            if device.baud_rate == 0 {
+                return Err(ConfigError::Validation(format!(
+                    "serial.devices.{name}.baud_rate must be greater than 0"
+                )));
+            }
+            if !matches!(device.data_bits, 5..=8) {
+                return Err(ConfigError::Validation(format!(
+                    "serial.devices.{name}.data_bits must be one of 5, 6, 7, or 8"
+                )));
+            }
+            validate_serial_parity(&device.parity).map_err(ConfigError::Validation)?;
+            if !matches!(device.stop_bits, 1 | 2) {
+                return Err(ConfigError::Validation(format!(
+                    "serial.devices.{name}.stop_bits must be 1 or 2"
+                )));
+            }
+            validate_serial_flow_control(&device.flow_control).map_err(ConfigError::Validation)?;
+            if device.read_timeout_ms == 0 {
+                return Err(ConfigError::Validation(format!(
+                    "serial.devices.{name}.read_timeout_ms must be greater than 0"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_file_transfers(&self) -> Result<(), ConfigError> {
+        if self.file_transfers.max_upload_bytes < 0 {
+            return Err(ConfigError::Validation(
+                "file_transfers.max_upload_bytes must not be negative".into(),
+            ));
+        }
         Ok(())
     }
 
@@ -1181,8 +1290,20 @@ fn default_transport_security() -> String {
 fn default_serial_baud_rate() -> u32 {
     115_200
 }
+fn default_serial_data_bits() -> u8 {
+    8
+}
+fn default_serial_parity() -> String {
+    "none".into()
+}
+fn default_serial_stop_bits() -> u8 {
+    1
+}
 fn default_serial_flow_control() -> String {
     "rtscts".into()
+}
+fn default_serial_read_timeout_ms() -> u64 {
+    100
 }
 fn default_file_transfers_max_upload_bytes() -> i64 {
     1_048_576
@@ -1317,6 +1438,28 @@ fn validate_transport_security(transport_security: &str) -> Result<&'static str,
         "plaintext_legacy" => Ok("plaintext_legacy"),
         other => Err(format!(
             "network link transport_security must be one of tls_required, tls_opportunistic, or plaintext_legacy, got {other:?}"
+        )),
+    }
+}
+
+fn validate_serial_flow_control(flow_control: &str) -> Result<&'static str, String> {
+    match flow_control.trim().to_ascii_lowercase().as_str() {
+        "none" => Ok("none"),
+        "rtscts" | "rts_cts" | "hardware" => Ok("rtscts"),
+        "xonxoff" | "xon_xoff" | "software" => Ok("xonxoff"),
+        other => Err(format!(
+            "serial flow_control must be one of none, rtscts, or xonxoff, got {other:?}"
+        )),
+    }
+}
+
+fn validate_serial_parity(parity: &str) -> Result<&'static str, String> {
+    match parity.trim().to_ascii_lowercase().as_str() {
+        "none" => Ok("none"),
+        "odd" => Ok("odd"),
+        "even" => Ok("even"),
+        other => Err(format!(
+            "serial parity must be one of none, odd, or even, got {other:?}"
         )),
     }
 }
@@ -2171,6 +2314,113 @@ transport_security = "plaintext_legacy"
             error
                 .to_string()
                 .contains("plaintext_legacy is allowed only for legacy-ftn profiles")
+        );
+    }
+
+    #[test]
+    fn validates_binkp_listener_tls_identity_for_tls_required_links() {
+        let toml = r#"
+[board]
+name = "Network BBS"
+
+[network]
+enabled = true
+
+[network.binkp_listener]
+enabled = true
+bind = "127.0.0.1:24554"
+tls_cert_path = "./certs/binkp.crt"
+tls_key_path = "./certs/binkp.key"
+
+[network.profiles.oxidenet]
+adapter = "oxidenet"
+
+[network.profiles.oxidenet.local_address]
+zone = 42
+net = 1
+node = 7
+
+[network.links.oxide_hub]
+network = "oxidenet"
+address = "42:1/0"
+host = "hub.oxidebbs.net"
+transport_security = "tls_required"
+"#;
+        let config: OxideConfig = toml::from_str(toml).expect("parse network config");
+
+        config.validate_network().expect("validate network config");
+        let listener = config.network.binkp_listener.expect("listener");
+        assert_eq!(
+            listener.tls_cert_path,
+            Some(PathBuf::from("./certs/binkp.crt"))
+        );
+        assert_eq!(
+            listener.tls_key_path,
+            Some(PathBuf::from("./certs/binkp.key"))
+        );
+    }
+
+    #[test]
+    fn rejects_enabled_binkp_listener_without_tls_identity_for_tls_required_links() {
+        let toml = r#"
+[board]
+name = "Network BBS"
+
+[network]
+enabled = true
+
+[network.binkp_listener]
+enabled = true
+bind = "127.0.0.1:24554"
+
+[network.profiles.oxidenet]
+adapter = "oxidenet"
+
+[network.profiles.oxidenet.local_address]
+zone = 42
+net = 1
+node = 7
+
+[network.links.oxide_hub]
+network = "oxidenet"
+address = "42:1/0"
+host = "hub.oxidebbs.net"
+transport_security = "tls_required"
+"#;
+        let config: OxideConfig = toml::from_str(toml).expect("parse network config");
+        let error = config
+            .validate_network()
+            .expect_err("TLS identity required");
+
+        assert!(
+            error
+                .to_string()
+                .contains("binkp_listener needs tls_cert_path and tls_key_path")
+        );
+    }
+
+    #[test]
+    fn rejects_half_configured_binkp_listener_tls_identity() {
+        let toml = r#"
+[board]
+name = "Network BBS"
+
+[network]
+enabled = true
+
+[network.binkp_listener]
+enabled = true
+tls_cert_path = "./certs/binkp.crt"
+"#;
+        let config: OxideConfig = toml::from_str(toml).expect("parse network config");
+        let error = config
+            .validate_network()
+            .expect_err("half-configured TLS identity rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("TLS requires both tls_cert_path and tls_key_path")
         );
     }
 

@@ -311,6 +311,11 @@ fn create_full_schema(db: &Db) -> decentdb::Result<()> {
             node INT NOT NULL CHECK (node > 0),
             point INT NOT NULL DEFAULT 0 CHECK (point >= 0),
             parsed_name TEXT,
+            location TEXT,
+            sysop_name TEXT,
+            phone TEXT,
+            speed TEXT,
+            flags TEXT NOT NULL DEFAULT '',
             raw_entry TEXT NOT NULL CHECK (LENGTH(TRIM(raw_entry)) > 0),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
             UNIQUE (network_id, zone, net, node, point)
@@ -395,7 +400,7 @@ fn create_full_schema(db: &Db) -> decentdb::Result<()> {
             link_id UUID NOT NULL REFERENCES network_links(id) ON DELETE CASCADE,
             area_tag TEXT NOT NULL CHECK (LENGTH(TRIM(area_tag)) > 0),
             status TEXT NOT NULL DEFAULT 'pending'
-                CHECK (status = 'pending' OR status = 'processing' OR status = 'completed' OR status = 'failed'),
+                CHECK (status = 'pending' OR status = 'processing' OR status = 'completed' OR status = 'failed' OR status = 'cancelled'),
             requested_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
             processed_at TIMESTAMPTZ
         );
@@ -404,7 +409,7 @@ fn create_full_schema(db: &Db) -> decentdb::Result<()> {
             id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
             node_number INT NOT NULL CHECK (node_number > 0),
             user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-            transport TEXT NOT NULL CHECK (transport = 'telnet'),
+            transport TEXT NOT NULL CHECK (transport = 'telnet' OR transport = 'serial'),
             remote_address TEXT NOT NULL DEFAULT '',
             remote_ip IPADDR,
             remote_port INT CHECK (remote_port IS NULL OR (remote_port >= 0 AND remote_port <= 65535)),

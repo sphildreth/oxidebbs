@@ -240,6 +240,24 @@ mod tests {
     }
 
     #[test]
+    fn serial_session_transport_is_allowed() {
+        let db = test_db();
+        let mut session = sample_session(SESSION_1, 1);
+        session.transport = "serial".to_string();
+        session.remote_address = "serial:modem".to_string();
+        session.remote_ip = None;
+        session.remote_port = None;
+
+        insert_session(&db, &session).expect("insert serial session");
+
+        let stored = list_active_sessions(&db).expect("list active").remove(0);
+        assert_eq!(stored.transport, "serial");
+        assert_eq!(stored.remote_address, "serial:modem");
+        assert_eq!(stored.remote_ip, None);
+        assert_eq!(stored.remote_port, None);
+    }
+
+    #[test]
     fn finds_active_session_by_node() {
         let db = test_db();
         insert_session(&db, &sample_session(SESSION_1, 1)).expect("insert");

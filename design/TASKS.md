@@ -21,16 +21,16 @@ re-opening scope decisions.
 | P4 | Serial/modem transport and file transfers | Partial |
 | P5 | Door ecosystem expansion | Partial |
 | P6 | Database maintenance operations | Complete |
-| P7 | Sysop CLI completion | Partial |
-| P8 | Sysop TUI completion | Partial |
+| P7 | Sysop CLI completion | Complete |
+| P8 | Sysop TUI completion | Complete |
 | P9 | Shared network foundation | Complete |
 | P10 | Legacy FTN packet and message engine | Complete |
-| P11 | FTN toss, scan, and bundles | Partial |
-| P12 | FTN routing, nodelist, and AreaFix | Partial |
+| P11 | FTN toss, scan, and bundles | Complete |
+| P12 | FTN routing, nodelist, and AreaFix | Complete |
 | P13 | BinkP transport | Partial |
-| P14 | FTN operations, hardening, and docs | Partial |
-| P15 | OxideNet implementation | Partial |
-| P16 | Remote admin and status surface | Partial |
+| P14 | FTN operations, hardening, and docs | Complete |
+| P15 | OxideNet implementation | Complete |
+| P16 | Remote admin and status surface | Complete |
 | P17 | Repository and release automation | Complete |
 | P18 | Final integration and release readiness | Partial |
 
@@ -105,14 +105,17 @@ v1.2 tasks; see the phase status map above for current completion state.
 - [x] DbWriter service for high-contention write scaling.
 - [ ] Physical serial/modem caller transport.
 - [ ] Caller file-area transfers: ZMODEM primary and XMODEM-CRC fallback.
-- [ ] Full FTN implementation, including packet parser/writer, tosser, scanner,
-  bundles, nodelist, duplicate detection, netmail routing runtime integration,
-  AreaFix, required BinkP transport for FTN/FidoNet mail exchange, and
-  operational CLI. Pure netmail routing decisions, AreaFix command parsing, and
-  safe ZIP packet extraction are complete in `oxidebbs-ftn`.
-- [ ] OxideNet implementation beyond the current foundation/design work.
+- [x] FTN implementation slice for packet parser/writer, tosser, scanner,
+  inbound bundle extraction, outbound ZIP bundle creation, nodelist import and
+  lookup, duplicate detection, netmail routing runtime integration, AreaFix,
+  rescan queue processing, packet retention, operations stats, and operational
+  CLI. Remaining FTN-adjacent release work is tracked in P13 BinkP transport
+  and P15 OxideNet.
+- [x] OxideNet implementation beyond the current foundation/design work.
 - [ ] Remote web admin or status dashboard with a full security model.
-- [ ] Native door API and remote door-provider integrations.
+- [ ] Native door API.
+- [x] Remote door-provider integrations with credential-reference storage and
+  redacted CLI/TUI/audit/export paths.
 - [x] Codeberg mirror automation.
 
 ## Future Backlog

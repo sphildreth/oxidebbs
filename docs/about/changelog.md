@@ -65,9 +65,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   movement, and quarantine movement.
 - `oxidebbs-server net scan <network>` for subscribed local echomail export into
   outbound Type-2+ packet files with DecentDB packet/message state.
-- `oxidebbs-server net poll <link|--all>` plaintext-legacy BinkP client polling
-  that sends ready outbound packets, receives inbound files into the profile
-  inbound drop directory, updates packet state, and records poll logs.
+- `oxidebbs-server net poll <link|--all>` BinkP client polling with
+  TLS-required, TLS-opportunistic fallback, and plaintext-legacy modes. Polls
+  send ready outbound packets, receive inbound files into the profile inbound
+  drop directory, update packet state, and record poll logs.
 - `oxidebbs-server net areafix send <link>` for local AreaFix command
   execution with link-password authentication, DecentDB subscription mutation,
   audit events, and generated reply text.
@@ -79,8 +80,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   validation.
 - `oxidebbs-binkp` transport-security preflight policy for TLS-required,
   TLS-opportunistic, and plaintext-legacy BinkP links.
-- `oxidebbs-binkp` exponential retry policy helper for future BinkP poll loops.
-- `oxidebbs-binkp` one-active-session-per-link guard primitive for future BinkP
+- `oxidebbs-binkp` exponential retry policy helper used by BinkP poll loops.
+- `oxidebbs-binkp` one-active-session-per-link guard primitive used by BinkP
   poll/listener loops.
 - Read-only Network screen in the local sysop TUI with DecentDB-backed profile,
   link, area, packet, message, poll-log, duplicate, packet-status, and nodelist
@@ -91,10 +92,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   loopback-only enabled binds, public-status opt-in, origin allowlists,
   reverse-proxy TLS policy, read-only mode, CSRF/replay timing, and rate-limit
   settings.
-- Remote admin authentication with Argon2 password verification, CSRF token
-  generation, rate limiting with in-memory session store, and login/logout/
-  CSRF-token/API-nodes HTTP endpoints. Implementation uses simplified in-memory
-  session management without cookie persistence.
+- Remote admin authentication with Argon2 password verification, cookie-backed
+  in-memory sysop sessions, CSRF token runtime validation, origin checks, login
+  rate limiting, authenticated read-only API views, logout session deletion, and
+  guarded mutation routes that validate nonce/timestamp replay headers before
+  read-only mode blocks the mutation.
 - Reusable read-only admin status JSON payload helper shared by the existing
   `status --json` command and the opt-in loopback `/status` route.
 - C64/C64 Ultimate caller compatibility requirement with a named `c64`
@@ -128,6 +130,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `BinkpTlsServerConfig` for client/server TLS configuration, `connect_tls()` and `accept_tls()`
   functions for TLS handshake, and `BinkpStream` enum for unified plain/TLS stream handling.
   Enforces TLS 1.2 minimum for security.
+- BinkP listener TLS accept support with `tls_cert_path` and `tls_key_path`,
+  TLS-required plaintext rejection, per-link password validation, outbound file
+  sending, and packet completion after acknowledgement.
 - ByteTransport-Transport bridge in `oxidebbs-transfer` with `TransportAdapter` that wraps
   telnet `Transport` implementations to provide the `ByteTransport` interface, enabling file
   transfer protocols (XMODEM-CRC, ZMODEM) to work over any transport layer with timeout support.
@@ -167,11 +172,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Sysop TUI read-only mode now blocks Dashboard send/broadcast shortcuts and
   mutating modal/command-palette submissions while preserving navigation,
   filters, refresh, and quit confirmation.
-- TLS-required and TLS-opportunistic non-dry-run `net poll` now return explicit
-  errors until native BinkP TLS session support exists.
+- TLS-required and TLS-opportunistic non-dry-run `net poll` use native BinkP
+  TLS session support. Opportunistic links fall back to plaintext only when
+  legacy compatibility is explicitly enabled.
 - Remote admin remains disabled by default, but `[admin_web]` can now start an
-  opt-in loopback read-only `/status` endpoint. Authenticated admin views and
-  remote mutations are still not implemented.
+  opt-in loopback public `/status` endpoint plus sysop-authenticated read-only
+  API views. Remote mutations remain blocked by read-only mode after auth, CSRF,
+  replay, rate-limit, origin, and audit checks.
 
 ## [1.1.0] - 2026-06-03
 

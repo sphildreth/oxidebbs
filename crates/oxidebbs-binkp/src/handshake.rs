@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
 
 use crate::error::BinkpError;
@@ -28,6 +28,7 @@ pub struct BinkpServerHandshake {
     pub allowed_addresses: Vec<String>,
     pub password: Option<String>,
     pub link_passwords: HashMap<String, String>,
+    pub tls_required_addresses: HashSet<String>,
 }
 
 impl BinkpServerHandshake {
@@ -41,6 +42,7 @@ impl BinkpServerHandshake {
             allowed_addresses: allowed_addresses.into_iter().collect(),
             password,
             link_passwords: HashMap::new(),
+            tls_required_addresses: HashSet::new(),
         }
     }
 
@@ -54,6 +56,23 @@ impl BinkpServerHandshake {
             allowed_addresses: allowed_addresses.into_iter().collect(),
             password: None,
             link_passwords,
+            tls_required_addresses: HashSet::new(),
+        }
+    }
+
+    /// Create a server handshake policy with per-link passwords and per-link
+    /// TLS requirements.
+    #[must_use]
+    pub fn with_link_passwords_and_tls_requirements(
+        allowed_addresses: impl IntoIterator<Item = String>,
+        link_passwords: HashMap<String, String>,
+        tls_required_addresses: impl IntoIterator<Item = String>,
+    ) -> Self {
+        Self {
+            allowed_addresses: allowed_addresses.into_iter().collect(),
+            password: None,
+            link_passwords,
+            tls_required_addresses: tls_required_addresses.into_iter().collect(),
         }
     }
 }
@@ -112,6 +131,14 @@ pub(crate) fn accept_client_handshake<S: Read + Write>(
     stream: &mut S,
     policy: &BinkpServerHandshake,
 ) -> Result<BinkpSession, BinkpError> {
+    accept_client_handshake_with_transport_security(stream, policy, false)
+}
+
+pub(crate) fn accept_client_handshake_with_transport_security<S: Read + Write>(
+    stream: &mut S,
+    policy: &BinkpServerHandshake,
+    secure_transport: bool,
+) -> Result<BinkpSession, BinkpError> {
     if policy.allowed_addresses.is_empty() {
         return Err(BinkpError::Protocol(
             "BinkP server handshake requires at least one allowed address".to_string(),
@@ -133,7 +160,7 @@ pub(crate) fn accept_client_handshake<S: Read + Write>(
         match frame.command {
             M_ADR => {
                 peer_addresses = parse_addresses(&frame.payload)?;
-                if policy.password.is_none() {
+                if policy.password.is_none() && policy.link_passwords.is_empty() {
                     break;
                 }
             }
@@ -153,22 +180,19 @@ pub(crate) fn accept_client_handshake<S: Read + Write>(
         }
     }
 
-    if peer_addresses.is_empty()
-        || !peer_addresses.iter().any(|address| {
-            policy
-                .allowed_addresses
-                .iter()
-                .any(|allowed| allowed == address)
-        })
-    {
+    let matched_address = peer_addresses.iter().find(|address| {
+        policy
+            .allowed_addresses
+            .iter()
+            .any(|allowed| allowed == *address)
+    });
+    let Some(matched_address) = matched_address else {
         send_handshake_error(stream)?;
         return Err(BinkpError::ConnectionRefused);
-    }
+    };
 
     let expected_password = if !policy.link_passwords.is_empty() {
-        peer_addresses
-            .iter()
-            .find_map(|addr| policy.link_passwords.get(addr).cloned())
+        policy.link_passwords.get(matched_address).cloned()
     } else {
         policy.password.clone()
     };
@@ -176,6 +200,11 @@ pub(crate) fn accept_client_handshake<S: Read + Write>(
     if expected_password.as_deref() != peer_password.as_deref() {
         send_handshake_error(stream)?;
         return Err(BinkpError::ConnectionRefused);
+    }
+
+    if policy.tls_required_addresses.contains(matched_address) && !secure_transport {
+        send_handshake_error(stream)?;
+        return Err(BinkpError::TlsRequired);
     }
 
     write_frame(stream, &BinkpFrame::command(M_OK, b"ok".to_vec()))?;
@@ -285,6 +314,89 @@ mod tests {
         assert!(!format!("{error}").contains("secret"));
         let response = read_frame(&mut stream.writes.as_slice()).expect("read response");
         assert_eq!(response.command, M_ERR);
+    }
+
+    #[test]
+    fn server_uses_password_for_matched_allowed_address() {
+        let mut input = Vec::new();
+        write_frame(
+            &mut input,
+            &BinkpFrame::command(M_ADR, b"9:9/9 1:105/42".to_vec()),
+        )
+        .expect("write adr");
+        write_frame(
+            &mut input,
+            &BinkpFrame::command(M_PWD, b"allowed-secret".to_vec()),
+        )
+        .expect("write pwd");
+        let mut stream = ScriptStream::new(input);
+        let policy = BinkpServerHandshake::with_link_passwords(
+            vec!["1:105/42".to_string()],
+            HashMap::from([
+                ("9:9/9".to_string(), "other-secret".to_string()),
+                ("1:105/42".to_string(), "allowed-secret".to_string()),
+            ]),
+        );
+
+        let session = accept_client_handshake(&mut stream, &policy).expect("accept handshake");
+
+        assert!(session.authenticated);
+        assert_eq!(
+            session.peer_addresses,
+            vec!["9:9/9".to_string(), "1:105/42".to_string()]
+        );
+        let response = read_frame(&mut stream.writes.as_slice()).expect("read response");
+        assert_eq!(response.command, M_OK);
+    }
+
+    #[test]
+    fn server_rejects_plaintext_for_tls_required_address() {
+        let mut input = Vec::new();
+        write_frame(
+            &mut input,
+            &BinkpFrame::command(M_ADR, b"1:105/42".to_vec()),
+        )
+        .expect("write adr");
+        write_frame(&mut input, &BinkpFrame::command(M_PWD, b"secret".to_vec()))
+            .expect("write pwd");
+        let mut stream = ScriptStream::new(input);
+        let policy = BinkpServerHandshake::with_link_passwords_and_tls_requirements(
+            vec!["1:105/42".to_string()],
+            HashMap::from([("1:105/42".to_string(), "secret".to_string())]),
+            vec!["1:105/42".to_string()],
+        );
+
+        let error = accept_client_handshake_with_transport_security(&mut stream, &policy, false)
+            .expect_err("TLS required");
+
+        assert!(matches!(error, BinkpError::TlsRequired));
+        let response = read_frame(&mut stream.writes.as_slice()).expect("read response");
+        assert_eq!(response.command, M_ERR);
+    }
+
+    #[test]
+    fn server_accepts_tls_for_tls_required_address() {
+        let mut input = Vec::new();
+        write_frame(
+            &mut input,
+            &BinkpFrame::command(M_ADR, b"1:105/42".to_vec()),
+        )
+        .expect("write adr");
+        write_frame(&mut input, &BinkpFrame::command(M_PWD, b"secret".to_vec()))
+            .expect("write pwd");
+        let mut stream = ScriptStream::new(input);
+        let policy = BinkpServerHandshake::with_link_passwords_and_tls_requirements(
+            vec!["1:105/42".to_string()],
+            HashMap::from([("1:105/42".to_string(), "secret".to_string())]),
+            vec!["1:105/42".to_string()],
+        );
+
+        let session = accept_client_handshake_with_transport_security(&mut stream, &policy, true)
+            .expect("accept TLS-secured handshake");
+
+        assert!(session.authenticated);
+        let response = read_frame(&mut stream.writes.as_slice()).expect("read response");
+        assert_eq!(response.command, M_OK);
     }
 
     #[test]

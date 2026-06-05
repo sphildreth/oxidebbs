@@ -40,6 +40,23 @@ impl LogService {
             .collect();
         Ok(entries)
     }
+
+    pub fn export(entries: &[LogEntry], output: &Path) -> Result<(), SysopError> {
+        if let Some(parent) = output.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            fs::create_dir_all(parent).map_err(SysopError::Io)?;
+        }
+        let mut text = String::new();
+        for entry in entries {
+            text.push_str(&format!(
+                "{}\t{}\t{}\t{}\n",
+                entry.timestamp, entry.level, entry.target, entry.message
+            ));
+        }
+        fs::write(output, text).map_err(SysopError::Io)?;
+        Ok(())
+    }
 }
 
 fn log_files(log_path: &Path) -> Result<Vec<PathBuf>, SysopError> {

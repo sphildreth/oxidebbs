@@ -70,10 +70,10 @@ OxideNet is not:
 OxideBBS should be useful without OxideNet.
 
 OxideNet is implemented in v1.2 as a first-party profile on top of shared
-network primitives. The current foundation includes address/profile/link data,
-application and node structs, and config-package structs; full onboarding,
-hub/member polling, public network operation, and TUI workflows are tracked in
-the v1.2 release plan.
+network primitives. The v1.2 implementation includes application submission,
+manual review, member address assignment, token and credential lifecycle,
+config package generation/import, hub/member registry state, BinkP poll
+integration, nodelist generation, and local sysop TUI operations.
 
 ## Core idea
 

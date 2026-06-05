@@ -615,6 +615,15 @@ impl<'db> Tosser<'db> {
         let origin = origin_address(header);
         let destination = final_destination.unwrap_or_else(|| destination_address(header));
         let created_at = current_timestamp(self.db)?;
+        let link_record = list_network_links(self.db)?
+            .into_iter()
+            .find(|record| record.network_id == self.profile.id && record.key == link.key)
+            .ok_or_else(|| {
+                FtnError::Protocol(format!(
+                    "routed netmail selected link {} but no matching network link row exists",
+                    link.key
+                ))
+            })?;
 
         let outbound_packet_id = generated_uuid(self.db)?;
         let filename = format!("{}.pkt", generated_uuid(self.db)?.replace('-', ""));
@@ -627,7 +636,7 @@ impl<'db> Tosser<'db> {
                 id: outbound_packet_id.clone(),
                 network_id: self.profile.id.clone(),
                 direction: "outbound".to_string(),
-                link_id: Some(link.key.clone()),
+                link_id: Some(link_record.id.clone()),
                 filename,
                 sha256,
                 size_bytes: message.body.len() as i64,

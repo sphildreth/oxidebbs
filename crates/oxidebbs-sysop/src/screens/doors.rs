@@ -9,6 +9,7 @@ use crate::services::door_service::DoorAdminService;
 use crate::theme::Theme;
 use crate::widgets::modal::{ConfirmModal, FormField, FormModal, ModalKind};
 use oxidebbs_db::{DoorDefinitionRecord, DoorRunRecord, OxideDb};
+use oxidebbs_door::REDACTED_PROVIDER_SECRET;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DoorView {
@@ -629,6 +630,16 @@ impl DoorsScreen {
                 Span::styled("Runner: ", self.theme.label_style()),
                 Span::styled(&d.runner, self.theme.normal_style()),
             ]));
+            if let Some(provider) = remote_provider_from_runner(&d.runner) {
+                lines.push(Line::from(vec![
+                    Span::styled("Provider: ", self.theme.label_style()),
+                    Span::styled(provider, self.theme.normal_style()),
+                ]));
+                lines.push(Line::from(vec![
+                    Span::styled("Credential Ref: ", self.theme.label_style()),
+                    Span::styled(REDACTED_PROVIDER_SECRET, self.theme.normal_style()),
+                ]));
+            }
             lines.push(Line::from(vec![
                 Span::styled("Working Dir: ", self.theme.label_style()),
                 Span::styled(&d.working_dir, self.theme.normal_style()),
@@ -842,5 +853,14 @@ fn pop_field_char(door: &mut DoorDefinitionRecord, field_index: usize) {
             door.min_security_level /= 10;
         }
         _ => {}
+    }
+}
+
+fn remote_provider_from_runner(runner: &str) -> Option<String> {
+    let runner = runner.trim().to_ascii_lowercase();
+    let candidate = runner.strip_prefix("remote:").unwrap_or(&runner);
+    match candidate {
+        "bbslink" | "doorparty" => Some(candidate.to_string()),
+        _ => None,
     }
 }

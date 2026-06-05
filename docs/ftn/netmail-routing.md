@@ -1,8 +1,10 @@
 # Netmail Routing
 
 OxideBBS v1.2 includes a pure `oxidebbs-ftn` routing decision layer for
-netmail. It does not mutate outbound queues or open BinkP sessions; scanners,
-tossers, and operators can use the decision to choose the next workflow step.
+netmail. The tosser uses that layer to deliver local netmail, queue direct or
+hub-routed outbound netmail, and quarantine unknown destinations. The scanner
+materializes pending outbound netmail rows into Type-2+ packet files for BinkP
+delivery.
 
 The router implements ADR 0026 with these outcomes:
 
@@ -30,12 +32,10 @@ Hub scopes are deterministic:
 When two hub links have the same specificity, the first configured link wins.
 That keeps routing stable and auditable from sysop configuration order.
 
-Current runtime boundaries:
+Runtime boundaries:
 
 - the router is a library decision layer, not a `net route` CLI command
-- scanner and tosser integration with outbound queues remains planned
-- hub-routed packet composition still needs INTL, FMPT, and TOPT integration
-- DecentDB nodelist lookup is available, but runtime routing does not consume it
-  yet
-- AreaFix command parsing exists; replies and subscription automation remain
-  planned
+- routing uses configured network links; DecentDB nodelist lookup is available
+  to operators but is not required for routing decisions
+- AreaFix replies and forwarded netmail are queued as pending outbound netmail
+  and materialized by `net scan`

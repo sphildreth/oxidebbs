@@ -11,4 +11,5 @@ pub mod logs;
 pub mod messages;
 pub mod network;
 pub mod nodes;
+pub mod oxidenet;
 pub mod users;

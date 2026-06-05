@@ -28,6 +28,7 @@ pub struct DatabaseScreen {
     pub healthy: bool,
     pub view: DatabaseView,
     pub verify_results: Vec<VerifyResult>,
+    pub operation_status: String,
 }
 
 #[derive(Debug, Clone)]
@@ -52,6 +53,7 @@ impl DatabaseScreen {
             healthy: false,
             view: DatabaseView::Summary,
             verify_results: Vec::new(),
+            operation_status: "Idle".to_string(),
         }
     }
 
@@ -153,6 +155,41 @@ impl DatabaseScreen {
                     self.view = DatabaseView::Verify;
                     if let Some(db) = db {
                         self.run_verify(db);
+                        self.operation_status = "Verify complete".to_string();
+                    }
+                }
+                KeyCode::Char('b') => {
+                    if let Some(path) = &self.path {
+                        match DatabaseAdminService::backup_database_file(path) {
+                            Ok(output) => {
+                                self.operation_status =
+                                    format!("Backup written to {}", output.display());
+                            }
+                            Err(error) => {
+                                self.operation_status = format!("Backup failed: {error}");
+                            }
+                        }
+                    } else {
+                        self.operation_status =
+                            "Backup failed: database path is unavailable".to_string();
+                    }
+                }
+                KeyCode::Char('e') => {
+                    if let Some(db) = db {
+                        let output = self
+                            .path
+                            .as_ref()
+                            .map(|path| path.with_extension("sysop-export.json"))
+                            .unwrap_or_else(|| PathBuf::from("data/oxidebbs.sysop-export.json"));
+                        match DatabaseAdminService::export_summary(db.db(), &output) {
+                            Ok(()) => {
+                                self.operation_status =
+                                    format!("Export written to {}", output.display());
+                            }
+                            Err(error) => {
+                                self.operation_status = format!("Export failed: {error}");
+                            }
+                        }
                     }
                 }
                 _ => {}
@@ -221,6 +258,10 @@ impl DatabaseScreen {
                 },
             ),
         ]));
+        lines.push(Line::from(vec![
+            Span::styled("Operation: ", self.theme.label_style()),
+            Span::styled(&self.operation_status, self.theme.normal_style()),
+        ]));
 
         let main_layout = Layout::default()
             .direction(Direction::Vertical)
@@ -238,7 +279,7 @@ impl DatabaseScreen {
             )
             .render(main_layout[0], frame.buffer_mut());
 
-        let hints = "Esc Back | V Verify Schema";
+        let hints = "Esc Back | V Verify Schema | B Backup | E Export Summary";
         Paragraph::new(hints)
             .style(self.theme.muted_style())
             .block(Block::default().borders(Borders::ALL))

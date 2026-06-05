@@ -1,13 +1,29 @@
 # Remote Admin
 
-Remote admin is disabled by default. OxideBBS models and validates the
-security-sensitive `[admin_web]` configuration and can start a read-only
-loopback HTTP status endpoint when explicitly enabled.
+Remote admin is disabled by default. OxideBBS validates the security-sensitive
+`[admin_web]` configuration and can start a loopback HTTP admin surface when
+explicitly enabled.
 
 The public HTTP surface is intentionally narrow: `GET /status` is available only
 when both `enabled = true` and `public_status_enabled = true`. The payload omits
-database paths, caller addresses, secrets, and audit rows. Authenticated browser
-or API admin views are not implemented yet, and remote mutations remain blocked.
+database paths, caller addresses, secrets, and audit rows.
+
+Authenticated read endpoints are available after a sysop login:
+
+- `GET /csrf-token` creates or refreshes a pre-auth session and CSRF token.
+- `POST /login` verifies an active sysop user's Argon2 password and upgrades the
+  session.
+- `POST /logout` requires the session cookie and CSRF token, then deletes the
+  session.
+- `GET /api/status`, `/api/nodes`, `/api/users`, `/api/doors`, `/api/messages`,
+  `/api/database`, `/api/logs`, `/api/audit`, `/api/network`, and
+  `/api/oxidenet` return authenticated read-only JSON summaries.
+
+Session cookies are `HttpOnly`, `Secure`, and `SameSite=Strict`. Browser
+requests with an `Origin` header must match `allowed_origins` or the request
+host. Remote mutation attempts remain blocked while `read_only = true`; guarded
+mutation routes validate auth, CSRF, nonce/timestamp replay headers, rate
+limits, and audit logging before refusing to mutate state.
 
 Default configuration:
 
@@ -36,8 +52,7 @@ Validation rules:
   TLS support exists.
 - `behind_reverse_proxy = true` requires a loopback bind and `require_tls = true`
   so TLS termination stays inside a local proxy boundary.
-- `read_only = false` is rejected until authenticated remote mutations, CSRF,
-  replay protection, and audit coverage are implemented.
+- `read_only = false` is rejected; remote mutations are not enabled in v1.2.
 
-The supported admin surfaces remain the local sysop CLI, local Unix control
-socket, local Ratatui sysop TUI, and the optional read-only `/status` endpoint.
+The mutating admin surfaces remain the local sysop CLI, local Unix control
+socket, and local Ratatui sysop TUI.

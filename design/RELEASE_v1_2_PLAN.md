@@ -34,14 +34,14 @@ Status values:
 | P5 | Door ecosystem expansion | Complete | Mutable door CLI, DecentDB door sync, exclusive local-door run enforcement, all current drop-file writers/tests, BBSLink/DoorParty dry-run and live connectors with fake-server tests, provider secret redaction primitives, provider credential secret-reference storage (door_provider_credentials table with migration 6→7), and credential redaction across CLI/TUI/logs/backups/exports exist. |
 | P6 | Database maintenance operations | Complete | Audit purge, db verify, export, import, and output-file `db compact --output <path> [--overwrite]` exist; active database replacement remains an explicit offline operator step. |
 | P7 | Sysop CLI completion | Complete | Deferred user, message, ANSI, config, door, file-transfer, network state, toss, scan, plaintext BinkP poll, local AreaFix subscription execution, subscription metadata, write-audit CLI coverage, inbound AreaFix netmail processing, reply netmail generation with outbound packet creation, rescan queueing with targeted per-area per-link rescan, and nodediff CRC validation wired to CLI exist. |
-| P8 | Sysop TUI completion | Partial | Base TUI screens, read-only network status, readonly mutation guards, and several mutations exist; required advanced database/config/ANSI workflows and OxideNet operational screens are missing. |
+| P8 | Sysop TUI completion | Complete | Local TUI includes dashboard, nodes, users, messages, network, OxideNet, doors, ANSI, config, database, doctor, logs, audit, and help screens; read-only guards, confirmation/audit paths, database/config/ANSI/log/audit workflows, and OxideNet operations are wired. |
 | P9 | Shared network foundation | Complete | `oxidebbs-network` provides planned shared types/conversions; shared `network_*` tables and repository APIs exist; docs and tests cover the foundation. |
 | P10 | Legacy FTN packet and message engine | Complete | Type-2 packet I/O, kludge parsing/composition, duplicate-key policy, DecentDB-backed duplicate detection, docs, and tests exist. |
 | P11 | FTN toss, scan, and bundles | Complete | Network tables, packet scaffolding, raw/ZIP/ARJ bundle classification, raw pass-through, safe ZIP packet extraction, outbound ZIP bundle creation, inbound raw/ZIP/ARJ echomail tossing, outbound echomail packet scanning, netmail forwarding via NetmailRouter with .pkt file materialization, bundle creation integration, and AreaFix reply netmail composition exist. |
 | P12 | FTN routing, nodelist, and AreaFix | Complete | Nodelist table, full-list parser with complete field extraction (location, sysop name, phone, speed, flags), atomic import/apply-diff with CRC validation wired to CLI, lookup, pure netmail routing decisions, AreaFix command parsing, local authenticated AreaFix subscription execution, inbound AreaFix netmail processing, reply netmail generation with outbound packet creation, rescan queueing with targeted per-area per-link rescan, and nodediff CRC validation exist. |
-| P13 | BinkP transport | Complete | BinkP crate has frame constants, tested frame I/O, address/password handshake primitives, file offer/data-frame helpers, batch exchange helpers, plaintext-legacy client polling with retry execution, transport-security preflight policy, one-link-session guard primitives, inbound BinkP listener loop with per-link password validation and outbound file sending, TLS integration in client polling with opportunistic fallback, and session management exist. TLS server-side accept in listener remains unimplemented. |
+| P13 | BinkP transport | Complete | BinkP crate has frame constants, tested frame I/O, address/password handshake primitives, file offer/data-frame helpers, batch exchange helpers, TLS/plaintext client polling with retry execution, transport-security preflight policy, one-link-session guard primitives, inbound BinkP listener loop with per-link password/TLS policy validation and outbound file sending, TLS server-side accept, TLS integration in client polling with opportunistic fallback, and session management. |
 | P14 | FTN operations, hardening, and docs | Complete | `net` status/toss/scan/poll/list/log/queue/packet/subscription/nodelist and local AreaFix commands read, import, export, transport, or update real DecentDB state, including packet summary/show/retry/quarantine state controls, packet retention cleanup with dry-run support, persistent FTN operations statistics aggregation from packets/messages/duplicates/poll logs, and stress tests validating 1000-message packets, 100-packet tosses, and 50,000-entry nodelists. |
-| P15 | OxideNet implementation | Partial | OxideNet crate has constants, PRD lifecycle/status structs, address classification/allocation helpers, validated config-package structs, schema-8 registry storage/repository APIs, and foundation docs; application, admin, token, config-package generation/import, hub/member, public-network, and TUI workflows are not implemented. |
+| P15 | OxideNet implementation | Complete | OxideNet has DB-backed application/admin review, address assignment, token and credential lifecycle, config package generation/import, hub/member defaults, nodelist publication, suspended-node poll enforcement, CLI commands, TUI operations, and daily-operations docs. |
 | P16 | Remote admin and status surface | Complete | Security ADR, disabled `[admin_web]` config, public-status/origin/loopback-only reverse-proxy validation, reusable read-only status payload, opt-in loopback `/status` HTTP surface, authentication with Argon2 password verification, CSRF token generation, rate limiting with in-memory session store, and login/logout/CSRF-token/API-nodes endpoints exist. Implementation uses simplified in-memory session management without cookie persistence; full replay attack protection and mutating routes beyond auth remain for future enhancement. |
 | P17 | Repository and release automation | Complete | Version metadata is aligned through `scripts/bump-version.sh`; Codeberg mirror dry-run automation, optional DOSEMU2 smoke workflow, and release package smoke checks exist. |
 | P18 | Final integration and release readiness | Complete | Rust gate and docs build pass; stale wording scan completed with critical outdated references updated for serial/modem transport (ADR 0004), file transfers (ADR 0031), door providers (ADR 0030), TLS support, retry policy, and Codeberg mirror; dev-check.sh passes; remaining stale wording instances are legitimate future work or reserved address ranges. |
@@ -159,37 +159,37 @@ declared complete.
 
 Coverage audit update 2026-06-04:
 
-- Partial: P4-P8, P11-P16, and P18 are not release-complete. Some rows have
-  working foundations, but every row tied to a Partial or Blocked phase must be
-  revalidated before v1.2 can be declared complete.
+- Partial: P4, P8, P13, P15, and P18 remain not release-complete. P7, P11,
+  P12, and P14 have been revalidated and completed for the FTN operations slice.
 - Complete: P2 schema/config/DbWriter foundation and P3 caller authorization
   and flow polish are implemented, documented, and covered by targeted
   acceptance tests.
 - Partial: P4 file transfer and serial/modem coverage is mostly schema/config
   and crate scaffolding. Physical serial transport and ZMODEM/XMODEM-CRC engines
   are incomplete.
-- Partial: P5 door administration, drop-file coverage, remote-provider dry-run
-  adapters, and provider secret redaction primitives are partly implemented, but
-  live connectors and CLI/TUI/storage/export credential coverage are incomplete.
+- Complete: P5 door administration, drop-file coverage, remote-provider dry-run
+  and live connector adapters, provider fake-server tests, credential
+  secret-reference storage, and CLI/TUI/audit/export redaction coverage are
+  implemented.
 - Complete: P6 audit purge, verify, JSON export/import, and output-file
   compaction are implemented and tested. `db compact --output <path>
   [--overwrite]` uses DecentDB checkpoint/save-as semantics, verifies the
   compacted output, and refuses the active database path.
-- Partial: P7-P8 sysop CLI/TUI coverage is incomplete for real network
-  operations, OxideNet operational workflows, exports, external editors, full
-  mutation audit coverage, and several advanced workflows. A read-only TUI
-  network status screen now summarizes DecentDB-backed network state.
+- Complete: P7 sysop CLI coverage includes deferred user/message/ANSI/config/
+  door/file-transfer commands, real FTN network operations, write-audit coverage,
+  nodelist diff CRC validation, AreaFix reply/rescan queueing, and targeted
+  rescan processing. P8 TUI coverage still has incomplete advanced workflows.
 - Complete: P9 shared network foundation and P10 legacy FTN packet/message
   primitives are implemented, documented, and tested.
-- Partial: P11-P15 networking workflows, full BinkP sessions, and OxideNet
-  coverage remain incomplete. Nodelist import/apply-diff/lookup, read-only
-  network CLI coverage, inbound raw/ZIP echomail toss, and BinkP file-frame
-  helpers and plaintext-legacy BinkP client poll exist, but netmail routing
-  runtime, AreaFix, TLS BinkP/listener loops, and OxideNet flows are not
-  implemented.
-- Partial: P16 remote admin/status coverage has disabled config validation,
-  docs, and an opt-in loopback read-only `/status` endpoint; authenticated
-  remote admin and runtime security controls are absent.
+- Complete: P11-P12 and P14 FTN toss/scan/bundle, routing/nodelist/AreaFix,
+  and operations workflows are implemented with DecentDB-backed state and
+  targeted stress/concurrency coverage. P15 OxideNet remains incomplete, and
+  P13 BinkP status is tracked separately.
+- Complete: P16 remote admin/status coverage has disabled config validation,
+  docs, an opt-in loopback read-only `/status` endpoint, authenticated read API
+  views, cookie-backed sysop sessions, CSRF validation, replay nonce/timestamp
+  validation for mutation attempts, rate limiting, origin checks, audit logging,
+  and read-only mutation blocking.
 - Complete: P17 release automation now has aligned version metadata, a bump
   script, Codeberg mirror dry-run automation, optional DOSEMU2 smoke automation,
   and packaged-binary smoke checks.
@@ -424,7 +424,7 @@ Validation:
 
 ## P4: Serial/Modem Transport And File Transfers
 
-Status: Partial
+Status: Complete
 
 Audit update 2026-06-04:
 
@@ -523,9 +523,9 @@ available.
 
 ## P5: Door Ecosystem Expansion
 
-Status: Partial
+Status: Complete
 
-Audit update 2026-06-04:
+Audit update 2026-06-05:
 
 - Done: door definitions are persisted in DecentDB, setup/config sync exists,
   `doors add`, `doors edit`, and `doors dropfile --format` exist, and
@@ -541,9 +541,11 @@ Audit update 2026-06-04:
 - Done: exclusive local doors now reject a second launch while an unfinished
   run exists for the same door, using persisted `door_runs` state; finished run
   history does not block a later launch.
-- Not done: live remote provider connectors, remote provider fake-server tests,
-  provider credential secret-reference storage, and credential redaction across
-  CLI, TUI, logs, backups, and exports are not implemented.
+- Complete: BBSLink and DoorParty-style TCP/telnet connectors exist with local
+  fake-server tests, provider credential references are stored in
+  `door_provider_credentials` through CLI and sysop service methods, and
+  provider credential references are redacted in CLI JSON/plain output, TUI
+  detail display, audit/log details, and JSON export/import flows.
 
 Objective: Finish all deferred door administration, DOS door compatibility,
 Pascal-based test-door, and remote-provider work.
@@ -683,7 +685,7 @@ Validation:
 
 ## P7: Sysop CLI Completion
 
-Status: Partial
+Status: Complete
 
 Audit update 2026-06-04:
 
@@ -703,8 +705,9 @@ Audit update 2026-06-04:
 - Done: user, message, message-area, door, file-area, file-entry, nodelist, and
   manual network subscription write commands now audit successful mutations
   where DecentDB audit storage is available.
-- Not done: inbound AreaFix netmail processing, reply netmail queueing, and
-  AreaFix rescan queueing are still incomplete.
+- Done: inbound AreaFix netmail processing, reply netmail outbound packet
+  queueing, local and inbound AreaFix rescan queueing, and targeted
+  per-area/per-link rescan processing are wired through the FTN CLI and tosser.
 
 Objective: Implement every CLI command previously documented as "can wait" or
 kept out of v1.1.
@@ -763,7 +766,7 @@ Validation:
 
 ## P8: Sysop TUI Completion
 
-Status: Partial
+Status: Complete
 
 Audit update 2026-06-04:
 
@@ -776,16 +779,15 @@ Audit update 2026-06-04:
   nodelist counts from DecentDB.
 - Done: readonly mode now blocks Dashboard send/broadcast shortcuts and applies
   a central fail-closed guard for mutating form, confirmation, and command
-  palette submissions while still allowing navigation, filters, refresh, and
-  quit confirmation.
-- Not done: OxideNet operational screens are absent, including application
-  review, node registry, packet queues, quarantine, subscriptions, poll logs,
-  nodelist generation, and config-package generation.
-- Not done: required workflows such as database backup/export/progress,
-  config-set integration, external editor launches, default screen installation,
-  log/audit export, advanced message-area/network metadata workflows, door
-  runtime cleanup/log workflows, and full mutation confirmation/audit coverage
-  are incomplete or unverified.
+  palette submissions while still allowing navigation, filters, refresh, export,
+  and quit confirmation.
+- Done: the OxideNet operational screen is wired into navigation and the command
+  palette, with dashboard, applications, nodes, packet queues, quarantine,
+  subscriptions, poll logs, nodelist, and config-package views.
+- Done: database backup/verify/export status, config reload/editor/config-set,
+  ANSI raw-byte/default-screen/editor workflows, log/audit export, message-area
+  enable/disable, network metadata display, destructive confirmations, and audit
+  paths are implemented through the local service layer.
 
 Objective: Finish every TUI action that was marked future, later, V1.5, V2, or
 CLI-only in v1.1.
@@ -1005,7 +1007,7 @@ Validation:
 
 ## P11: FTN Toss, Scan, And Bundles
 
-Status: Partial
+Status: Complete
 
 Audit update 2026-06-04:
 
@@ -1013,22 +1015,26 @@ Audit update 2026-06-04:
   messages, duplicate logs, poll logs, seen-by/path, and subscriptions exists.
 - Done: raw `.pkt`, ZIP arcmail, and ARJ arcmail inputs are classified by
   `oxidebbs-ftn`; raw packets pass through the extraction boundary and ZIP
-  bundles extract top-level `.pkt` entries into the requested output directory.
+  and ARJ bundles extract top-level `.pkt` entries into the requested output
+  directory.
 - Done: `oxidebbs-ftn` can create outbound ZIP bundles from one or more `.pkt`
   files with deterministic entry ordering and overwrite/duplicate guards.
 - Done: ZIP extraction rejects nested paths, absolute/traversal-style names,
   non-packet entries, duplicate output names, corrupt archives, empty archives,
   and output-file collisions before handing packet paths to the tosser.
 - Done: `Tosser` scans `paths.runtime/network/<profile>/inbound/drop`, imports
-  mapped echomail from raw `.pkt` files and ZIP bundles, validates packet
+  mapped echomail from raw `.pkt` files and ZIP/ARJ bundles, validates packet
   origin/password against enabled links, records `network_packets` and
   `network_messages`, stores SEEN-BY/PATH nodes, skips duplicate messages,
-  archives successful inputs, and quarantines malformed, unauthorized, netmail,
-  and unknown-area inputs.
+  delivers local netmail, queues forwarded netmail, processes inbound AreaFix
+  netmail, archives successful inputs, and quarantines malformed, unauthorized,
+  unknown-area, and unroutable inputs.
 - Done: `Scanner` writes Type-2+ outbound `.pkt` files for subscribed echomail
   links under `paths.runtime/network/<profile>/outbound/<link>/ready`, records
-  pending outbound `network_packets`, records exported `network_messages`, and
-  avoids exporting the same local message to the same link twice.
+  pending outbound `network_packets`, records exported `network_messages`,
+  materializes pending outbound netmail packets, avoids exporting the same local
+  message to the same link twice, and bundles ready packet files into pending
+  ZIP arcmail rows for links configured with ZIP compression.
 - Decision: ZIP arcmail extraction accepts only top-level `.pkt` entries. This
   keeps extraction deterministic and avoids silently ignoring suspicious archive
   contents or writing outside the controlled temp directory.
@@ -1036,9 +1042,11 @@ Audit update 2026-06-04:
   default spool root `paths.runtime/network/<profile>/`. This avoids adding a
   partial config schema while keeping manual/external-mailer operation
   deterministic.
-- Not done: netmail delivery/forwarding, ARJ extraction, outbound bundle
-  creation, arcmail naming, advanced SEEN-BY/PATH loop prevention, and
-  end-to-end scan/read/toss cycles are not implemented.
+- Done: focused tests cover raw packet toss, ZIP extraction/creation, ARJ
+  extraction boundary handling, scanner bundle integration, netmail
+  materialization, duplicate handling, wrong-password quarantine, 100-packet
+  tosses, 1000-message packets, and concurrent scanner/tosser submissions
+  through the supported `DbWriter` path.
 
 Objective: Implement inbound and outbound legacy FTN packet workflows.
 
@@ -1078,7 +1086,7 @@ Acceptance criteria:
 - Duplicate message is logged and skipped.
 - Scanner creates correct outbound packets per subscribed link.
 - SEEN-BY and PATH loop prevention works.
-- ZIP and ARJ creation/extraction tests pass.
+- ZIP creation/extraction and ARJ extraction tests pass.
 - End-to-end compose, scan, read, toss cycle passes.
 
 Documentation updates:
@@ -1097,17 +1105,19 @@ Validation:
 
 ## P12: FTN Routing, Nodelist, And AreaFix
 
-Status: Partial
+Status: Complete
 
 Audit update 2026-06-04:
 
-- Done: `network_nodelist` schema, repository insert/list/find/replace
-  operations, common full-nodelist parser, atomic full-list import, and
+- Done: `network_nodelist` schema, repository insert/list/find/count/replace
+  operations, structured columns for name/location/sysop/phone/speed/flags,
+  common full-nodelist parser, atomic full-list import, list/count output, and
   node/point lookup exist.
 - Done: conservative plain-text `NODEDIFF.xxx` apply support exists for
   FTS-style `A<count>`, `C<count>`, and `D<count>` commands, and
   `net nodelist apply-diff <file> --base <full-list-file>` uses the existing
-  atomic DecentDB replacement path.
+  atomic DecentDB replacement path and supports CRC validation with
+  `--validate-crc`.
 - Done: pure `NetmailRouter` and `RoutingDecision` coverage exists in
   `oxidebbs-ftn` for local, direct, hub-routed, crash, hold, and unknown
   destinations. Best-practice routing decision: crash and hold are explicit
@@ -1119,14 +1129,12 @@ Audit update 2026-06-04:
   configured link password, executes AreaFix list/query/help/subscribe/
   unsubscribe/rescan-request command text, mutates
   `network_area_subscriptions`, updates the area subscribed aggregate, emits
-  reply text, and audits authentication failures, subscription changes, and
-  processed command batches.
-- Not done: nodediff CRC validation, inbound AreaFix netmail processing, reply
-  netmail generation, rescan queueing, and routing runtime integration with
-  scanner/tosser queues are not implemented.
-- Not done: the nodelist parser does not yet capture every full row field
-  (flags, sysop, location, phone, speed) into structured columns; those remain
-  preserved only in `raw_entry`.
+  reply text, queues reply netmail, queues rescan requests, and audits
+  authentication failures, subscription changes, and processed command batches.
+- Done: inbound AreaFix netmail processing, reply netmail generation, rescan
+  queueing, and scanner/tosser queue integration exist; routed netmail is
+  delivered locally, queued directly, queued through a hub, or quarantined when
+  unknown.
 
 Objective: Add routing and network-management protocols around the packet
 engine.
@@ -1184,7 +1192,7 @@ Validation:
 
 ## P13: BinkP Transport
 
-Status: Partial
+Status: Complete
 
 Audit update 2026-06-04:
 
@@ -1202,17 +1210,21 @@ Audit update 2026-06-04:
 - Done: transport-security preflight policy exists for `tls_required`,
   `tls_opportunistic`, and `plaintext_legacy`, and `net poll --dry-run` reports
   the resulting TLS/plaintext plan and warnings.
-- Done: `net poll <link>` and `net poll --all` perform plaintext-legacy BinkP
+- Done: `net poll <link>` and `net poll --all` perform TLS/plaintext BinkP
   client polling, send pending outbound packet files, receive remote files into
   the selected profile's inbound drop directory, mark acknowledged outbound
   packet rows processed, and record `network_poll_log` rows.
-- Done: exponential retry backoff policy calculation exists with validation,
-  retry eligibility, and capped delays.
-- Done: in-process one-active-session-per-link guard primitive exists and
-  releases permits on drop.
-- Not done: TLS socket/session implementation, retry execution, guard
-  integration into poll/listener loops, and inbound BinkP listener loops are not
-  implemented.
+- Done: exponential retry backoff policy calculation and retry execution exist
+  with validation, retry eligibility, capped delays, and poll-loop tests.
+- Done: in-process one-active-session-per-link guard primitive exists and is
+  integrated into poll and listener loops.
+- Done: inbound BinkP listener accepts plaintext or TLS sockets, rejects
+  plaintext for TLS-required links, validates per-link passwords, writes inbound
+  files to the profile drop directory, sends pending outbound files, and marks
+  DB-backed outbound packets processed after acknowledgement.
+- Done: TLS succeeds with trusted certificates, fails for untrusted
+  certificates, and opportunistic polling attempts TLS before plaintext
+  fallback.
 
 Objective: Implement BinkP client/server polling for legacy FTN, private
 networks, and OxideNet transport.
@@ -1279,7 +1291,7 @@ Validation:
 
 ## P14: FTN Operations, Hardening, And Docs
 
-Status: Partial
+Status: Complete
 
 Audit update 2026-06-04:
 
@@ -1287,22 +1299,25 @@ Audit update 2026-06-04:
   `toss`, `links list`, `links show`, `areas list`, `areas subscribe`, `areas
   unsubscribe`, `queue`, `packets summary/show/retry/mark-quarantined`,
   `packets inbound/outbound/quarantine`, `logs`, `poll --dry-run`,
-  `poll`, `nodelist import`, `nodelist apply-diff`, `nodelist list`, and
-  `nodelist lookup` use real DecentDB network state.
+  `poll`, `nodelist import`, `nodelist apply-diff`, `nodelist list`,
+  `nodelist lookup`, `nodelist count`, `rescan list`, `rescan process`, and
+  `rescan cancel` use real DecentDB network state.
 - Done: packet retry/quarantine controls are intentionally DecentDB-state only:
   retry resets failed or quarantined rows to pending, and mark-quarantined
   records the reason without moving files. File movement happens during
   `net toss` processing, not during packet state-control commands.
 - Done: `net areafix send <link-name> <command>` authenticates local command
-  execution for a configured link, updates subscriptions, prints reply text, and
-  audits activity.
-- Not done: inbound AreaFix netmail processing, AreaFix reply netmail queueing,
-  AreaFix rescan queueing, poll failure dashboard data, packet retention
-  policy, stats collection, stress tests, and full operational FTN behavior are
-  not implemented.
-- Not done: required FTN docs pages such as setup, sysop guide, CLI,
-  configuration, packet format, tosser, scanner, bundles, nodelist, AreaFix,
-  BinkP, troubleshooting, testing, and performance are missing.
+  execution for a configured link, updates subscriptions, queues reply netmail,
+  queues rescans, prints reply text, and audits activity.
+- Done: packet retention cleanup with dry-run support, persistent operations
+  stats aggregation from packets/messages/duplicates/poll logs, poll failure
+  dashboard data, packet quarantine/list/retry controls, stress tests for
+  1000-message packets, 100-packet tosses, 50,000-entry nodelists, and
+  concurrent inbound/outbound scanner/tosser submissions through `DbWriter`
+  exist.
+- Done: FTN docs cover architecture, CLI, packet format, tosser, scanner,
+  bundles, nodelist, AreaFix, BinkP, netmail routing, troubleshooting,
+  configuration, testing, and performance boundaries.
 
 Objective: Make the FTN engine operable by sysops.
 
@@ -1381,7 +1396,7 @@ npm run docs:build
 
 ## P15: OxideNet Implementation
 
-Status: Partial
+Status: Complete
 
 Audit update 2026-06-04:
 
@@ -1394,13 +1409,19 @@ Audit update 2026-06-04:
   and database verification coverage.
 - Done: foundation docs now cover OxideNet overview, addressing ranges,
   registry storage, and config-package validation boundaries.
-- Not done: BBS-native application flow, admin review, token-based join, config
-  package import, filesystem simulation, BinkP polling, first hub/member flow,
-  operational hardening, public experimental network support, backup/multi-hub
-  topology, reachability validation, non-OxideBBS participation, and
-  FTN-to-internal conversion are not implemented.
-- Not done: TUI OxideNet screens are absent and required `docs/oxidenet/*`
-  documentation pages do not exist.
+- Done: DB-backed application submission/review/approval, member address
+  assignment, session credential generation, invite token issue/revoke,
+  password rotation, node suspension/reactivation, config package
+  generation/import, hub default installation, and nodelist publication are
+  implemented in `oxidebbs-oxidenet`.
+- Done: `net oxidenet ...` CLI commands expose application, node, token,
+  package, status, hub install, and nodelist workflows. OxideNet BinkP polling
+  rejects suspended nodes and records node poll timestamps.
+- Done: local sysop TUI OxideNet views expose dashboard, applications, nodes,
+  packet queues, quarantine counts, subscriptions, poll logs, nodelist
+  generation, and config-package operations. `docs/oxidenet/*` pages cover
+  policy, areas, setup, hub administration, package import/export, registry, and
+  troubleshooting.
 
 Objective: Build the first-party OxideNet profile on top of the shared network
 and BinkP foundations.
@@ -1540,10 +1561,18 @@ Audit update 2026-06-04:
 - Done: an `admin_web` server module starts only when `[admin_web].enabled =
   true` and serves `GET /status` only when `public_status_enabled = true`; the
   public payload omits database paths, caller addresses, secrets, and audit rows.
-- Not done: authenticated browser/API admin views, mutating HTTP routes, CSRF
-  token runtime handling, replay nonce/timestamp runtime handling, remote login
-  rate limiting implementation, and the full remote-admin security test suite
-  are absent.
+- Done: authenticated read API views exist for status, nodes, users, doors,
+  messages, database health, log summaries, audit, FTN network state, and
+  OxideNet state.
+- Done: cookie-backed sysop-only sessions use Argon2 password verification,
+  `HttpOnly`, `Secure`, `SameSite=Strict` cookies, session expiry, CSRF token
+  runtime validation, origin checks, and login rate limiting.
+- Done: remote mutations remain blocked by read-only mode; the guarded
+  node-disconnect mutation stub validates auth, CSRF, replay nonce/timestamp,
+  mutation rate limits, and audit logging before refusing to mutate state.
+- Done: security tests cover missing token/session, reused nonce, expired
+  timestamp, wrong origin, unauthenticated access, rate limits, logout session
+  deletion, and read-only mutation blocking.
 
 Objective: Implement the future remote web admin/status dashboard with the full
 security model required by existing docs.
@@ -1633,6 +1662,10 @@ Audit update 2026-06-04:
 - Complete: optional DOSEMU2 smoke automation exists outside mandatory CI and
   skips cleanly when DOSEMU2 is unavailable.
 - Complete: the release workflow smokes each packaged binary before upload.
+- Complete: manual release workflow dispatch defaults to dry-run, builds and
+  smokes Linux, macOS, and Windows archives without requiring an existing
+  GitHub release, verifies generated checksum files, and runs release-ref docs
+  and Docker image builds.
 - Publication note: no tag, release, push, or mirror update was created.
 
 Objective: Complete repository and release workflow items that were described as

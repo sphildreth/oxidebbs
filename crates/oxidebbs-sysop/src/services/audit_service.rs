@@ -2,6 +2,8 @@ use crate::SysopError;
 use oxidebbs_db::{
     AuditEventRecord, Db, insert_audit_event, list_audit_events, list_audit_events_for_user,
 };
+use std::fs;
+use std::path::Path;
 
 pub struct AuditService;
 
@@ -36,6 +38,30 @@ impl AuditService {
                 details: details.to_string(),
             },
         )?;
+        Ok(())
+    }
+
+    pub fn export(events: &[AuditEventRecord], output: &Path) -> Result<(), SysopError> {
+        if let Some(parent) = output.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            fs::create_dir_all(parent)?;
+        }
+        let mut text = String::from("created_at\tevent_type\tuser_id\tnode_number\tdetails\n");
+        for event in events {
+            text.push_str(&format!(
+                "{}\t{}\t{}\t{}\t{}\n",
+                event.created_at,
+                event.event_type,
+                event.user_id.as_deref().unwrap_or(""),
+                event
+                    .node_number
+                    .map(|node| node.to_string())
+                    .unwrap_or_default(),
+                event.details.replace(['\t', '\n', '\r'], " ")
+            ));
+        }
+        fs::write(output, text)?;
         Ok(())
     }
 }

@@ -2047,10 +2047,11 @@ _Note: door config check, drop-file viewer, dry-run, test launch, and runtime cl
 - Delete message with confirmation.
 - Soft-delete via `MessageAdminService`.
 
-_Note: area add/edit, pin/move, and detailed network metadata remain planned for
-future enhancement. The implemented local TUI includes a read-only Network
-screen that summarizes profiles, links, areas, packets, messages, poll logs,
-duplicate events, and nodelist counts from DecentDB._
+_v1.2 adds message-area enable/disable and detailed network metadata display
+for network messages. The local TUI also includes Network and OxideNet screens
+that summarize profiles, links, areas, packets, messages, poll logs, duplicate
+events, nodelist counts, applications, nodes, queues, and subscriptions from
+DecentDB._
 
 #### Milestone TUI-5: Database, logs, audit ✅ (v1.1)
 
@@ -2059,7 +2060,8 @@ duplicate events, and nodelist counts from DecentDB._
 - Audit recent events.
 - Audit user filter.
 
-_Note: backup command, doctor/check command, and export remain CLI-only for v1.1._
+_v1.2 adds database backup/export status, verify progress, log export, and audit
+export workflows._
 
 #### Milestone TUI-6: OxideNet
 
@@ -2073,7 +2075,9 @@ _Note: backup command, doctor/check command, and export remain CLI-only for v1.1
 - Poll logs.
 - Nodelist generation.
 
-_Note: OxideNet is not yet implemented; this milestone is pending._
+_v1.2 implements the OxideNet screen with dashboard, application review, node
+registry, packet queue/quarantine summaries, subscriptions, poll logs, nodelist
+generation, and config-package operations._
 
 ### V1.1 shipped TUI
 

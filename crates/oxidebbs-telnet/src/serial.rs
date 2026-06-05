@@ -150,6 +150,13 @@ impl SerialTransport {
             port.flush().ok();
         }
 
+        if config.require_carrier_detect {
+            port.read_carrier_detect()
+                .map_err(|e| SerialOpenError::UnsupportedLineState {
+                    feature: format!("carrier detect on {}: {e}", config.path),
+                })?;
+        }
+
         info!(
             path = %config.path,
             baud_rate = config.baud_rate,

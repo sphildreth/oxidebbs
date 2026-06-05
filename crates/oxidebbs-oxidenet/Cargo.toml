@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+oxidebbs-db = { path = "../oxidebbs-db" }
 oxidebbs-network = { path = "../oxidebbs-network" }
+hex.workspace = true
 serde.workspace = true
+sha2.workspace = true
 thiserror.workspace = true

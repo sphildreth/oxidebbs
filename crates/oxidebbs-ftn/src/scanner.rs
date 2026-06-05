@@ -3,9 +3,10 @@ use std::path::{Path, PathBuf};
 
 use oxidebbs_db::{
     Db, MessageRecord, NetworkAreaRecord, NetworkLinkRecord, NetworkMessageRecord,
-    NetworkPacketRecord, NetworkProfileRecord, Value, insert_network_message,
-    insert_network_packet, list_messages_in_area, list_network_areas, list_network_links,
-    list_network_messages, list_network_packets, list_network_subscriptions,
+    NetworkPacketRecord, NetworkProfileRecord, Value, finish_network_packet,
+    insert_network_message, insert_network_packet, list_messages_in_area, list_network_areas,
+    list_network_links, list_network_messages, list_network_packets, list_network_subscriptions,
+    update_network_packet_file_status,
 };
 use oxidebbs_network::FtnAddress;
 use sha2::{Digest, Sha256};
@@ -213,7 +214,7 @@ impl<'db> Scanner<'db> {
             return Ok(None);
         }
 
-        let packet_paths: Vec<PathBuf> = fs::read_dir(&ready_dir)?
+        let mut packet_paths: Vec<PathBuf> = fs::read_dir(&ready_dir)?
             .filter_map(|entry| entry.ok())
             .filter(|entry| {
                 entry
@@ -225,6 +226,7 @@ impl<'db> Scanner<'db> {
             })
             .map(|entry| entry.path())
             .collect();
+        packet_paths.sort();
 
         if packet_paths.is_empty() {
             return Ok(None);
@@ -244,9 +246,46 @@ impl<'db> Scanner<'db> {
                 .map(|addr| addr.node)
                 .unwrap_or(0)
         );
-        let bundle_path = bundled_dir.join(&bundle_name);
+        let bundle_path = available_path(&bundled_dir.join(&bundle_name));
 
         BundleCreator::create_zip_bundle(&packet_paths, &bundle_path)?;
+        let now = current_timestamp(self.db)?;
+        let bundle_packet = NetworkPacketRecord {
+            id: generated_uuid(self.db)?,
+            network_id: self.profile.id.clone(),
+            direction: "outbound".to_string(),
+            link_id: Some(link.id.clone()),
+            filename: bundle_path.display().to_string(),
+            sha256: sha256_file(&bundle_path)?,
+            size_bytes: fs::metadata(&bundle_path)?
+                .len()
+                .try_into()
+                .unwrap_or(i64::MAX),
+            status: "pending".to_string(),
+            error_message: None,
+            received_at: None,
+            processed_at: None,
+            created_at: now,
+        };
+        insert_network_packet(self.db, &bundle_packet)?;
+
+        let packet_rows = list_network_packets(self.db)?;
+        for packet_path in &packet_paths {
+            let packet_name = packet_path.display().to_string();
+            for packet in packet_rows.iter().filter(|packet| {
+                packet.direction == "outbound"
+                    && packet.link_id.as_deref() == Some(link.id.as_str())
+                    && packet.filename == packet_name
+                    && packet.status == "pending"
+            }) {
+                finish_network_packet(
+                    self.db,
+                    &packet.id,
+                    "processed",
+                    Some("bundled into outbound ZIP arcmail"),
+                )?;
+            }
+        }
 
         for packet_path in &packet_paths {
             fs::remove_file(packet_path)?;
@@ -267,8 +306,6 @@ impl<'db> Scanner<'db> {
     ///
     /// Returns I/O, packet, or database errors that prevent materialization.
     pub fn materialize_outbound_netmail(&self) -> Result<usize, FtnError> {
-        use oxidebbs_db::{finish_network_packet, list_network_messages, list_network_packets};
-
         let packets = list_network_packets(self.db)?
             .into_iter()
             .filter(|p| p.direction == "outbound" && p.status == "pending" && p.link_id.is_some())
@@ -283,6 +320,10 @@ impl<'db> Scanner<'db> {
         let mut materialized = 0;
 
         for packet in packets {
+            if Path::new(&packet.filename).exists() {
+                continue;
+            }
+
             let link_id = match packet.link_id.as_ref() {
                 Some(id) => id,
                 None => continue,
@@ -316,8 +357,7 @@ impl<'db> Scanner<'db> {
 
             let ready_dir = self.paths.ready_dir(&link.key);
             fs::create_dir_all(&ready_dir)?;
-            let packet_path =
-                ready_dir.join(format!("{}.pkt", generated_uuid(self.db)?.replace('-', "")));
+            let packet_path = available_path(&ready_dir.join(packet_file_name(&packet)?));
 
             let ftn_packet = FtnPacket {
                 header: packet_header(&self.profile, link)?,
@@ -330,7 +370,17 @@ impl<'db> Scanner<'db> {
                 .open(&packet_path)?;
             PacketWriter::write(&mut file, &ftn_packet)?;
 
-            finish_network_packet(self.db, &packet.id, "ready", None)?;
+            update_network_packet_file_status(
+                self.db,
+                &packet.id,
+                &packet_path.display().to_string(),
+                &sha256_file(&packet_path)?,
+                fs::metadata(&packet_path)?
+                    .len()
+                    .try_into()
+                    .unwrap_or(i64::MAX),
+                "pending",
+            )?;
             materialized += 1;
         }
 
@@ -552,6 +602,31 @@ fn normalize_body(body: &str) -> String {
     body.replace('\n', "\r")
 }
 
+fn packet_file_name(packet: &NetworkPacketRecord) -> Result<String, FtnError> {
+    let path = Path::new(&packet.filename);
+    let candidate = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or("netmail.pkt");
+    let extension = Path::new(candidate)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or_default();
+    if extension.eq_ignore_ascii_case("pkt") {
+        Ok(candidate.to_string())
+    } else {
+        Ok(format!("{}.pkt", generated_uuid_from_text(&packet.id)))
+    }
+}
+
+fn generated_uuid_from_text(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| *character != '-')
+        .collect()
+}
+
 fn sha256_file(path: &Path) -> Result<String, FtnError> {
     let bytes = fs::read(path)?;
     let mut hasher = Sha256::new();
@@ -575,15 +650,40 @@ fn hex_nibble(nibble: u8) -> char {
     }
 }
 
+fn available_path(destination: &Path) -> PathBuf {
+    if !destination.exists() {
+        return destination.to_path_buf();
+    }
+    let parent = destination.parent().unwrap_or_else(|| Path::new(""));
+    let stem = destination
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("packet");
+    let extension = destination
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| format!(".{extension}"))
+        .unwrap_or_default();
+    for index in 1.. {
+        let candidate = parent.join(format!("{stem}.{index}{extension}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    destination.to_path_buf()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::PacketReader;
+    use crate::{BundleExtractor, PacketReader, Tosser, TosserPaths};
     use oxidebbs_db::{
-        MessageAreaRecord, NetworkSubscriptionRecord, OxideDb, insert_message, insert_message_area,
-        insert_network_area, insert_network_link, insert_network_profile,
-        insert_network_subscription, list_network_messages,
+        DbWriter, MessageAreaRecord, NetworkSubscriptionRecord, OxideDb, insert_message,
+        insert_message_area, insert_network_area, insert_network_link, insert_network_profile,
+        insert_network_subscription, list_messages, list_network_messages, list_network_packets,
     };
+    use std::sync::{Arc, Barrier};
+    use std::thread;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     const PROFILE_ID: &str = "00000000-0000-4000-8000-000000002001";
@@ -596,6 +696,11 @@ mod tests {
 
     fn test_db() -> OxideDb {
         let db = OxideDb::open_memory().expect("open db");
+        seed_db(&db);
+        db
+    }
+
+    fn seed_db(db: &OxideDb) {
         oxidebbs_db::insert_user(
             db.db(),
             &oxidebbs_db::UserRecord {
@@ -660,7 +765,6 @@ mod tests {
             },
         )
         .expect("insert subscription");
-        db
     }
 
     fn profile() -> NetworkProfileRecord {
@@ -727,6 +831,54 @@ mod tests {
         std::env::temp_dir().join(format!("oxidebbs-scanner-{test_name}-{suffix}"))
     }
 
+    fn write_inbound_packet(root: &Path, name: &str, msgid_suffix: &str) -> PathBuf {
+        let path = root
+            .join("network")
+            .join("fidonet")
+            .join("inbound")
+            .join("drop")
+            .join(name);
+        fs::create_dir_all(path.parent().expect("packet parent")).expect("create inbound");
+        let body = format!(
+            "AREA:OXIDE.GENERAL\r\x01MSGID: 1:105/1 {msgid_suffix}\rInbound body\rSEEN-BY: 105/1\rPATH: 105/1\r"
+        );
+        let packet = FtnPacket {
+            header: inbound_header("SECRET"),
+            messages: vec![PacketMessage {
+                to_user: "All".to_string(),
+                from_user: "Hub".to_string(),
+                subject: "Inbound hello".to_string(),
+                body: body.into_bytes(),
+                area_tag: "OXIDE.GENERAL".to_string(),
+                attributes: MessageAttribute::NONE,
+            }],
+        };
+        let mut bytes = Vec::new();
+        PacketWriter::write(&mut bytes, &packet).expect("write packet");
+        fs::write(&path, bytes).expect("write packet file");
+        path
+    }
+
+    fn inbound_header(password: &str) -> PacketHeader {
+        let mut header = PacketHeader {
+            orig_node: 1,
+            orig_net: 105,
+            orig_zone: 1,
+            dest_node: 42,
+            dest_net: 105,
+            dest_zone: 1,
+            orig_net2: 105,
+            dest_net2: 105,
+            orig_zone2: 1,
+            dest_zone2: 1,
+            ..PacketHeader::default()
+        };
+        for (index, byte) in password.as_bytes().iter().take(8).enumerate() {
+            header.password[index] = *byte;
+        }
+        header
+    }
+
     #[test]
     fn scans_local_echomail_into_outbound_packet() {
         let db = test_db();
@@ -787,6 +939,52 @@ mod tests {
                 .len(),
             1
         );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn bundle_ready_packets_creates_pending_zip_bundle_row() {
+        let db = test_db();
+        insert_local_message(&db);
+        let root = temp_root("bundle");
+        let scanner = Scanner::new(
+            db.db(),
+            profile(),
+            ScannerPaths::under_runtime(&root, "fidonet"),
+        );
+        scanner.scan().expect("scan");
+
+        let bundle = scanner
+            .bundle_ready_packets(&link())
+            .expect("bundle ready packets")
+            .expect("bundle created");
+
+        assert_eq!(bundle.extension().and_then(|ext| ext.to_str()), Some("zip"));
+        assert!(bundle.exists());
+        let output_dir = root.join("extracted");
+        let extracted =
+            BundleExtractor::extract_packets(&bundle, &output_dir).expect("extract bundle");
+        assert_eq!(extracted.len(), 1);
+
+        let packets = list_network_packets(db.db()).expect("packets");
+        assert!(packets.iter().any(|packet| {
+            packet.filename == bundle.display().to_string()
+                && packet.direction == "outbound"
+                && packet.status == "pending"
+        }));
+        assert!(packets.iter().any(|packet| {
+            packet.filename.ends_with(".pkt")
+                && packet.direction == "outbound"
+                && packet.status == "processed"
+        }));
+        let ready_dir = root.join("network/fidonet/outbound/hub/ready");
+        let remaining_ready_packets = fs::read_dir(&ready_dir)
+            .expect("ready dir")
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("pkt"))
+            .count();
+        assert_eq!(remaining_ready_packets, 0);
+
         let _ = fs::remove_dir_all(root);
     }
 
@@ -882,7 +1080,97 @@ mod tests {
             .iter()
             .find(|p| p.id == packet_id)
             .expect("packet");
-        assert_eq!(updated.status, "ready");
+        assert_eq!(updated.status, "pending");
+        assert!(Path::new(&updated.filename).exists());
+        assert_eq!(
+            updated.size_bytes,
+            fs::metadata(&updated.filename).expect("metadata").len() as i64
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn concurrent_scan_and_toss_complete_through_db_writer() {
+        let root = temp_root("concurrent");
+        fs::create_dir_all(&root).expect("create root");
+        let db = test_db();
+        insert_local_message(&db);
+        write_inbound_packet(&root, "concurrent-in.pkt", "concurrent-in");
+
+        let writer = Arc::new(DbWriter::new(db.db().clone()));
+        let barrier = Arc::new(Barrier::new(3));
+        let scanner_barrier = Arc::clone(&barrier);
+        let scanner_writer = Arc::clone(&writer);
+        let scanner_root = root.clone();
+        let scanner_thread = thread::spawn(move || {
+            scanner_barrier.wait();
+            let ticket = scanner_writer
+                .submit(move |db| {
+                    let scanner = Scanner::new(
+                        db,
+                        profile(),
+                        ScannerPaths::under_runtime(&scanner_root, "fidonet"),
+                    );
+                    Ok(match scanner.scan() {
+                        Ok(result) => Ok(result),
+                        Err(FtnError::Database(error)) => return Err(error),
+                        Err(error) => Err(error.to_string()),
+                    })
+                })
+                .expect("submit scan");
+            ticket.wait().expect("scan writer").expect("scan")
+        });
+
+        let tosser_barrier = Arc::clone(&barrier);
+        let tosser_writer = Arc::clone(&writer);
+        let tosser_root = root.clone();
+        let tosser_thread = thread::spawn(move || {
+            tosser_barrier.wait();
+            let ticket = tosser_writer
+                .submit(move |db| {
+                    let tosser = Tosser::new(
+                        db,
+                        profile(),
+                        TosserPaths::under_runtime(&tosser_root, "fidonet"),
+                    );
+                    Ok(match tosser.toss() {
+                        Ok(result) => Ok(result),
+                        Err(FtnError::Database(error)) => return Err(error),
+                        Err(error) => Err(error.to_string()),
+                    })
+                })
+                .expect("submit toss");
+            ticket.wait().expect("toss writer").expect("toss")
+        });
+
+        barrier.wait();
+        let scan_result = scanner_thread.join().expect("scanner thread");
+        let toss_result = tosser_thread.join().expect("tosser thread");
+
+        assert_eq!(scan_result.messages_scanned, 1);
+        assert_eq!(scan_result.packets_created, 1);
+        assert_eq!(toss_result.messages_imported, 1);
+        assert_eq!(toss_result.packets_processed, 1);
+
+        let local_messages = list_messages(db.db()).expect("local messages");
+        assert_eq!(local_messages.len(), 2);
+        assert!(
+            local_messages
+                .iter()
+                .any(|message| message.author_kind == "network")
+        );
+        let network_messages = list_network_messages(db.db()).expect("network messages");
+        assert!(
+            network_messages
+                .iter()
+                .any(|message| message.status == "imported")
+        );
+        assert!(
+            network_messages
+                .iter()
+                .any(|message| message.status == "exported")
+        );
 
         let _ = fs::remove_dir_all(root);
     }

@@ -2,7 +2,8 @@ use crate::SysopError;
 use crate::services::audit_service::AuditService;
 use oxidebbs_db::{
     Db, MessageAreaRecord, MessageRecord, find_message_area_by_key, find_message_by_id,
-    list_message_areas, list_messages_in_area, update_message_visibility,
+    list_message_areas, list_messages_in_area, update_message_area_enabled,
+    update_message_visibility,
 };
 
 pub struct MessageAdminService;
@@ -32,6 +33,22 @@ impl MessageAdminService {
             None,
             None,
             &format!("message_id={message_id}"),
+        )?;
+        Ok(())
+    }
+
+    pub fn set_area_enabled(db: &Db, area_id: &str, enabled: bool) -> Result<(), SysopError> {
+        update_message_area_enabled(db, area_id, enabled)?;
+        AuditService::record(
+            db,
+            if enabled {
+                "message_area_enabled"
+            } else {
+                "message_area_disabled"
+            },
+            None,
+            None,
+            &format!("area_id={area_id}"),
         )?;
         Ok(())
     }

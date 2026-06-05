@@ -19,6 +19,8 @@ pub fn migrate_to_current(db: &Db) -> decentdb::Result<()> {
             4 => migrate_4_to_5(db)?,
             5 => migrate_5_to_6(db)?,
             6 => migrate_6_to_7(db)?,
+            7 => migrate_7_to_8(db)?,
+            8 => migrate_8_to_9(db)?,
             unknown => {
                 return Err(DbError::sql(format!(
                     "Unsupported migration source schema version {unknown}; expected {SCHEMA_VERSION} or older known versions"
@@ -134,6 +136,359 @@ fn migrate_6_to_7(db: &Db) -> decentdb::Result<()> {
             "Cannot apply migration 6 -> 7 because schema_version marker is missing",
         )),
     }
+}
+
+fn migrate_7_to_8(db: &Db) -> decentdb::Result<()> {
+    match existing_schema_version(db)? {
+        Some(7) => {
+            run_migration_transaction(db, || {
+                rebuild_network_runtime_tables_for_v8(db)?;
+                set_schema_version(db, 8)
+            })?;
+            Ok(())
+        }
+        Some(other) => Err(DbError::sql(format!(
+            "Cannot apply migration 7 -> 8 from schema version {other}"
+        ))),
+        None => Err(DbError::sql(
+            "Cannot apply migration 7 -> 8 because schema_version marker is missing",
+        )),
+    }
+}
+
+fn migrate_8_to_9(db: &Db) -> decentdb::Result<()> {
+    match existing_schema_version(db)? {
+        Some(8) => {
+            run_migration_transaction(db, || {
+                rebuild_sessions_for_v9(db)?;
+                set_schema_version(db, 9)
+            })?;
+            Ok(())
+        }
+        Some(other) => Err(DbError::sql(format!(
+            "Cannot apply migration 8 -> 9 from schema version {other}"
+        ))),
+        None => Err(DbError::sql(
+            "Cannot apply migration 8 -> 9 because schema_version marker is missing",
+        )),
+    }
+}
+
+fn rebuild_sessions_for_v9(db: &Db) -> decentdb::Result<()> {
+    db.execute_batch(
+        "ALTER TABLE sessions RENAME TO oxidebbs_schema8_sessions;
+
+        DROP INDEX IF EXISTS idx_sessions_user_id;
+        DROP INDEX IF EXISTS idx_sessions_started_at;
+
+        CREATE TABLE sessions_v9 (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            node_number INT NOT NULL CHECK (node_number > 0),
+            user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+            transport TEXT NOT NULL CHECK (transport = 'telnet' OR transport = 'serial'),
+            remote_address TEXT NOT NULL DEFAULT '',
+            remote_ip IPADDR,
+            remote_port INT CHECK (remote_port IS NULL OR (remote_port >= 0 AND remote_port <= 65535)),
+            started_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            ended_at TIMESTAMPTZ,
+            disconnect_reason TEXT
+        );
+
+        INSERT INTO sessions_v9 (
+            id, node_number, user_id, transport, remote_address, remote_ip,
+            remote_port, started_at, ended_at, disconnect_reason
+        )
+        SELECT id, node_number, user_id, transport, remote_address, remote_ip,
+               remote_port, started_at, ended_at, disconnect_reason
+        FROM oxidebbs_schema8_sessions;
+
+        ALTER TABLE sessions_v9 RENAME TO sessions;
+
+        CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions (user_id);
+        CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions (started_at);",
+    )?;
+    Ok(())
+}
+
+fn rebuild_network_runtime_tables_for_v8(db: &Db) -> decentdb::Result<()> {
+    db.execute_batch(
+        "ALTER TABLE network_seen_by RENAME TO oxidebbs_schema7_network_seen_by;
+        ALTER TABLE network_path RENAME TO oxidebbs_schema7_network_path;
+        ALTER TABLE network_messages RENAME TO oxidebbs_schema7_network_messages;
+        ALTER TABLE network_packets RENAME TO oxidebbs_schema7_network_packets;
+        ALTER TABLE network_nodelist RENAME TO oxidebbs_schema7_network_nodelist;
+
+        DROP INDEX IF EXISTS idx_network_packets_network_id_status;
+        DROP INDEX IF EXISTS idx_network_messages_network_id;
+        DROP INDEX IF EXISTS idx_network_messages_local_message_id;
+        DROP INDEX IF EXISTS idx_network_seen_by_message_id;
+        DROP INDEX IF EXISTS idx_network_seen_by_network_id_zone_net_node;
+        DROP INDEX IF EXISTS idx_network_path_message_id_sequence;
+        DROP INDEX IF EXISTS idx_network_nodelist_network_id_zone_net_node_point;
+
+        CREATE TABLE network_packets_copy (
+            id UUID,
+            network_id UUID,
+            direction TEXT,
+            link_id UUID,
+            filename TEXT,
+            sha256 TEXT,
+            size_bytes INT,
+            status TEXT,
+            error_message TEXT,
+            received_at TIMESTAMPTZ,
+            processed_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ
+        );
+
+        INSERT INTO network_packets_copy (
+            id, network_id, direction, link_id, filename, sha256, size_bytes, status,
+            error_message, received_at, processed_at, created_at
+        )
+        SELECT
+            id, network_id, direction, link_id, filename, sha256, size_bytes, status,
+            error_message, received_at, processed_at, created_at
+        FROM oxidebbs_schema7_network_packets;
+
+        CREATE TABLE network_messages_copy (
+            id UUID,
+            network_id UUID,
+            local_message_id UUID,
+            message_type TEXT,
+            area_tag TEXT,
+            origin_address TEXT,
+            destination_address TEXT,
+            from_name TEXT,
+            to_name TEXT,
+            subject TEXT,
+            raw_text BLOB,
+            display_body TEXT,
+            msgid TEXT,
+            replyid TEXT,
+            created_at TIMESTAMPTZ,
+            imported_at TIMESTAMPTZ,
+            exported_at TIMESTAMPTZ,
+            duplicate_hash TEXT,
+            packet_id UUID,
+            status TEXT
+        );
+
+        INSERT INTO network_messages_copy (
+            id, network_id, local_message_id, message_type, area_tag, origin_address,
+            destination_address, from_name, to_name, subject, raw_text, display_body,
+            msgid, replyid, created_at, imported_at, exported_at, duplicate_hash,
+            packet_id, status
+        )
+        SELECT
+            id, network_id, local_message_id, message_type, area_tag, origin_address,
+            destination_address, from_name, to_name, subject, raw_text, display_body,
+            msgid, replyid, created_at, imported_at, exported_at, duplicate_hash,
+            packet_id, status
+        FROM oxidebbs_schema7_network_messages;
+
+        CREATE TABLE network_seen_by_copy (
+            id UUID,
+            message_id UUID,
+            network_id UUID,
+            zone INT,
+            net INT,
+            node INT
+        );
+
+        INSERT INTO network_seen_by_copy (id, message_id, network_id, zone, net, node)
+        SELECT id, message_id, network_id, zone, net, node
+        FROM oxidebbs_schema7_network_seen_by;
+
+        CREATE TABLE network_path_copy (
+            id UUID,
+            message_id UUID,
+            network_id UUID,
+            sequence INT,
+            zone INT,
+            net INT,
+            node INT
+        );
+
+        INSERT INTO network_path_copy (id, message_id, network_id, sequence, zone, net, node)
+        SELECT id, message_id, network_id, sequence, zone, net, node
+        FROM oxidebbs_schema7_network_path;
+
+        CREATE TABLE network_nodelist_copy (
+            id UUID,
+            network_id UUID,
+            zone INT,
+            net INT,
+            node INT,
+            point INT,
+            parsed_name TEXT,
+            location TEXT,
+            sysop_name TEXT,
+            phone TEXT,
+            speed TEXT,
+            flags TEXT,
+            raw_entry TEXT,
+            updated_at TIMESTAMPTZ
+        );
+
+        INSERT INTO network_nodelist_copy (
+            id, network_id, zone, net, node, point, parsed_name, location,
+            sysop_name, phone, speed, flags, raw_entry, updated_at
+        )
+        SELECT
+            id, network_id, zone, net, node, point, parsed_name, NULL,
+            NULL, NULL, NULL, '', raw_entry, updated_at
+        FROM oxidebbs_schema7_network_nodelist;
+
+        DROP TABLE oxidebbs_schema7_network_seen_by;
+        DROP TABLE oxidebbs_schema7_network_path;
+        DROP TABLE oxidebbs_schema7_network_messages;
+        DROP TABLE oxidebbs_schema7_network_packets;
+        DROP TABLE oxidebbs_schema7_network_nodelist;
+
+        CREATE TABLE network_packets (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            network_id UUID NOT NULL REFERENCES network_profiles(id) ON DELETE CASCADE,
+            direction TEXT NOT NULL
+                CHECK (direction = 'inbound' OR direction = 'outbound'),
+            link_id UUID REFERENCES network_links(id) ON DELETE SET NULL,
+            filename TEXT NOT NULL CHECK (LENGTH(TRIM(filename)) > 0),
+            sha256 TEXT NOT NULL CHECK (LENGTH(TRIM(sha256)) > 0),
+            size_bytes INT NOT NULL DEFAULT 0 CHECK (size_bytes >= 0),
+            status TEXT NOT NULL DEFAULT 'pending'
+                CHECK (status = 'pending' OR status = 'processing' OR status = 'processed' OR status = 'quarantined' OR status = 'failed' OR status = 'ready'),
+            error_message TEXT,
+            received_at TIMESTAMPTZ,
+            processed_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        INSERT INTO network_packets (
+            id, network_id, direction, link_id, filename, sha256, size_bytes, status,
+            error_message, received_at, processed_at, created_at
+        )
+        SELECT
+            id, network_id, direction, link_id, filename, sha256, size_bytes, status,
+            error_message, received_at, processed_at, created_at
+        FROM network_packets_copy;
+
+        CREATE TABLE network_messages (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            network_id UUID NOT NULL REFERENCES network_profiles(id) ON DELETE CASCADE,
+            local_message_id UUID REFERENCES messages(id) ON DELETE SET NULL,
+            message_type TEXT NOT NULL DEFAULT 'echomail'
+                CHECK (message_type = 'echomail' OR message_type = 'netmail' OR message_type = 'local'),
+            area_tag TEXT,
+            origin_address TEXT NOT NULL,
+            destination_address TEXT,
+            from_name TEXT NOT NULL CHECK (LENGTH(TRIM(from_name)) > 0),
+            to_name TEXT,
+            subject TEXT NOT NULL CHECK (LENGTH(TRIM(subject)) > 0),
+            raw_text BLOB NOT NULL,
+            display_body TEXT NOT NULL DEFAULT '',
+            msgid TEXT,
+            replyid TEXT,
+            created_at TIMESTAMPTZ NOT NULL,
+            imported_at TIMESTAMPTZ,
+            exported_at TIMESTAMPTZ,
+            duplicate_hash TEXT,
+            packet_id UUID REFERENCES network_packets(id) ON DELETE SET NULL,
+            status TEXT NOT NULL DEFAULT 'imported'
+                CHECK (status = 'imported' OR status = 'exported' OR status = 'quarantined' OR status = 'duplicate' OR status = 'pending' OR status = 'ready'),
+            CHECK (LENGTH(TRIM(origin_address)) > 0)
+        );
+
+        INSERT INTO network_messages (
+            id, network_id, local_message_id, message_type, area_tag, origin_address,
+            destination_address, from_name, to_name, subject, raw_text, display_body,
+            msgid, replyid, created_at, imported_at, exported_at, duplicate_hash,
+            packet_id, status
+        )
+        SELECT
+            id, network_id, local_message_id, message_type, area_tag, origin_address,
+            destination_address, from_name, to_name, subject, raw_text, display_body,
+            msgid, replyid, created_at, imported_at, exported_at, duplicate_hash,
+            packet_id, status
+        FROM network_messages_copy;
+
+        CREATE TABLE network_seen_by (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            message_id UUID NOT NULL REFERENCES network_messages(id) ON DELETE CASCADE,
+            network_id UUID NOT NULL REFERENCES network_profiles(id) ON DELETE CASCADE,
+            zone INT NOT NULL CHECK (zone > 0),
+            net INT NOT NULL CHECK (net > 0),
+            node INT NOT NULL CHECK (node > 0)
+        );
+
+        INSERT INTO network_seen_by (id, message_id, network_id, zone, net, node)
+        SELECT id, message_id, network_id, zone, net, node
+        FROM network_seen_by_copy;
+
+        CREATE TABLE network_path (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            message_id UUID NOT NULL REFERENCES network_messages(id) ON DELETE CASCADE,
+            network_id UUID NOT NULL REFERENCES network_profiles(id) ON DELETE CASCADE,
+            sequence INT NOT NULL CHECK (sequence >= 0),
+            zone INT NOT NULL CHECK (zone > 0),
+            net INT NOT NULL CHECK (net > 0),
+            node INT NOT NULL CHECK (node > 0)
+        );
+
+        INSERT INTO network_path (id, message_id, network_id, sequence, zone, net, node)
+        SELECT id, message_id, network_id, sequence, zone, net, node
+        FROM network_path_copy;
+
+        CREATE TABLE network_nodelist (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            network_id UUID NOT NULL REFERENCES network_profiles(id) ON DELETE CASCADE,
+            zone INT NOT NULL CHECK (zone > 0),
+            net INT NOT NULL CHECK (net > 0),
+            node INT NOT NULL CHECK (node > 0),
+            point INT NOT NULL DEFAULT 0 CHECK (point >= 0),
+            parsed_name TEXT,
+            location TEXT,
+            sysop_name TEXT,
+            phone TEXT,
+            speed TEXT,
+            flags TEXT NOT NULL DEFAULT '',
+            raw_entry TEXT NOT NULL CHECK (LENGTH(TRIM(raw_entry)) > 0),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (network_id, zone, net, node, point)
+        );
+
+        INSERT INTO network_nodelist (
+            id, network_id, zone, net, node, point, parsed_name, location,
+            sysop_name, phone, speed, flags, raw_entry, updated_at
+        )
+        SELECT id, network_id, zone, net, node, point, parsed_name, location,
+            sysop_name, phone, speed, flags, raw_entry, updated_at
+        FROM network_nodelist_copy;
+
+        DROP TABLE network_seen_by_copy;
+        DROP TABLE network_path_copy;
+        DROP TABLE network_messages_copy;
+        DROP TABLE network_packets_copy;
+        DROP TABLE network_nodelist_copy;
+
+        CREATE TABLE IF NOT EXISTS network_rescan_queue (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            network_id UUID NOT NULL REFERENCES network_profiles(id) ON DELETE CASCADE,
+            link_id UUID NOT NULL REFERENCES network_links(id) ON DELETE CASCADE,
+            area_tag TEXT NOT NULL CHECK (LENGTH(TRIM(area_tag)) > 0),
+            status TEXT NOT NULL DEFAULT 'pending'
+                CHECK (status = 'pending' OR status = 'processing' OR status = 'completed' OR status = 'failed' OR status = 'cancelled'),
+            requested_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            processed_at TIMESTAMPTZ
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_network_packets_network_id_status ON network_packets (network_id, status);
+        CREATE INDEX IF NOT EXISTS idx_network_messages_network_id ON network_messages (network_id);
+        CREATE INDEX IF NOT EXISTS idx_network_messages_local_message_id ON network_messages (local_message_id);
+        CREATE INDEX IF NOT EXISTS idx_network_seen_by_message_id ON network_seen_by (message_id);
+        CREATE INDEX IF NOT EXISTS idx_network_seen_by_network_id_zone_net_node ON network_seen_by (network_id, zone, net, node);
+        CREATE INDEX IF NOT EXISTS idx_network_path_message_id_sequence ON network_path (message_id, sequence);
+        CREATE INDEX IF NOT EXISTS idx_network_nodelist_network_id_zone_net_node_point ON network_nodelist (network_id, zone, net, node, point);",
+    )?;
+    Ok(())
 }
 
 fn doors_needs_security_level_rebuild(db: &Db) -> decentdb::Result<bool> {
@@ -1158,6 +1513,9 @@ mod tests {
         migrate_6_to_7(&db).expect("apply migration 6->7");
         assert_eq!(schema::schema_version(&db).expect("schema after 6->7"), 7);
 
+        migrate_7_to_8(&db).expect("apply migration 7->8");
+        assert_eq!(schema::schema_version(&db).expect("schema after 7->8"), 8);
+
         assert_eq!(
             schema::schema_version(&db).expect("schema version"),
             SCHEMA_VERSION
@@ -1202,6 +1560,13 @@ mod tests {
             .any(|table| table.name == "network_applications");
         assert!(has_oxidenet_tables);
 
+        let has_rescan_table = db
+            .list_tables()
+            .expect("list tables")
+            .iter()
+            .any(|table| table.name == "network_rescan_queue");
+        assert!(has_rescan_table);
+
         assert_eq!(count_rows(&db, "users"), 1);
         assert_eq!(count_rows(&db, "auth_attempts"), 1);
         assert_eq!(count_rows(&db, "message_areas"), 1);
@@ -1217,6 +1582,11 @@ mod tests {
             scalar_text(&db, "SELECT details FROM audit_events"),
             "preserve audit"
         );
+
+        db.execute(
+            "SELECT location, sysop_name, phone, speed, flags FROM network_nodelist LIMIT 0",
+        )
+        .expect("structured nodelist columns exist");
     }
 
     #[test]

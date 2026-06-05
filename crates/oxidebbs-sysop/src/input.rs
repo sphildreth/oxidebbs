@@ -24,6 +24,7 @@ pub enum ScreenId {
     Users,
     Messages,
     Network,
+    OxideNet,
     Doors,
     Ansi,
     Config,
@@ -42,6 +43,7 @@ impl ScreenId {
             Self::Users => "Users",
             Self::Messages => "Messages",
             Self::Network => "Network",
+            Self::OxideNet => "OxideNet",
             Self::Doors => "Doors",
             Self::Ansi => "ANSI",
             Self::Config => "Config",
@@ -60,6 +62,7 @@ impl ScreenId {
             Self::Users,
             Self::Messages,
             Self::Network,
+            Self::OxideNet,
             Self::Doors,
             Self::Ansi,
             Self::Config,
@@ -91,9 +94,10 @@ pub fn translate_key(key: KeyEvent) -> UiEvent {
         KeyCode::Char('d' | 'D') if control => UiEvent::NavigateTo(ScreenId::Doors),
         KeyCode::Char('m' | 'M') if control => UiEvent::NavigateTo(ScreenId::Messages),
         KeyCode::Char('x' | 'X') if control => UiEvent::NavigateTo(ScreenId::Network),
+        KeyCode::Char('o' | 'O') if control => UiEvent::NavigateTo(ScreenId::OxideNet),
         KeyCode::Char('l' | 'L') if control => UiEvent::NavigateTo(ScreenId::Logs),
         KeyCode::Char('b' | 'B') if control => UiEvent::NavigateTo(ScreenId::Database),
-        KeyCode::Char('o' | 'O') if control => UiEvent::NavigateTo(ScreenId::Doctor),
+        KeyCode::Char('r' | 'R') if control => UiEvent::NavigateTo(ScreenId::Doctor),
         _ => UiEvent::Key(key),
     }
 }
@@ -117,7 +121,7 @@ mod tests {
                 KeyCode::Char('O'),
                 KeyModifiers::CONTROL | KeyModifiers::SHIFT
             )),
-            UiEvent::NavigateTo(ScreenId::Doctor)
+            UiEvent::NavigateTo(ScreenId::OxideNet)
         );
     }
 
@@ -136,12 +140,20 @@ mod tests {
     #[test]
     fn network_screen_is_in_navigation_order() {
         assert!(ScreenId::all().contains(&ScreenId::Network));
+        assert!(ScreenId::all().contains(&ScreenId::OxideNet));
         assert_eq!(
             translate_key(KeyEvent::new(
                 KeyCode::Char('X'),
                 KeyModifiers::CONTROL | KeyModifiers::SHIFT
             )),
             UiEvent::NavigateTo(ScreenId::Network)
+        );
+        assert_eq!(
+            translate_key(KeyEvent::new(
+                KeyCode::Char('O'),
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT
+            )),
+            UiEvent::NavigateTo(ScreenId::OxideNet)
         );
     }
 }

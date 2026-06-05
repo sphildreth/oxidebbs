@@ -14,6 +14,7 @@ pub struct AuditScreen {
     pub events: Vec<oxidebbs_db::AuditEventRecord>,
     pub table_state: TableState,
     pub filter_user: Option<String>,
+    pub status: String,
 }
 
 impl AuditScreen {
@@ -25,6 +26,7 @@ impl AuditScreen {
             events: Vec::new(),
             table_state,
             filter_user: None,
+            status: "Idle".to_string(),
         }
     }
 
@@ -67,6 +69,18 @@ impl AuditScreen {
                         active_field: 0,
                     }));
                 }
+                KeyCode::Char('e') => {
+                    let output = std::path::PathBuf::from("logs/sysop-tui-audit-export.tsv");
+                    let events = self
+                        .filtered_events()
+                        .into_iter()
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    match AuditService::export(&events, &output) {
+                        Ok(()) => self.status = format!("Exported to {}", output.display()),
+                        Err(error) => self.status = format!("Export failed: {error}"),
+                    }
+                }
                 KeyCode::PageUp => {
                     let current = self.table_state.selected().unwrap_or(0);
                     self.table_state.select(Some(current.saturating_sub(5)));
@@ -107,12 +121,13 @@ impl AuditScreen {
     pub fn render(&self, frame: &mut Frame, area: Rect) {
         let events = self.filtered_events();
         let toolbar_text = format!(
-            "Audit Events: {} total{}",
+            "Audit Events: {} total{} | {}",
             self.events.len(),
             self.filter_user
                 .as_ref()
                 .map(|u| format!(" | Filter: {u}"))
-                .unwrap_or_default()
+                .unwrap_or_default(),
+            self.status
         );
         let toolbar = Paragraph::new(toolbar_text).style(self.theme.label_style());
 
@@ -172,7 +187,7 @@ impl AuditScreen {
             &mut table_state,
         );
 
-        let hints = "↑↓ Move | F Filter User | Esc Back";
+        let hints = "↑↓ Move | F Filter User | E Export Filtered | Esc Back";
         Paragraph::new(hints)
             .style(self.theme.muted_style())
             .block(Block::default().borders(Borders::ALL))

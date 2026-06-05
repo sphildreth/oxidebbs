@@ -14,6 +14,7 @@ oxidebbs-door = { path = "../oxidebbs-door" }
 oxidebbs-sysop = { path = "../oxidebbs-sysop" }
 oxidebbs-ftn = { path = "../oxidebbs-ftn" }
 oxidebbs-binkp = { path = "../oxidebbs-binkp" }
+oxidebbs-oxidenet = { path = "../oxidebbs-oxidenet" }
 oxidebbs-transfer = { path = "../oxidebbs-transfer" }
 argon2.workspace = true
 axum.workspace = true
@@ -34,3 +35,6 @@ tracing-subscriber.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 nix.workspace = true
+
+[dev-dependencies]
+rcgen = "0.14.8"

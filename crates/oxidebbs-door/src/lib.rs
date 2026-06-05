@@ -3,6 +3,8 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::fs;
+use std::io::{Read, Write};
+use std::net::{TcpStream, ToSocketAddrs};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Component, Path, PathBuf};
@@ -686,6 +688,129 @@ pub trait RemoteSessionIo {
     fn write_caller(&mut self, bytes: &[u8]) -> std::io::Result<()>;
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TcpRemoteSessionResult {
+    pub run_result: DoorRunResult,
+    pub caller_output: Vec<u8>,
+}
+
+pub struct TcpRemoteSessionIo {
+    stream: TcpStream,
+    caller_input: Vec<u8>,
+    caller_input_pos: usize,
+    caller_output: Vec<u8>,
+    remote_closed: bool,
+}
+
+impl TcpRemoteSessionIo {
+    pub fn connect(endpoint: &str, caller_input: &[u8]) -> Result<Self, DoorError> {
+        let target = remote_endpoint_socket_target(endpoint)?;
+        let mut addrs = target.to_socket_addrs()?;
+        let addr = addrs.next().ok_or_else(|| {
+            DoorError::InvalidConfig(format!(
+                "remote endpoint {endpoint:?} resolved no addresses"
+            ))
+        })?;
+        let stream = TcpStream::connect_timeout(&addr, Duration::from_secs(5))?;
+        stream.set_nodelay(true)?;
+        stream.set_nonblocking(true)?;
+        Ok(Self {
+            stream,
+            caller_input: caller_input.to_vec(),
+            caller_input_pos: 0,
+            caller_output: Vec::new(),
+            remote_closed: false,
+        })
+    }
+
+    #[must_use]
+    pub fn caller_output(&self) -> &[u8] {
+        &self.caller_output
+    }
+
+    #[must_use]
+    pub fn into_caller_output(self) -> Vec<u8> {
+        self.caller_output
+    }
+
+    fn remote_data_available(&self) -> std::io::Result<bool> {
+        let mut byte = [0_u8; 1];
+        match self.stream.peek(&mut byte) {
+            Ok(count) => Ok(count > 0),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn remote_is_closed(&self) -> std::io::Result<bool> {
+        let mut byte = [0_u8; 1];
+        match self.stream.peek(&mut byte) {
+            Ok(0) => Ok(true),
+            Ok(_) => Ok(false),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+}
+
+impl RemoteSessionIo for TcpRemoteSessionIo {
+    fn read_byte(&mut self) -> std::io::Result<Option<u8>> {
+        self.read_remote_byte()
+    }
+
+    fn write_all(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+        write_nonblocking_all(&mut self.stream, bytes)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.stream.flush()
+    }
+
+    fn has_remote_data(&self) -> bool {
+        !self.remote_closed && self.remote_data_available().unwrap_or(false)
+    }
+
+    fn has_caller_data(&self) -> bool {
+        self.caller_input_pos < self.caller_input.len()
+    }
+
+    fn is_remote_closed(&self) -> bool {
+        self.remote_closed || self.remote_is_closed().unwrap_or(false)
+    }
+
+    fn read_caller_byte(&mut self) -> std::io::Result<Option<u8>> {
+        if self.caller_input_pos < self.caller_input.len() {
+            let byte = self.caller_input[self.caller_input_pos];
+            self.caller_input_pos += 1;
+            Ok(Some(byte))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn write_remote(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+        write_nonblocking_all(&mut self.stream, bytes)
+    }
+
+    fn read_remote_byte(&mut self) -> std::io::Result<Option<u8>> {
+        let mut byte = [0_u8; 1];
+        match self.stream.read(&mut byte) {
+            Ok(0) => {
+                self.remote_closed = true;
+                Ok(None)
+            }
+            Ok(_) => Ok(Some(byte[0])),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn write_caller(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+        self.caller_output.extend_from_slice(bytes);
+        Ok(())
+    }
+}
+
 impl RemoteDoorProvider for BbsLinkProvider {
     fn validate_config(&self) -> Result<(), DoorError> {
         validate_required_field("BBSLink system_id", &self.config.system_id)?;
@@ -727,6 +852,21 @@ impl RemoteDoorProvider for BbsLinkProvider {
     }
 }
 
+impl BbsLinkProvider {
+    pub fn launch_tcp_session(
+        &self,
+        caller: &DoorCaller,
+        caller_input: &[u8],
+    ) -> Result<TcpRemoteSessionResult, DoorError> {
+        let mut io = TcpRemoteSessionIo::connect(&self.config.endpoint, caller_input)?;
+        let run_result = self.launch_session(caller, &mut io)?;
+        Ok(TcpRemoteSessionResult {
+            run_result,
+            caller_output: io.into_caller_output(),
+        })
+    }
+}
+
 impl RemoteDoorProvider for DoorPartyProvider {
     fn validate_config(&self) -> Result<(), DoorError> {
         validate_required_field("DoorParty account", &self.config.account)?;
@@ -765,6 +905,21 @@ impl RemoteDoorProvider for DoorPartyProvider {
         io.flush().map_err(DoorError::Io)?;
 
         bridge_remote_session(io)
+    }
+}
+
+impl DoorPartyProvider {
+    pub fn launch_tcp_session(
+        &self,
+        caller: &DoorCaller,
+        caller_input: &[u8],
+    ) -> Result<TcpRemoteSessionResult, DoorError> {
+        let mut io = TcpRemoteSessionIo::connect(&self.config.endpoint, caller_input)?;
+        let run_result = self.launch_session(caller, &mut io)?;
+        Ok(TcpRemoteSessionResult {
+            run_result,
+            caller_output: io.into_caller_output(),
+        })
     }
 }
 
@@ -815,6 +970,25 @@ fn bridge_remote_session(io: &mut dyn RemoteSessionIo) -> Result<DoorRunResult, 
     }
 }
 
+fn write_nonblocking_all(stream: &mut TcpStream, mut bytes: &[u8]) -> std::io::Result<()> {
+    while !bytes.is_empty() {
+        match stream.write(bytes) {
+            Ok(0) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::WriteZero,
+                    "remote provider socket accepted zero bytes",
+                ));
+            }
+            Ok(count) => bytes = &bytes[count..],
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(5));
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
 fn validate_required_field(label: &str, value: &str) -> Result<(), DoorError> {
     if value.trim().is_empty() {
         return Err(DoorError::InvalidConfig(format!("{label} is required")));
@@ -848,6 +1022,47 @@ fn validate_remote_endpoint(provider_name: &str, endpoint: &str) -> Result<(), D
         )));
     }
     Ok(())
+}
+
+fn remote_endpoint_socket_target(endpoint: &str) -> Result<String, DoorError> {
+    let trimmed = endpoint.trim();
+    if trimmed.is_empty() {
+        return Err(DoorError::InvalidConfig(
+            "remote provider endpoint is required".to_string(),
+        ));
+    }
+    let authority = match trimmed.split_once("://") {
+        Some(("telnet" | "tcp", rest)) => rest,
+        Some((scheme, _)) => {
+            return Err(DoorError::InvalidConfig(format!(
+                "remote provider endpoint scheme {scheme:?} is not supported; use host:port, telnet://host:port, or tcp://host:port"
+            )));
+        }
+        None => trimmed,
+    };
+    let authority = authority.trim_end_matches('/');
+    if authority.is_empty() || authority.contains('/') {
+        return Err(DoorError::InvalidConfig(
+            "remote provider endpoint must not include a path".to_string(),
+        ));
+    }
+    if endpoint_authority_has_port(authority) {
+        Ok(authority.to_string())
+    } else {
+        Ok(format!("{authority}:23"))
+    }
+}
+
+fn endpoint_authority_has_port(authority: &str) -> bool {
+    if let Some(rest) = authority.strip_prefix('[') {
+        return rest
+            .split_once(']')
+            .and_then(|(_, after_bracket)| after_bracket.strip_prefix(':'))
+            .is_some_and(|port| port.parse::<u16>().is_ok());
+    }
+    authority
+        .rsplit_once(':')
+        .is_some_and(|(_, port)| port.parse::<u16>().is_ok())
 }
 
 #[derive(Default)]
@@ -914,6 +1129,9 @@ impl DoorConfigDefinition {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
+    use std::net::{Shutdown, TcpListener};
+    use std::thread::JoinHandle;
 
     fn temp_path(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("oxidebbs-door-{name}-{}", std::process::id()))
@@ -954,6 +1172,42 @@ mod tests {
     fn write_command_fixture(working_dir: &Path, command_name: &str) {
         fs::create_dir_all(working_dir).expect("create working dir");
         fs::write(working_dir.join(command_name), b"fixture command").expect("write command");
+    }
+
+    fn spawn_fake_provider_server(response: &'static [u8]) -> (String, JoinHandle<Vec<u8>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind fake provider");
+        let addr = listener.local_addr().expect("fake provider addr");
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept provider client");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .expect("set read timeout");
+            let mut received = Vec::new();
+            let mut buffer = [0_u8; 512];
+            loop {
+                match stream.read(&mut buffer) {
+                    Ok(0) => break,
+                    Ok(count) => {
+                        received.extend_from_slice(&buffer[..count]);
+                        if String::from_utf8_lossy(&received).contains("USER Alice SEC 50\r\n") {
+                            break;
+                        }
+                    }
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::WouldBlock
+                            || error.kind() == std::io::ErrorKind::TimedOut =>
+                    {
+                        break;
+                    }
+                    Err(error) => panic!("fake provider read failed: {error}"),
+                }
+            }
+            stream.write_all(response).expect("write fake response");
+            stream.flush().expect("flush fake response");
+            let _ = stream.shutdown(Shutdown::Write);
+            received
+        });
+        (format!("tcp://{addr}"), handle)
     }
 
     #[test]
@@ -1760,5 +2014,74 @@ command = "LORD.EXE"
         let result = provider.launch_session(&caller(), &mut io);
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn bbslink_provider_live_connector_uses_local_tcp_server() {
+        let (endpoint, server) = spawn_fake_provider_server(b"OK\r\nWelcome BBSLink\r\n");
+        let provider = BbsLinkProvider::new(BbsLinkConfig::new(
+            "oxide-system",
+            "bbslink-auth-code",
+            endpoint,
+        ));
+
+        let result = provider
+            .launch_tcp_session(&caller(), b"")
+            .expect("launch tcp session");
+        let received = server.join().expect("server finished");
+        let received = String::from_utf8_lossy(&received);
+
+        assert_eq!(result.run_result.exit_code, Some(0));
+        assert!(!result.run_result.timed_out);
+        assert!(received.contains("SYS oxide-system AUTH bbslink-auth-code"));
+        assert!(received.contains("USER Alice SEC 50"));
+        assert_eq!(result.caller_output, b"OK\r\nWelcome BBSLink\r\n");
+    }
+
+    #[test]
+    fn doorparty_provider_live_connector_uses_local_tcp_server() {
+        let (endpoint, server) = spawn_fake_provider_server(b"OK\r\nWelcome DoorParty\r\n");
+        let provider = DoorPartyProvider::new(DoorPartyConfig::new(
+            "oxide-account",
+            "doorparty-password",
+            endpoint,
+        ));
+
+        let result = provider
+            .launch_tcp_session(&caller(), b"")
+            .expect("launch tcp session");
+        let received = server.join().expect("server finished");
+        let received = String::from_utf8_lossy(&received);
+
+        assert_eq!(result.run_result.exit_code, Some(0));
+        assert!(!result.run_result.timed_out);
+        assert!(received.contains("ACCT oxide-account PASS doorparty-password"));
+        assert!(received.contains("USER Alice SEC 50"));
+        assert_eq!(result.caller_output, b"OK\r\nWelcome DoorParty\r\n");
+    }
+
+    #[test]
+    fn remote_endpoint_socket_target_accepts_supported_endpoint_forms() {
+        assert_eq!(
+            remote_endpoint_socket_target("door.example").expect("host"),
+            "door.example:23"
+        );
+        assert_eq!(
+            remote_endpoint_socket_target("door.example:2323").expect("host port"),
+            "door.example:2323"
+        );
+        assert_eq!(
+            remote_endpoint_socket_target("telnet://door.example:2323").expect("telnet"),
+            "door.example:2323"
+        );
+
+        let error =
+            remote_endpoint_socket_target("https://door.example/login").expect_err("bad scheme");
+        match error {
+            DoorError::InvalidConfig(message) => {
+                assert!(message.contains("scheme"));
+            }
+            _ => panic!("unexpected error variant"),
+        }
     }
 }

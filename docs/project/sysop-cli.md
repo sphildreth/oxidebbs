@@ -128,8 +128,8 @@ configured file under `paths.logs` when `[logging].file_enabled` is true.
 ### Doctor Screen
 
 The sysop TUI includes a `Doctor` menu item for verbose local health checks.
-Open it from the left navigation rail, the command palette (`F2`, then
-`Go to Doctor`), or the `Ctrl+O` shortcut.
+Open it from the left navigation rail or the command palette (`F2`, then
+`Go to Doctor`).
 
 Doctor runs automatically when the screen opens. Press `R` or `F5` to rerun the
 checks, and use `Up`/`Down` or `PageUp`/`PageDown` to scroll the report. The
@@ -153,6 +153,23 @@ The current TUI doctor checks:
   duplicate active node assignments
 - door definitions, enabled doors, required door fields, door time-limit policy,
   sampled unfinished door runs, and sampled door-run references
+
+### OxideNet Screen
+
+Open OxideNet with `Ctrl+O`, the left navigation rail, or the command palette.
+The screen includes tabs for dashboard, applications, nodes, packet queues,
+subscriptions, poll logs, nodelist generation, and config-package operations.
+
+Mutating actions use confirmation dialogs and the same OxideNet service layer as
+`oxidebbs-server net oxidenet ...`. Read-only mode hides or blocks mutations
+while preserving refresh, navigation, and export operations.
+
+### Utility Workflows
+
+The Database screen supports verify, backup, and summary export. Config supports
+reload, external editor launch, and dotted `config set` style updates. ANSI
+supports raw byte inspection, external editor launch, and default screen
+installation. Logs and Audit support TSV export of the loaded or filtered range.
 - recent audit events and auth-attempt lockout state
 
 ## Logging
@@ -370,10 +387,11 @@ Live `status --json` also includes `audit_write_failures`, the in-memory count
 of best-effort audit writes that failed while the server was running.
 
 The `[admin_web]` configuration surface is disabled by default and validated.
-When explicitly enabled, it can serve a loopback read-only `/status` endpoint
-for status dashboards. Any remote admin runtime must add CSRF, replay
-protection, audit logging, and rate limiting before it can accept mutations; the
-mutating admin/control surface remains local CLI plus Unix control socket.
+When explicitly enabled, it can serve a loopback public `/status` endpoint and
+sysop-authenticated read-only JSON admin views. Remote mutation attempts require
+CSRF and nonce/timestamp replay checks, are audited, and remain blocked by
+`admin_web.read_only`; the mutating admin/control surface remains local CLI plus
+Unix control socket.
 
 ## Messages
 
@@ -410,9 +428,27 @@ Meaning:
   `door_started`/`door_finished`/`door_timed_out` events, and returns the caller
   to the menu on completion or timeout.
 - `doors add` and `doors edit` currently persist local DOS door definitions.
-  BBSLink and DoorParty-style remote provider adapters exist in `oxidebbs-door`
-  for local dry-run validation, but the CLI does not yet accept or persist
-  provider credential references and must not be given raw provider secrets.
+- `doors add` and `doors edit` also accept remote provider definitions with
+  `--provider bbslink` or `--provider doorparty`, `--endpoint <host:port>`, and
+  `--credential-ref <secret-ref>`. The stored credential reference is redacted
+  in CLI output and audit details.
+
+Remote provider example:
+
+```bash
+oxidebbs-server doors add bbslink-lord "BBSLink LORD" \
+  --provider bbslink \
+  --endpoint telnet://bbslink.example:23 \
+  --credential-ref env:BBSLINK_AUTH_CODE \
+  . LORD
+```
+
+The `.` argument satisfies the legacy local working-directory positional; for a
+remote provider door, `--endpoint` is the endpoint stored on the door record.
+
+Credential references must use `env:`, `file:`, `vault://`, `keyring://`,
+`op://`, or `secret://`. Do not pass raw BBSLink or DoorParty secrets to door
+commands.
 
 Recommended smoke-test flow:
 
@@ -566,9 +602,9 @@ cargo run -p oxidebbs-server -- net nodelist lookup 1:105/42 --network fidonet
 quarantines malformed, unauthorized, unknown-area, or netmail inputs. `net scan`
 writes outbound Type-2+ packets for subscribed echomail links under
 `paths.runtime/network/<profile>/outbound/<link>/ready`. `net poll` transports
-ready files over plaintext-legacy BinkP links, receives remote files into the
-inbound drop directory, and logs the poll. TLS-capable BinkP sessions remain
-future work. Packet retry/quarantine commands update DecentDB packet state only;
+ready files over BinkP links, uses TLS according to each link security policy,
+receives remote files into the inbound drop directory, and logs the poll.
+Packet retry/quarantine commands update DecentDB packet state only;
 they do not move spool files.
 `net areafix send` authenticates command text against the selected link
 password, applies AreaFix subscription changes, audits the activity, and prints
@@ -582,10 +618,10 @@ the current scope and limitations.
 
 All operations here are local to the current machine:
 
-- the only remote TCP admin surface is the opt-in loopback read-only `/status`
-  endpoint
-- no remote secret/token auth model
+- the remote TCP admin surface is disabled by default and loopback-only when
+  enabled
+- authenticated remote API views are read-only
 - control socket path must be local filesystem access only
 - local control socket uses Unix peer UID checks plus filesystem permissions
-- any remote admin runtime must include CSRF and replay protection before being
-  enabled
+- remote mutation attempts are guarded by CSRF and replay protection but remain
+  blocked by read-only mode

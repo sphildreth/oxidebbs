@@ -29,6 +29,7 @@ use crate::screens::logs::LogsScreen;
 use crate::screens::messages::MessagesScreen;
 use crate::screens::network::NetworkScreen;
 use crate::screens::nodes::NodesScreen;
+use crate::screens::oxidenet::OxideNetScreen;
 use crate::screens::users::UsersScreen;
 use crate::services::node_service::NodeAdminService;
 use crate::theme::Theme;
@@ -94,6 +95,7 @@ pub struct App {
     pub users_screen: UsersScreen,
     pub messages_screen: MessagesScreen,
     pub network_screen: NetworkScreen,
+    pub oxidenet_screen: OxideNetScreen,
     pub doors_screen: DoorsScreen,
     pub ansi_screen: AnsiScreen,
     pub config_screen: ConfigScreen,
@@ -149,6 +151,7 @@ impl App {
             users_screen: UsersScreen::new(theme.clone()),
             messages_screen: MessagesScreen::new(theme.clone()),
             network_screen: NetworkScreen::new(theme.clone()),
+            oxidenet_screen: OxideNetScreen::new(theme.clone()),
             doors_screen: DoorsScreen::new(theme.clone()),
             ansi_screen: AnsiScreen::new(theme.clone(), screens_path),
             config_screen: ConfigScreen::new(theme.clone(), config_path),
@@ -212,6 +215,14 @@ impl App {
                 action: PaletteAction::Navigate(ScreenId::Network),
             },
             PaletteCommand {
+                id: "nav.oxidenet".into(),
+                label: "Go to OxideNet".into(),
+                description: "Manage OxideNet applications, nodes, queues, and nodelists".into(),
+                shortcut: Some("Ctrl+O".into()),
+                is_destructive: false,
+                action: PaletteAction::Navigate(ScreenId::OxideNet),
+            },
+            PaletteCommand {
                 id: "nav.logs".into(),
                 label: "Go to Logs".into(),
                 description: "View server logs".into(),
@@ -231,7 +242,7 @@ impl App {
                 id: "nav.doctor".into(),
                 label: "Go to Doctor".into(),
                 description: "Run verbose sysop health checks".into(),
-                shortcut: Some("Ctrl+O".into()),
+                shortcut: None,
                 is_destructive: false,
                 action: PaletteAction::Navigate(ScreenId::Doctor),
             },
@@ -261,6 +272,24 @@ impl App {
                 is_destructive: true,
                 action: PaletteAction::RunCommand("nodes.reset_stale".into()),
             });
+            commands.extend([
+                PaletteCommand {
+                    id: "oxidenet.install_hub".into(),
+                    label: "Install OxideNet Hub".into(),
+                    description: "Install default OxideNet hub profile, node, and areas".into(),
+                    shortcut: None,
+                    is_destructive: true,
+                    action: PaletteAction::RunCommand("oxidenet.install_hub".into()),
+                },
+                PaletteCommand {
+                    id: "oxidenet.generate_nodelist".into(),
+                    label: "Generate OxideNet Nodelist".into(),
+                    description: "Publish the OxideNet nodelist from the registry".into(),
+                    shortcut: None,
+                    is_destructive: true,
+                    action: PaletteAction::RunCommand("oxidenet.generate_nodelist".into()),
+                },
+            ]);
         }
         commands
     }
@@ -302,6 +331,7 @@ impl App {
             self.doors_screen.refresh(db);
             self.messages_screen.refresh(db);
             self.network_screen.refresh(db);
+            self.oxidenet_screen.refresh(db);
             self.database_screen.refresh(db);
             self.audit_screen.refresh(db);
             self.active_nodes = self
@@ -371,6 +401,10 @@ impl App {
                 self.network_screen
                     .handle_event(event, &self.db, self.config.readonly)
             }
+            ScreenId::OxideNet => {
+                self.oxidenet_screen
+                    .handle_event(event, &self.db, self.config.readonly)
+            }
             ScreenId::Database => {
                 self.database_screen
                     .handle_event(event, &self.db, self.config.readonly)
@@ -404,6 +438,7 @@ impl App {
             ScreenId::Users => self.users_screen.render(frame, area),
             ScreenId::Messages => self.messages_screen.render(frame, area),
             ScreenId::Network => self.network_screen.render(frame, area),
+            ScreenId::OxideNet => self.oxidenet_screen.render(frame, area),
             ScreenId::Doors => self.doors_screen.render(frame, area),
             ScreenId::Ansi => self.ansi_screen.render(frame, area),
             ScreenId::Config => self.config_screen.render(frame, area),
@@ -635,6 +670,8 @@ fn handle_ui_event(app: &mut App, event: UiEvent) {
             UiEvent::Cancel => {
                 app.users_screen.cancel_pending_action();
                 app.doors_screen.cancel_pending_action();
+                app.messages_screen.cancel_pending_action();
+                app.oxidenet_screen.cancel_pending_action();
                 app.modal = None;
             }
             UiEvent::Confirm => {
@@ -697,6 +734,8 @@ fn handle_ui_event(app: &mut App, event: UiEvent) {
                         KeyCode::Char('n') | KeyCode::Char('N') => {
                             app.users_screen.cancel_pending_action();
                             app.doors_screen.cancel_pending_action();
+                            app.messages_screen.cancel_pending_action();
+                            app.oxidenet_screen.cancel_pending_action();
                             app.modal = None;
                         }
                         _ => {}
@@ -748,6 +787,26 @@ fn handle_ui_event(app: &mut App, event: UiEvent) {
                                         app.refresh_data();
                                     }
                                     Err(error) => set_error(app, "Reset Stale Nodes", error),
+                                }
+                            } else if id == "oxidenet.install_hub" {
+                                if let Some(db) = &app.db {
+                                    match crate::services::oxidenet_service::OxideNetAdminService::install_hub_defaults(db) {
+                                        Ok(()) => {
+                                            app.refresh_data();
+                                            app.set_status("OxideNet hub defaults installed");
+                                        }
+                                        Err(error) => set_error(app, "Install OxideNet Hub", error),
+                                    }
+                                }
+                            } else if id == "oxidenet.generate_nodelist"
+                                && let Some(db) = &app.db
+                            {
+                                match crate::services::oxidenet_service::OxideNetAdminService::generate_nodelist(db) {
+                                    Ok(count) => {
+                                        app.refresh_data();
+                                        app.set_status(format!("OxideNet nodelist generated with {count} entries"));
+                                    }
+                                    Err(error) => set_error(app, "Generate OxideNet Nodelist", error),
                                 }
                             }
                         }
@@ -846,7 +905,11 @@ fn apply_ui_action(app: &mut App, action: UiAction) {
 fn form_submit_mutates(title: &str) -> bool {
     matches!(
         title,
-        "Send Message" | "Broadcast Message" | "Reset Password" | "Set Security Level"
+        "Send Message"
+            | "Broadcast Message"
+            | "Reset Password"
+            | "Set Security Level"
+            | "Set Config Value"
     )
 }
 
@@ -857,6 +920,8 @@ fn confirm_submit_mutates(title: &str) -> bool {
 fn block_readonly_action(app: &mut App, title: &str) {
     app.users_screen.cancel_pending_action();
     app.doors_screen.cancel_pending_action();
+    app.messages_screen.cancel_pending_action();
+    app.oxidenet_screen.cancel_pending_action();
     set_info_message(
         app,
         "Read Only",
@@ -1082,6 +1147,31 @@ fn handle_form_submit(app: &mut App, form: crate::widgets::modal::FormModal) {
                 }
             }
         }
+        "Set Config Value" => {
+            if let Some(key_field) = form.fields.first()
+                && let Some(value_field) = form.fields.get(1)
+            {
+                match app
+                    .config_screen
+                    .set_value(&key_field.value, &value_field.value)
+                {
+                    Ok(()) => {
+                        if let Some(db) = &app.db {
+                            let _ = crate::services::audit_service::AuditService::record(
+                                db.db(),
+                                "config_value_set",
+                                None,
+                                None,
+                                &format!("key={}", key_field.value),
+                            );
+                        }
+                        app.refresh_data();
+                        app.set_status(format!("Config value {} updated", key_field.value));
+                    }
+                    Err(error) => set_error(app, "Set Config Value", error),
+                }
+            }
+        }
         _ => {}
     }
 }
@@ -1146,6 +1236,30 @@ fn handle_confirm_submit(app: &mut App, title: &str) {
         "Enable Door" | "Disable Door" | "Add Door" | "Update Door" => {
             match app.doors_screen.confirm_pending_action(&app.db) {
                 Ok(()) => app.refresh_data(),
+                Err(error) => set_error(app, title, error),
+            }
+        }
+        "Enable Message Area" | "Disable Message Area" => {
+            match app.messages_screen.confirm_pending_action(&app.db) {
+                Ok(()) => app.refresh_data(),
+                Err(error) => set_error(app, title, error),
+            }
+        }
+        "Install OxideNet Hub"
+        | "Approve OxideNet Application"
+        | "Reject OxideNet Application"
+        | "Hold OxideNet Application"
+        | "Suspend OxideNet Node"
+        | "Activate OxideNet Node"
+        | "Rotate OxideNet Password"
+        | "Issue OxideNet Token"
+        | "Generate OxideNet Nodelist" => {
+            match app.oxidenet_screen.confirm_pending_action(&app.db) {
+                Ok(Some(message)) => {
+                    app.refresh_data();
+                    app.set_status(message);
+                }
+                Ok(None) => app.refresh_data(),
                 Err(error) => set_error(app, title, error),
             }
         }

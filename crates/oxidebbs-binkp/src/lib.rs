@@ -20,7 +20,11 @@ pub use retry::BinkpRetryPolicy;
 pub use security::{BinkpTransportSecurity, TransportSecurityPlan, transport_security_plan};
 pub use server::BinkpServer;
 pub use session_guard::{LinkSessionPermit, LinkSessionRegistry};
-pub use tls::{BinkpStream, BinkpTlsClientConfig, BinkpTlsServerConfig, accept_tls, connect_tls};
+pub use tls::{
+    BinkpStream, BinkpTlsCertificate, BinkpTlsClientConfig, BinkpTlsIdentity, BinkpTlsServerConfig,
+    accept_tls, certificate_from_pem, connect_tls, identity_from_pkcs8_pem,
+    load_server_identity_from_pkcs8_pem_files,
+};
 pub use transfer::{
     BinkpInboundFile, BinkpOutboundFile, receive_batch, receive_next_file, send_batch,
     send_batch_with_acknowledgements, send_end_of_batch, send_file,

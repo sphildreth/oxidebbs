@@ -471,8 +471,10 @@ message id, and outcome fields when applicable.
 
 All mutating sysop control is local in v1.2. `[admin_web]` configuration exists
 and is disabled by default. When explicitly enabled, it may expose a loopback
-read-only `/status` endpoint; there is no authenticated remote admin API or
-remote interactive interface in this phase.
+public `/status` endpoint plus sysop-authenticated read-only JSON API views.
+Remote mutation attempts are guarded by session authentication, CSRF, replay
+nonce/timestamp checks, rate limits, origin checks, and audit logging, but are
+blocked by read-only mode.
 
 When a live control socket is unavailable, node disconnect/message/broadcast
 commands preserve the previous audit intent behavior and report that live delivery
@@ -518,7 +520,8 @@ primitives live in `oxidebbs-binkp`; OxideNet profile data lives in
 `oxidebbs-oxidenet`. ZIP packet extraction is handled inside `oxidebbs-ftn`
 with a strict top-level `.pkt` policy. Toss/scan workflows, outbound bundle
 compression, ARJ extraction, nodelist processing, AreaFix, BinkP sessions, and
-full OxideNet onboarding remain behind those crate boundaries.
+OxideNet onboarding are implemented behind those crate boundaries and exposed
+through CLI and local sysop TUI service surfaces.
 
 ## 14. Observability
 

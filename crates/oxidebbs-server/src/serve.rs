@@ -1,9 +1,9 @@
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Write as FmtWrite;
 use std::future::Future;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use argon2::password_hash::{PasswordHash, PasswordHasher, SaltString};
 use argon2::{Algorithm, Argon2, Params, PasswordVerifier as Argon2PasswordVerifier, Version};
@@ -24,11 +24,13 @@ use oxidebbs_core::message::{
 };
 use oxidebbs_core::user::{User, UserStatus};
 use oxidebbs_db::{
-    AuditEventRecord, MessageAreaRecord, MessageRecord, OxideDb, SessionRecord, UserInsertError,
-    UserRecord, clear_auth_attempt, end_session, find_user_by_alias_ci, insert_audit_event,
-    insert_message, insert_message_area, insert_session, insert_user_if_alias_available,
-    is_auth_scope_locked, list_audit_events, list_auth_attempts, list_door_definitions,
-    list_door_runs, list_message_areas, list_messages, list_recent_sessions,
+    AuditEventRecord, FileAreaRecord, FileEntryRecord, FileTransferRecord, MessageAreaRecord,
+    MessageRecord, OxideDb, SessionRecord, UserInsertError, UserRecord, clear_auth_attempt,
+    end_session, find_file_entry_by_storage_name, find_user_by_alias_ci,
+    increment_file_entry_download_count, insert_audit_event, insert_file_entry,
+    insert_file_transfer, insert_message, insert_message_area, insert_session,
+    insert_user_if_alias_available, is_auth_scope_locked, list_audit_events, list_auth_attempts,
+    list_door_definitions, list_door_runs, list_message_areas, list_messages, list_recent_sessions,
     list_user_aliases_by_ids, list_users, list_visible_messages_in_area, normalize_alias,
     record_auth_failure, update_session_user, update_user_login,
 };
@@ -36,12 +38,18 @@ use oxidebbs_telnet::telnet::{
     DO, IAC, SB, SE, TELOPT_ECHO, TELOPT_NAWS, TELOPT_SUPPRESS_GO_AHEAD, TELOPT_TERMINAL_TYPE,
     TELOPT_TTYPE_SEND, TelnetCommand, TelnetEvent, TelnetParser, WILL,
 };
-use oxidebbs_telnet::{TcpTransport, Transport, TransportError};
+use oxidebbs_telnet::{
+    SerialFlowControl, SerialParity, SerialPortConfig, SerialTransport, TcpTransport, Transport,
+    TransportError,
+};
 use oxidebbs_term::{
     LoadedScreen, ScreenAsset as TermScreenAsset, TerminalCapabilities, TerminalProfile,
     encode_cp437,
 };
 use oxidebbs_transfer::adapter::TransportAdapter;
+use oxidebbs_transfer::{
+    TransferError, TransferProtocol, sanitize_filename, validate_path_within_base,
+};
 
 use crate::config::{Argon2Config, AuthConfig, OxideConfig};
 use crate::control::{
@@ -85,20 +93,33 @@ const TERMINAL_CAPABILITY_NEGOTIATION_TIMEOUT: Duration = Duration::from_millis(
 const STALE_NODE_SWEEP_INTERVAL: Duration = Duration::from_secs(30);
 
 fn server_start_audit_details(config: &OxideConfig) -> String {
-    match (config.telnet.enabled, config.admin_web.enabled) {
-        (true, true) => format!(
+    let binkp_listener = config
+        .network
+        .binkp_listener
+        .as_ref()
+        .filter(|listener| config.network.enabled && listener.enabled);
+    match (
+        config.telnet.enabled,
+        config.admin_web.enabled,
+        binkp_listener,
+    ) {
+        (true, true, _) => format!(
             "serving {} on {} with {} node(s); admin web status on {}",
             config.board.name, config.telnet.bind, config.nodes.count, config.admin_web.bind
         ),
-        (true, false) => format!(
+        (true, false, _) => format!(
             "serving {} on {} with {} node(s)",
             config.board.name, config.telnet.bind, config.nodes.count
         ),
-        (false, true) => format!(
+        (false, true, _) => format!(
             "serving {} admin web status on {} with telnet disabled",
             config.board.name, config.admin_web.bind
         ),
-        (false, false) => format!("{} service disabled", config.board.name),
+        (false, false, Some(listener)) => format!(
+            "serving {} BinkP listener on {} with telnet disabled",
+            config.board.name, listener.bind
+        ),
+        (false, false, None) => format!("{} service disabled", config.board.name),
     }
 }
 
@@ -123,8 +144,19 @@ pub(crate) async fn run_until_shutdown<S>(
 where
     S: Future<Output = ServeResult<()>> + Send,
 {
-    if !config.telnet.enabled && !config.admin_web.enabled {
-        info!(bind = %config.telnet.bind, "telnet and admin web disabled; service not started");
+    let binkp_listener_enabled = config
+        .network
+        .binkp_listener
+        .as_ref()
+        .is_some_and(|listener| config.network.enabled && listener.enabled);
+    let serial_enabled = config.serial.enabled && !config.serial.devices.is_empty();
+
+    if !config.telnet.enabled
+        && !config.admin_web.enabled
+        && !binkp_listener_enabled
+        && !serial_enabled
+    {
+        info!(bind = %config.telnet.bind, "caller, admin web, and BinkP listeners disabled; service not started");
         return Ok(());
     }
 
@@ -240,6 +272,19 @@ where
         None
     };
 
+    let serial_handles = if serial_enabled {
+        start_serial_callers(
+            Arc::clone(&shared_config),
+            Arc::clone(&db),
+            Arc::clone(&login_menu),
+            Arc::clone(&main_menu),
+            Arc::clone(&menus),
+            Arc::clone(&runtime),
+        )?
+    } else {
+        Vec::new()
+    };
+
     insert_required_startup_audit_event(
         db.as_ref(),
         "server_start",
@@ -266,7 +311,7 @@ where
                     };
                     let peer = CallerPeer {
                         address: peer_addr.to_string(),
-                        ip: peer_addr.ip().to_string(),
+                        ip: Some(peer_addr.ip().to_string()),
                         port: i64::from(peer_addr.port()),
                     };
 
@@ -274,7 +319,7 @@ where
                         info!(
                             node = %allocation.node_number,
                             remote = %peer.address,
-                            remote_ip = %peer.ip,
+                            remote_ip = %peer.ip.as_deref().unwrap_or("-"),
                             remote_port = peer.port,
                             "caller connection accepted"
                         );
@@ -303,7 +348,7 @@ where
                     } else {
                         warn!(
                             remote = %peer.address,
-                            remote_ip = %peer.ip,
+                            remote_ip = %peer.ip.as_deref().unwrap_or("-"),
                             remote_port = peer.port,
                             "caller rejected because no node is available"
                         );
@@ -323,7 +368,7 @@ where
             }
         }
     } else {
-        info!("telnet disabled; waiting for shutdown with admin web status listener");
+        info!("telnet disabled; waiting for shutdown with enabled background listeners");
         if let Err(error) = (&mut shutdown).await {
             accept_error = Some(error);
         }
@@ -374,6 +419,9 @@ where
     if let Some(handle) = binkp_listener_handle {
         handle.abort();
     }
+    for handle in serial_handles {
+        handle.abort();
+    }
 
     emit_audit_event_with_runtime(
         db.as_ref(),
@@ -401,6 +449,98 @@ async fn reject_connection(mut stream: TcpStream) -> ServeResult<()> {
     Ok(())
 }
 
+fn start_serial_callers(
+    config: Arc<OxideConfig>,
+    db: Arc<OxideDb>,
+    login_menu: Arc<Menu>,
+    main_menu: Arc<Menu>,
+    menus: Arc<HashMap<String, Arc<Menu>>>,
+    runtime: Arc<ServerRuntime>,
+) -> ServeResult<Vec<tokio::task::JoinHandle<()>>> {
+    let mut handles = Vec::new();
+    for device in &config.serial.devices {
+        let serial_config = serial_port_config_from_device(device)?;
+        let transport = SerialTransport::open(serial_config)
+            .map_err(|error| ServeError::Runtime(error.to_string()))?;
+        let Some(allocation) = runtime.try_allocate_node() else {
+            warn!(
+                device = %device.name,
+                path = %device.path,
+                "serial caller device could not start because no node is available"
+            );
+            continue;
+        };
+        let peer = CallerPeer {
+            address: format!("serial:{}", device.name),
+            ip: None,
+            port: 0,
+        };
+        let resources = CallerResources {
+            db: Arc::clone(&db),
+            config: Arc::clone(&config),
+            login_menu: Arc::clone(&login_menu),
+            main_menu: Arc::clone(&main_menu),
+            menus: Arc::clone(&menus),
+            runtime: Arc::clone(&runtime),
+        };
+        info!(
+            node = %allocation.node_number,
+            device = %device.name,
+            path = %device.path,
+            "serial caller device opened"
+        );
+        handles.push(tokio::spawn(async move {
+            if let Err(error) =
+                handle_caller_transport(allocation, transport, "serial", false, peer, resources)
+                    .await
+            {
+                warn!("serial caller session ended with error: {error}");
+            }
+        }));
+    }
+    Ok(handles)
+}
+
+fn serial_port_config_from_device(
+    device: &crate::config::SerialDeviceConfig,
+) -> ServeResult<SerialPortConfig> {
+    Ok(SerialPortConfig {
+        path: device.path.clone(),
+        baud_rate: device.baud_rate,
+        data_bits: device.data_bits,
+        parity: serial_parity_from_config(&device.parity)?,
+        stop_bits: device.stop_bits,
+        flow_control: serial_flow_control_from_config(&device.flow_control)?,
+        init_strings: device.init_strings.clone(),
+        answer_string: device.answer_string.clone(),
+        require_carrier_detect: device.require_carrier_detect,
+        drop_dtr_on_hangup: device.drop_dtr_on_hangup,
+        read_timeout_ms: device.read_timeout_ms,
+    })
+}
+
+fn serial_flow_control_from_config(value: &str) -> ServeResult<SerialFlowControl> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "none" => Ok(SerialFlowControl::None),
+        "rtscts" | "rts_cts" | "hardware" => Ok(SerialFlowControl::RtsCts),
+        "xonxoff" | "xon_xoff" | "software" => Ok(SerialFlowControl::XonXoff),
+        other => Err(ServeError::Config(format!(
+            "serial flow_control must be one of none, rtscts, or xonxoff, got {other:?}"
+        ))),
+    }
+}
+
+fn serial_parity_from_config(value: &str) -> ServeResult<SerialParity> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "none" => Ok(SerialParity::None),
+        "odd" => Ok(SerialParity::Odd),
+        "even" => Ok(SerialParity::Even),
+        other => Err(ServeError::Config(format!(
+            "serial parity must be one of none, odd, or even, got {other:?}"
+        ))),
+    }
+}
+
 #[cfg(unix)]
 fn start_stale_node_sweeper(
     runtime: Arc<ServerRuntime>,
@@ -421,6 +561,7 @@ fn start_stale_node_sweeper(
     })
 }
 
+#[derive(Clone)]
 struct CallerResources {
     db: Arc<OxideDb>,
     config: Arc<OxideConfig>,
@@ -437,13 +578,14 @@ async fn handle_caller(
     resources: CallerResources,
 ) -> ServeResult<()> {
     let transport = TcpTransport::new(stream);
-    handle_caller_transport(allocation, transport, "telnet", peer, resources).await
+    handle_caller_transport(allocation, transport, "telnet", true, peer, resources).await
 }
 
 async fn handle_caller_transport<T: Transport>(
     allocation: NodeAllocation,
     mut transport: T,
     transport_name: &'static str,
+    telnet_protocol: bool,
     peer: CallerPeer,
     resources: CallerResources,
 ) -> ServeResult<()> {
@@ -459,7 +601,13 @@ async fn handle_caller_transport<T: Transport>(
     let node_number = i64::from(node_number_u16);
     let session_id = generated_uuid(&db)?;
     let connected_at = current_timestamp(&db)?;
-    let mut input = InputSession::default();
+    let remote_ip_for_log = peer.ip.as_deref().unwrap_or("-");
+    let auth_remote_scope = peer.ip.as_deref().unwrap_or(&peer.address);
+    let mut input = if telnet_protocol {
+        InputSession::default()
+    } else {
+        InputSession::raw()
+    };
     let idle_timeout = Duration::from_secs(config.telnet.idle_timeout_seconds);
     let mut authenticated_user: Option<User> = None;
 
@@ -471,8 +619,12 @@ async fn handle_caller_transport<T: Transport>(
             user_id: None,
             transport: transport_name.to_string(),
             remote_address: peer.address.clone(),
-            remote_ip: Some(peer.ip.clone()),
-            remote_port: Some(peer.port),
+            remote_ip: peer.ip.clone(),
+            remote_port: if telnet_protocol {
+                Some(peer.port)
+            } else {
+                None
+            },
             started_at: connected_at.clone(),
             ended_at: None,
             disconnect_reason: None,
@@ -501,7 +653,7 @@ async fn handle_caller_transport<T: Transport>(
         node = %node_number,
         session_id = %session_id,
         remote = %peer.address,
-        remote_ip = %peer.ip,
+        remote_ip = %remote_ip_for_log,
         remote_port = peer.port,
         "caller session opened"
     );
@@ -516,21 +668,26 @@ async fn handle_caller_transport<T: Transport>(
         Some(runtime.as_ref()),
     );
 
-    let mut capabilities = negotiate_terminal_capabilities(
-        &mut transport,
-        &mut input,
-        TERMINAL_CAPABILITY_NEGOTIATION_TIMEOUT,
-        config
-            .terminal
-            .default_capabilities()
-            .map_err(|error| ServeError::Config(error.to_string()))?,
-    )
-    .await?;
+    let fallback_capabilities = config
+        .terminal
+        .default_capabilities()
+        .map_err(|error| ServeError::Config(error.to_string()))?;
+    let mut capabilities = if telnet_protocol {
+        negotiate_terminal_capabilities(
+            &mut transport,
+            &mut input,
+            TERMINAL_CAPABILITY_NEGOTIATION_TIMEOUT,
+            fallback_capabilities,
+        )
+        .await?
+    } else {
+        fallback_capabilities
+    };
     debug!(
         node = %node_number,
         session_id = %session_id,
         remote = %peer.address,
-        remote_ip = %peer.ip,
+        remote_ip = %remote_ip_for_log,
         remote_port = peer.port,
         supports_ansi = capabilities.supports_ansi,
         terminal_width = capabilities.width,
@@ -641,7 +798,7 @@ async fn handle_caller_transport<T: Transport>(
                                 config: &config,
                                 runtime: runtime.as_ref(),
                                 node_number,
-                                remote_ip: &peer.ip,
+                                remote_ip: auth_remote_scope,
                                 session_id: &session_id,
                                 authenticated_user: &mut authenticated_user,
                                 idle_timeout,
@@ -688,7 +845,7 @@ async fn handle_caller_transport<T: Transport>(
                                 config: &config,
                                 runtime: runtime.as_ref(),
                                 node_number,
-                                remote_ip: &peer.ip,
+                                remote_ip: auth_remote_scope,
                                 session_id: &session_id,
                                 authenticated_user: &mut authenticated_user,
                                 idle_timeout,
@@ -832,6 +989,7 @@ async fn handle_caller_transport<T: Transport>(
                                 &mut input,
                                 db.as_ref(),
                                 config.as_ref(),
+                                telnet_protocol,
                                 idle_timeout,
                                 &mut disconnect_reason,
                                 node_number_u16,
@@ -924,7 +1082,7 @@ async fn handle_caller_transport<T: Transport>(
         warn!("failed to flush pending negotiation replies: {error}");
     }
     if let Err(error) = transport.hangup().await {
-        warn!("failed to hang up telnet transport: {error}");
+        warn!("failed to hang up caller transport: {error}");
     }
 
     let ended_at = current_timestamp(&db)?;
@@ -2164,7 +2322,8 @@ async fn run_files_flow<T: Transport>(
     transport: &mut T,
     input: &mut InputSession,
     db: &OxideDb,
-    _config: &OxideConfig,
+    config: &OxideConfig,
+    telnet_protocol: bool,
     idle_timeout: Duration,
     disconnect_reason: &mut String,
     node_number: u16,
@@ -2173,6 +2332,11 @@ async fn run_files_flow<T: Transport>(
         send_text(transport, "You must be signed in to use file areas.\r\n").await?;
         return Ok(MenuFlowResult::Continue);
     };
+
+    if !config.file_transfers.enabled {
+        send_text(transport, "File transfers are disabled.\r\n").await?;
+        return Ok(MenuFlowResult::Continue);
+    }
 
     let file_areas = oxidebbs_db::list_file_areas(db.db())?
         .into_iter()
@@ -2247,134 +2411,708 @@ async fn run_files_flow<T: Transport>(
             continue;
         }
 
-        let files = oxidebbs_db::list_file_entries(db.db())?
-            .into_iter()
-            .filter(|entry| entry.approved && entry.area_id == area.id)
-            .collect::<Vec<_>>();
+        loop {
+            let files = approved_files_for_area(db, area)?;
+            send_text(transport, &format!("\r\nFiles in {}:\r\n", area.name)).await?;
+            if files.is_empty() {
+                send_text(transport, "No approved files in this area.\r\n").await?;
+            } else {
+                for (index, file) in files.iter().enumerate() {
+                    send_text(
+                        transport,
+                        &format!(
+                            "[{}] {} ({} bytes)\r\n",
+                            index + 1,
+                            file.display_name,
+                            file.size_bytes
+                        ),
+                    )
+                    .await?;
+                }
+            }
 
-        if files.is_empty() {
-            send_text(transport, "No files in this area.\r\n").await?;
-            continue;
-        }
-
-        send_text(transport, &format!("\r\nFiles in {}:\r\n", area.name)).await?;
-        for (index, file) in files.iter().enumerate() {
-            send_text(
+            let action = match prompt_for_line(
                 transport,
-                &format!(
-                    "[{}] {} ({} bytes)\r\n",
-                    index + 1,
-                    file.display_name,
-                    file.size_bytes
-                ),
+                input,
+                idle_timeout,
+                true,
+                false,
+                "Files: D)ownload U)pload R)eturn: ",
             )
-            .await?;
-        }
+            .await?
+            {
+                PromptLineResult::Value(value) => value.trim().to_ascii_uppercase(),
+                PromptLineResult::Disconnected => {
+                    *disconnect_reason = "caller_dropped_during_files".to_string();
+                    return Ok(MenuFlowResult::Exit);
+                }
+                PromptLineResult::IdleTimeout => {
+                    *disconnect_reason = "idle_timeout".to_string();
+                    send_text(transport, "Idle timeout. Goodbye.\r\n").await?;
+                    return Ok(MenuFlowResult::Exit);
+                }
+                PromptLineResult::Rejected => {
+                    send_text(transport, CP437_INPUT_REJECT_LINE).await?;
+                    continue;
+                }
+            };
 
-        let file_selection = match prompt_for_line(
+            if action.is_empty() || action == "R" {
+                break;
+            }
+
+            match action.as_str() {
+                "D" => {
+                    if files.is_empty() {
+                        send_text(transport, "No files are available for download.\r\n").await?;
+                        continue;
+                    }
+                    run_file_download(
+                        user,
+                        transport,
+                        input,
+                        db,
+                        area,
+                        &files,
+                        telnet_protocol,
+                        idle_timeout,
+                        disconnect_reason,
+                        node_number,
+                    )
+                    .await?;
+                }
+                "U" => {
+                    run_file_upload(
+                        user,
+                        transport,
+                        input,
+                        db,
+                        config,
+                        area,
+                        telnet_protocol,
+                        idle_timeout,
+                        disconnect_reason,
+                        node_number,
+                    )
+                    .await?;
+                }
+                _ => {
+                    send_text(transport, "Unknown file command.\r\n").await?;
+                }
+            }
+        }
+    }
+}
+
+fn approved_files_for_area(
+    db: &OxideDb,
+    area: &FileAreaRecord,
+) -> ServeResult<Vec<FileEntryRecord>> {
+    Ok(oxidebbs_db::list_file_entries(db.db())?
+        .into_iter()
+        .filter(|entry| entry.approved && entry.area_id == area.id)
+        .collect::<Vec<_>>())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_file_download<T: Transport>(
+    user: &User,
+    transport: &mut T,
+    input: &mut InputSession,
+    db: &OxideDb,
+    area: &FileAreaRecord,
+    files: &[FileEntryRecord],
+    telnet_protocol: bool,
+    idle_timeout: Duration,
+    disconnect_reason: &mut String,
+    node_number: u16,
+) -> ServeResult<()> {
+    if user.security_level < area.download_security_level as i32 {
+        send_text(
+            transport,
+            "Access denied. Security level too low for download.\r\n",
+        )
+        .await?;
+        return Ok(());
+    }
+
+    let file_selection = match prompt_for_line(
+        transport,
+        input,
+        idle_timeout,
+        true,
+        false,
+        "File number (blank to return): ",
+    )
+    .await?
+    {
+        PromptLineResult::Value(value) => value,
+        PromptLineResult::Disconnected => {
+            *disconnect_reason = "caller_dropped_during_files".to_string();
+            return Ok(());
+        }
+        PromptLineResult::IdleTimeout => {
+            *disconnect_reason = "idle_timeout".to_string();
+            send_text(transport, "Idle timeout. Goodbye.\r\n").await?;
+            return Ok(());
+        }
+        PromptLineResult::Rejected => {
+            send_text(transport, CP437_INPUT_REJECT_LINE).await?;
+            return Ok(());
+        }
+    };
+    let file_trimmed = file_selection.trim();
+    if file_trimmed.is_empty() {
+        return Ok(());
+    }
+    let file_index = match file_trimmed.parse::<usize>() {
+        Ok(n) if n >= 1 && n <= files.len() => n - 1,
+        _ => {
+            send_text(transport, "Invalid selection.\r\n").await?;
+            return Ok(());
+        }
+    };
+    let protocol = match prompt_transfer_protocol(transport, input, idle_timeout).await? {
+        Some(protocol) => protocol,
+        None => return Ok(()),
+    };
+
+    let file = &files[file_index];
+    let file_path = file_entry_path(area, file);
+    if !file_path.exists() {
+        send_text(transport, "File not found on disk.\r\n").await?;
+        return Ok(());
+    }
+    let file_bytes = match std::fs::read(&file_path) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            send_text(transport, "Cannot read file.\r\n").await?;
+            return Ok(());
+        }
+    };
+
+    send_text(
+        transport,
+        &format!(
+            "\r\nSending {} ({} bytes) via {}...\r\n",
+            file.display_name,
+            file.size_bytes,
+            transfer_protocol_label(protocol)
+        ),
+    )
+    .await?;
+
+    let started_at = current_timestamp(db)?;
+    let started = Instant::now();
+    let transfer_result = {
+        let mut adapter = if telnet_protocol {
+            TransportAdapter::new_telnet(&mut *transport)
+        } else {
+            TransportAdapter::new_raw(&mut *transport)
+        };
+        match protocol {
+            TransferProtocol::Zmodem => oxidebbs_transfer::zmodem::send_zmodem_file(
+                &mut adapter,
+                &file.display_name,
+                &file_bytes,
+            )
+            .await
+            .map(|stats| stats.retries),
+            TransferProtocol::XmodemCrc => {
+                oxidebbs_transfer::xmodem::send_xmodem_crc(&mut adapter, &file_bytes)
+                    .await
+                    .map(|()| 0)
+            }
+        }
+    };
+    let ended_at = current_timestamp(db)?;
+    let duration_ms = elapsed_millis(started);
+
+    match transfer_result {
+        Ok(retry_count) => {
+            increment_file_entry_download_count(db.db(), &file.id)?;
+            record_file_transfer(
+                db,
+                FileTransferInput {
+                    node_number,
+                    user_id: &user.id,
+                    area_id: Some(&area.id),
+                    file_entry_id: Some(&file.id),
+                    direction: "download",
+                    protocol,
+                    requested_name: Some(&file.display_name),
+                    storage_name: Some(&file.storage_name),
+                    declared_size_bytes: Some(file.size_bytes),
+                    transferred_payload_bytes: file_bytes.len() as i64,
+                    committed_size_bytes: Some(file_bytes.len() as i64),
+                    started_at,
+                    ended_at: Some(ended_at),
+                    duration_ms: Some(duration_ms),
+                    outcome: "success",
+                    error: None,
+                    retry_count: i64::from(retry_count),
+                },
+            )?;
+            send_text(transport, "\r\nTransfer complete.\r\n").await?;
+            debug!(node = %node_number, user_id = %user.id, file_id = %file.id, "caller downloaded file");
+        }
+        Err(error) => {
+            record_file_transfer(
+                db,
+                FileTransferInput {
+                    node_number,
+                    user_id: &user.id,
+                    area_id: Some(&area.id),
+                    file_entry_id: Some(&file.id),
+                    direction: "download",
+                    protocol,
+                    requested_name: Some(&file.display_name),
+                    storage_name: Some(&file.storage_name),
+                    declared_size_bytes: Some(file.size_bytes),
+                    transferred_payload_bytes: 0,
+                    committed_size_bytes: None,
+                    started_at,
+                    ended_at: Some(ended_at),
+                    duration_ms: Some(duration_ms),
+                    outcome: transfer_error_outcome(&error),
+                    error: Some(&error),
+                    retry_count: 0,
+                },
+            )?;
+            send_text(transport, &format!("\r\nTransfer failed: {error}\r\n")).await?;
+            debug!(node = %node_number, user_id = %user.id, file_id = %file.id, %error, "file transfer failed");
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_file_upload<T: Transport>(
+    user: &User,
+    transport: &mut T,
+    input: &mut InputSession,
+    db: &OxideDb,
+    config: &OxideConfig,
+    area: &FileAreaRecord,
+    telnet_protocol: bool,
+    idle_timeout: Duration,
+    disconnect_reason: &mut String,
+    node_number: u16,
+) -> ServeResult<()> {
+    if user.security_level < area.upload_security_level as i32 {
+        send_text(
+            transport,
+            "Access denied. Security level too low for upload.\r\n",
+        )
+        .await?;
+        return Ok(());
+    }
+    let protocol = match prompt_transfer_protocol(transport, input, idle_timeout).await? {
+        Some(protocol) => protocol,
+        None => return Ok(()),
+    };
+    let upload_limit = upload_limit_bytes(area, config);
+
+    let mut xmodem_name = None;
+    let mut declared_size = None;
+    if protocol == TransferProtocol::XmodemCrc {
+        let filename = prompt_required_value(
+            transport,
+            input,
+            idle_timeout,
+            "Upload filename: ",
+            disconnect_reason,
+        )
+        .await?;
+        let Some(filename) = filename else {
+            return Ok(());
+        };
+        let safe_name = match sanitize_filename(filename.trim()) {
+            Ok(name) => name,
+            Err(_) => {
+                send_text(transport, "Invalid upload filename.\r\n").await?;
+                return Ok(());
+            }
+        };
+        let declared = prompt_for_line(
             transport,
             input,
             idle_timeout,
             true,
             false,
-            "File number (blank to return): ",
-        )
-        .await?
-        {
-            PromptLineResult::Value(value) => value,
-            PromptLineResult::Disconnected => {
-                *disconnect_reason = "caller_dropped_during_files".to_string();
-                return Ok(MenuFlowResult::Exit);
-            }
-            PromptLineResult::IdleTimeout => {
-                *disconnect_reason = "idle_timeout".to_string();
-                send_text(transport, "Idle timeout. Goodbye.\r\n").await?;
-                return Ok(MenuFlowResult::Exit);
-            }
-            PromptLineResult::Rejected => {
-                send_text(transport, CP437_INPUT_REJECT_LINE).await?;
-                continue;
-            }
-        };
-
-        let file_trimmed = file_selection.trim();
-        if file_trimmed.is_empty() {
-            continue;
-        }
-
-        let file_index = match file_trimmed.parse::<usize>() {
-            Ok(n) if n >= 1 && n <= files.len() => n - 1,
-            _ => {
-                send_text(transport, "Invalid selection.\r\n").await?;
-                continue;
-            }
-        };
-
-        let file = &files[file_index];
-        if user.security_level < area.download_security_level as i32 {
-            send_text(
-                transport,
-                "Access denied. Security level too low for download.\r\n",
-            )
-            .await?;
-            continue;
-        }
-
-        let file_path = Path::new(&area.root_path)
-            .join("files")
-            .join(&file.id)
-            .join(&file.storage_name);
-
-        if !file_path.exists() {
-            send_text(transport, "File not found on disk.\r\n").await?;
-            continue;
-        }
-
-        let file_bytes = match std::fs::read(&file_path) {
-            Ok(bytes) => bytes,
-            Err(_) => {
-                send_text(transport, "Cannot read file.\r\n").await?;
-                continue;
-            }
-        };
-
-        send_text(
-            transport,
-            &format!(
-                "\r\nSending {} ({} bytes) via XMODEM-CRC...\r\n",
-                file.display_name, file.size_bytes
-            ),
+            "Declared size bytes (blank if unknown): ",
         )
         .await?;
-
-        let transfer_result = oxidebbs_transfer::xmodem::send_xmodem_crc(
-            &mut TransportAdapter::new(&mut *transport),
-            &file_bytes,
-        )
-        .await;
-
-        match transfer_result {
-            Ok(()) => {
-                send_text(transport, "\r\nTransfer complete.\r\n").await?;
-                debug!(
-                    node = %node_number,
-                    user_id = %user.id,
-                    file_id = %file.id,
-                    "caller downloaded file"
-                );
-            }
-            Err(error) => {
-                send_text(transport, &format!("\r\nTransfer failed: {error}\r\n")).await?;
-                debug!(
-                    node = %node_number,
-                    user_id = %user.id,
-                    file_id = %file.id,
-                    %error,
-                    "file transfer failed"
-                );
+        if let PromptLineResult::Value(value) = declared {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                match trimmed.parse::<u64>() {
+                    Ok(size) => declared_size = Some(size),
+                    Err(_) => {
+                        send_text(transport, "Invalid declared size.\r\n").await?;
+                        return Ok(());
+                    }
+                }
             }
         }
+        xmodem_name = Some(safe_name);
     }
+
+    send_text(
+        transport,
+        &format!(
+            "\r\nReady to receive via {}...\r\n",
+            transfer_protocol_label(protocol)
+        ),
+    )
+    .await?;
+
+    let started_at = current_timestamp(db)?;
+    let started = Instant::now();
+    let transfer_result = {
+        let mut adapter = if telnet_protocol {
+            TransportAdapter::new_telnet(&mut *transport)
+        } else {
+            TransportAdapter::new_raw(&mut *transport)
+        };
+        match protocol {
+            TransferProtocol::Zmodem => {
+                oxidebbs_transfer::zmodem::receive_zmodem_file(&mut adapter, upload_limit)
+                    .await
+                    .map(|file| (file.filename, file.payload, None, 0))
+            }
+            TransferProtocol::XmodemCrc => {
+                let result = if let Some(size) = declared_size {
+                    oxidebbs_transfer::xmodem::receive_xmodem_crc_with_size(
+                        &mut adapter,
+                        size as usize,
+                    )
+                    .await
+                } else {
+                    oxidebbs_transfer::xmodem::receive_xmodem_crc(&mut adapter).await
+                };
+                result.map(|payload| {
+                    (
+                        xmodem_name
+                            .clone()
+                            .unwrap_or_else(|| "upload.bin".to_string()),
+                        payload,
+                        declared_size,
+                        0,
+                    )
+                })
+            }
+        }
+    };
+    let ended_at = current_timestamp(db)?;
+    let duration_ms = elapsed_millis(started);
+
+    match transfer_result {
+        Ok((requested_name, payload, declared_size, retry_count)) => {
+            if let Some(limit) = upload_limit
+                && payload.len() as u64 > limit
+            {
+                send_text(transport, "Upload exceeds configured size limit.\r\n").await?;
+                record_file_transfer(
+                    db,
+                    FileTransferInput {
+                        node_number,
+                        user_id: &user.id,
+                        area_id: Some(&area.id),
+                        file_entry_id: None,
+                        direction: "upload",
+                        protocol,
+                        requested_name: Some(&requested_name),
+                        storage_name: None,
+                        declared_size_bytes: declared_size.map(|size| size as i64),
+                        transferred_payload_bytes: payload.len() as i64,
+                        committed_size_bytes: None,
+                        started_at,
+                        ended_at: Some(ended_at),
+                        duration_ms: Some(duration_ms),
+                        outcome: "failed",
+                        error: Some(&TransferError::QuotaDenied),
+                        retry_count,
+                    },
+                )?;
+                return Ok(());
+            }
+            let safe_name = match sanitize_filename(&requested_name) {
+                Ok(name) => name,
+                Err(_) => {
+                    send_text(transport, "Invalid upload filename.\r\n").await?;
+                    return Ok(());
+                }
+            };
+            let entry_seed = generated_uuid(db)?;
+            let storage_name = storage_name_for_upload(&safe_name, &entry_seed);
+            let root = PathBuf::from(&area.root_path);
+            std::fs::create_dir_all(&root)?;
+            let destination = root.join(&storage_name);
+            validate_path_within_base(&root, &destination)
+                .map_err(|error| ServeError::Runtime(error.to_string()))?;
+            std::fs::write(&destination, &payload)?;
+
+            let size_bytes = i64::try_from(payload.len())
+                .map_err(|_| ServeError::Runtime("uploaded file is too large".to_string()))?;
+            let crc = oxidebbs_transfer::zmodem::crc32_iso_hdlc(&payload);
+            let entry = FileEntryRecord {
+                id: entry_seed,
+                area_id: area.id.clone(),
+                storage_name: storage_name.clone(),
+                display_name: safe_name.clone(),
+                original_name: Some(requested_name.clone()),
+                size_bytes,
+                content_crc32: Some(format!("{crc:08X}")),
+                description: "Caller upload pending sysop review".to_string(),
+                uploader_user_id: Some(user.id.clone()),
+                download_count: 0,
+                approved: false,
+                created_at: current_timestamp(db)?,
+                updated_at: current_timestamp(db)?,
+            };
+            insert_file_entry(db.db(), &entry)?;
+            let stored_entry =
+                find_file_entry_by_storage_name(db.db(), &area.id, &storage_name)?.unwrap_or(entry);
+            record_file_transfer(
+                db,
+                FileTransferInput {
+                    node_number,
+                    user_id: &user.id,
+                    area_id: Some(&area.id),
+                    file_entry_id: Some(&stored_entry.id),
+                    direction: "upload",
+                    protocol,
+                    requested_name: Some(&requested_name),
+                    storage_name: Some(&storage_name),
+                    declared_size_bytes: declared_size.map(|size| size as i64),
+                    transferred_payload_bytes: size_bytes,
+                    committed_size_bytes: Some(size_bytes),
+                    started_at,
+                    ended_at: Some(ended_at),
+                    duration_ms: Some(duration_ms),
+                    outcome: "success",
+                    error: None,
+                    retry_count,
+                },
+            )?;
+            send_text(
+                transport,
+                "\r\nUpload complete. File is pending sysop review.\r\n",
+            )
+            .await?;
+        }
+        Err(error) => {
+            record_file_transfer(
+                db,
+                FileTransferInput {
+                    node_number,
+                    user_id: &user.id,
+                    area_id: Some(&area.id),
+                    file_entry_id: None,
+                    direction: "upload",
+                    protocol,
+                    requested_name: xmodem_name.as_deref(),
+                    storage_name: None,
+                    declared_size_bytes: declared_size.map(|size| size as i64),
+                    transferred_payload_bytes: 0,
+                    committed_size_bytes: None,
+                    started_at,
+                    ended_at: Some(ended_at),
+                    duration_ms: Some(duration_ms),
+                    outcome: transfer_error_outcome(&error),
+                    error: Some(&error),
+                    retry_count: 0,
+                },
+            )?;
+            send_text(transport, &format!("\r\nUpload failed: {error}\r\n")).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn prompt_transfer_protocol<T: Transport>(
+    transport: &mut T,
+    input: &mut InputSession,
+    idle_timeout: Duration,
+) -> ServeResult<Option<TransferProtocol>> {
+    let protocol = match prompt_for_line(
+        transport,
+        input,
+        idle_timeout,
+        true,
+        false,
+        "Protocol: Z) ZMODEM  X) XMODEM-CRC  blank to return: ",
+    )
+    .await?
+    {
+        PromptLineResult::Value(value) => value.trim().to_ascii_uppercase(),
+        PromptLineResult::Disconnected | PromptLineResult::IdleTimeout => return Ok(None),
+        PromptLineResult::Rejected => {
+            send_text(transport, CP437_INPUT_REJECT_LINE).await?;
+            return Ok(None);
+        }
+    };
+
+    match protocol.as_str() {
+        "" => Ok(None),
+        "Z" => Ok(Some(TransferProtocol::Zmodem)),
+        "X" => Ok(Some(TransferProtocol::XmodemCrc)),
+        _ => {
+            send_text(transport, "Unsupported transfer protocol.\r\n").await?;
+            Ok(None)
+        }
+    }
+}
+
+async fn prompt_required_value<T: Transport>(
+    transport: &mut T,
+    input: &mut InputSession,
+    idle_timeout: Duration,
+    prompt: &str,
+    disconnect_reason: &mut String,
+) -> ServeResult<Option<String>> {
+    match prompt_for_line(transport, input, idle_timeout, false, false, prompt).await? {
+        PromptLineResult::Value(value) => Ok(Some(value)),
+        PromptLineResult::Disconnected => {
+            *disconnect_reason = "caller_dropped_during_files".to_string();
+            Ok(None)
+        }
+        PromptLineResult::IdleTimeout => {
+            *disconnect_reason = "idle_timeout".to_string();
+            send_text(transport, "Idle timeout. Goodbye.\r\n").await?;
+            Ok(None)
+        }
+        PromptLineResult::Rejected => {
+            send_text(transport, CP437_INPUT_REJECT_LINE).await?;
+            Ok(None)
+        }
+    }
+}
+
+fn file_entry_path(area: &FileAreaRecord, file: &FileEntryRecord) -> PathBuf {
+    let root = Path::new(&area.root_path);
+    let current = root.join(&file.storage_name);
+    if current.exists() {
+        current
+    } else {
+        root.join("files").join(&file.id).join(&file.storage_name)
+    }
+}
+
+fn upload_limit_bytes(area: &FileAreaRecord, config: &OxideConfig) -> Option<u64> {
+    let global = u64::try_from(config.file_transfers.max_upload_bytes)
+        .ok()
+        .filter(|value| *value > 0);
+    let area_limit = area
+        .max_upload_bytes
+        .and_then(|value| u64::try_from(value).ok());
+    match (area_limit, global) {
+        (Some(area), Some(global)) => Some(area.min(global)),
+        (Some(area), None) => Some(area),
+        (None, Some(global)) => Some(global),
+        (None, None) => None,
+    }
+}
+
+fn storage_name_for_upload(filename: &str, id: &str) -> String {
+    Path::new(filename)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .filter(|extension| {
+            !extension.is_empty()
+                && extension
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric())
+        })
+        .map_or_else(|| id.to_string(), |extension| format!("{id}.{extension}"))
+}
+
+fn elapsed_millis(started: Instant) -> i64 {
+    i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX)
+}
+
+fn transfer_protocol_label(protocol: TransferProtocol) -> &'static str {
+    match protocol {
+        TransferProtocol::Zmodem => "ZMODEM",
+        TransferProtocol::XmodemCrc => "XMODEM-CRC",
+    }
+}
+
+fn transfer_protocol_db_value(protocol: TransferProtocol) -> &'static str {
+    match protocol {
+        TransferProtocol::Zmodem => "zmodem",
+        TransferProtocol::XmodemCrc => "xmodem_crc",
+    }
+}
+
+fn transfer_error_outcome(error: &TransferError) -> &'static str {
+    match error {
+        TransferError::Canceled => "cancelled",
+        _ => "failed",
+    }
+}
+
+fn transfer_error_code(error: &TransferError) -> &'static str {
+    match error {
+        TransferError::ProtocolError => "protocol_error",
+        TransferError::Timeout => "timeout",
+        TransferError::Transport => "transport",
+        TransferError::IoError(_) => "io_error",
+        TransferError::SecurityDenied => "security_denied",
+        TransferError::QuotaDenied => "quota_denied",
+        TransferError::Canceled => "cancelled",
+        TransferError::Unsupported => "unsupported",
+        TransferError::PathInvalid => "path_invalid",
+    }
+}
+
+struct FileTransferInput<'a> {
+    node_number: u16,
+    user_id: &'a str,
+    area_id: Option<&'a str>,
+    file_entry_id: Option<&'a str>,
+    direction: &'a str,
+    protocol: TransferProtocol,
+    requested_name: Option<&'a str>,
+    storage_name: Option<&'a str>,
+    declared_size_bytes: Option<i64>,
+    transferred_payload_bytes: i64,
+    committed_size_bytes: Option<i64>,
+    started_at: String,
+    ended_at: Option<String>,
+    duration_ms: Option<i64>,
+    outcome: &'a str,
+    error: Option<&'a TransferError>,
+    retry_count: i64,
+}
+
+fn record_file_transfer(db: &OxideDb, input: FileTransferInput<'_>) -> ServeResult<()> {
+    insert_file_transfer(
+        db.db(),
+        &FileTransferRecord {
+            id: String::new(),
+            node_number: i64::from(input.node_number),
+            user_id: input.user_id.to_string(),
+            area_id: input.area_id.map(str::to_string),
+            file_entry_id: input.file_entry_id.map(str::to_string),
+            direction: input.direction.to_string(),
+            protocol: transfer_protocol_db_value(input.protocol).to_string(),
+            requested_name: input.requested_name.map(str::to_string),
+            storage_name: input.storage_name.map(str::to_string),
+            declared_size_bytes: input.declared_size_bytes,
+            transferred_payload_bytes: input.transferred_payload_bytes,
+            committed_size_bytes: input.committed_size_bytes,
+            started_at: input.started_at,
+            ended_at: input.ended_at,
+            duration_ms: input.duration_ms,
+            outcome: input.outcome.to_string(),
+            error_code: input.error.map(transfer_error_code).map(str::to_string),
+            error_message: input.error.map(ToString::to_string),
+            retry_count: input.retry_count,
+        },
+    )
+    .map_err(ServeError::Database)
 }
 
 async fn ensure_default_message_area<T: Transport>(
@@ -3292,6 +4030,10 @@ fn parse_next_event(
     reply: &mut Vec<u8>,
     byte: u8,
 ) -> Option<TelnetEvent> {
+    if input.raw {
+        return Some(TelnetEvent::Data(byte));
+    }
+
     if !reply.is_empty() {
         reply.clear();
     }
@@ -3332,11 +4074,21 @@ struct InputSession {
     parser: TelnetParser,
     pending_inputs: VecDeque<CallerInput>,
     pending_replies: Vec<u8>,
+    raw: bool,
+}
+
+impl InputSession {
+    fn raw() -> Self {
+        Self {
+            raw: true,
+            ..Self::default()
+        }
+    }
 }
 
 struct CallerPeer {
     address: String,
-    ip: String,
+    ip: Option<String>,
     port: i64,
 }
 
@@ -3505,20 +4257,145 @@ async fn wait_for_shutdown_signal() -> ServeResult<()> {
 mod tests {
     use super::*;
     use std::collections::HashSet;
+    use std::future::Future;
     use std::net::SocketAddr;
     use std::path::{Path, PathBuf};
+    use std::pin::Pin;
     use std::time::{Duration as TestDuration, Instant, SystemTime, UNIX_EPOCH};
 
     use oxidebbs_db::insert_user;
     use oxidebbs_telnet::{
-        LoopbackTransport,
+        SerialHandle, SerialLoopback,
         telnet::{
             DO, IAC, SB, SE, TELOPT_ECHO, TELOPT_NAWS, TELOPT_SUPPRESS_GO_AHEAD,
             TELOPT_TERMINAL_TYPE, TELOPT_TTYPE_IS, WILL,
         },
+        transport::{LoopbackHandle, LoopbackTransport},
     };
+    use oxidebbs_transfer::{ByteTransport, TransferError, TransferRead};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::sync::oneshot;
+
+    struct LoopbackClientBytes {
+        handle: LoopbackHandle,
+    }
+
+    struct SerialClientBytes {
+        handle: SerialHandle,
+    }
+
+    impl ByteTransport for LoopbackClientBytes {
+        fn read_byte(
+            &mut self,
+            timeout_secs: u64,
+        ) -> Pin<Box<dyn Future<Output = Result<TransferRead, TransferError>> + Send + '_>>
+        {
+            Box::pin(async move {
+                match timeout(Duration::from_secs(timeout_secs), self.handle.read_byte()).await {
+                    Ok(Some(byte)) => Ok(TransferRead::Byte(byte)),
+                    Ok(None) => Ok(TransferRead::Closed),
+                    Err(_) => Ok(TransferRead::TimedOut),
+                }
+            })
+        }
+
+        fn write_all<'a>(
+            &'a mut self,
+            buf: &'a [u8],
+        ) -> Pin<Box<dyn Future<Output = Result<(), TransferError>> + Send + 'a>> {
+            Box::pin(async move {
+                self.handle
+                    .write_bytes(buf)
+                    .map_err(|_| TransferError::Transport)
+            })
+        }
+
+        fn flush(
+            &mut self,
+        ) -> Pin<Box<dyn Future<Output = Result<(), TransferError>> + Send + '_>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    impl ByteTransport for SerialClientBytes {
+        fn read_byte(
+            &mut self,
+            timeout_secs: u64,
+        ) -> Pin<Box<dyn Future<Output = Result<TransferRead, TransferError>> + Send + '_>>
+        {
+            Box::pin(async move {
+                match timeout(Duration::from_secs(timeout_secs), self.handle.read_byte()).await {
+                    Ok(Some(byte)) => Ok(TransferRead::Byte(byte)),
+                    Ok(None) => Ok(TransferRead::Closed),
+                    Err(_) => Ok(TransferRead::TimedOut),
+                }
+            })
+        }
+
+        fn write_all<'a>(
+            &'a mut self,
+            buf: &'a [u8],
+        ) -> Pin<Box<dyn Future<Output = Result<(), TransferError>> + Send + 'a>> {
+            Box::pin(async move {
+                self.handle
+                    .write_bytes(buf)
+                    .map_err(|_| TransferError::Transport)
+            })
+        }
+
+        fn flush(
+            &mut self,
+        ) -> Pin<Box<dyn Future<Output = Result<(), TransferError>> + Send + '_>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    #[tokio::test]
+    async fn xmodem_crc_transfer_over_serial_loopback_round_trips() {
+        let (serial, handle) = SerialLoopback::new();
+        let server = tokio::spawn(async move {
+            let mut adapter = TransportAdapter::new_raw(serial);
+            oxidebbs_transfer::xmodem::send_xmodem_crc(&mut adapter, b"serial-xmodem")
+                .await
+                .expect("send xmodem over serial");
+        });
+        let client = tokio::spawn(async move {
+            let mut adapter = SerialClientBytes { handle };
+            oxidebbs_transfer::xmodem::receive_xmodem_crc_with_size(&mut adapter, 13)
+                .await
+                .expect("receive xmodem over serial")
+        });
+
+        server.await.expect("server task");
+        let payload = client.await.expect("client task");
+        assert_eq!(payload, b"serial-xmodem");
+    }
+
+    #[tokio::test]
+    async fn zmodem_transfer_over_serial_loopback_round_trips() {
+        let (serial, handle) = SerialLoopback::new();
+        let server = tokio::spawn(async move {
+            let mut adapter = TransportAdapter::new_raw(serial);
+            oxidebbs_transfer::zmodem::send_zmodem_file(
+                &mut adapter,
+                "serial-zmodem.bin",
+                b"serial-zmodem",
+            )
+            .await
+            .expect("send zmodem over serial");
+        });
+        let client = tokio::spawn(async move {
+            let mut adapter = SerialClientBytes { handle };
+            oxidebbs_transfer::zmodem::receive_zmodem_file(&mut adapter, Some(1024))
+                .await
+                .expect("receive zmodem over serial")
+        });
+
+        server.await.expect("server task");
+        let file = client.await.expect("client task");
+        assert_eq!(file.filename, "serial-zmodem.bin");
+        assert_eq!(file.payload, b"serial-zmodem");
+    }
 
     #[test]
     fn normalize_key_uppercases_ascii() {
@@ -4426,6 +5303,214 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn file_flow_zmodem_download_persists_history() {
+        let (base_dir, config, db, user, area) = file_flow_fixture("zmodem-download");
+        let entry = insert_approved_file(&db, &area, b"download\xffpayload");
+        let (mut transport, handle) = LoopbackTransport::new();
+
+        let client_task = tokio::spawn(async move {
+            let mut handle = handle;
+            loopback_read_until(&mut handle, "Area number").await;
+            handle.write_bytes(b"1\r").expect("select file area");
+            loopback_read_until(&mut handle, "Files: D)ownload").await;
+            handle.write_bytes(b"D\r").expect("select download");
+            loopback_read_until(&mut handle, "File number").await;
+            handle.write_bytes(b"1\r").expect("select file");
+            loopback_read_until(&mut handle, "Protocol:").await;
+            handle.write_bytes(b"Z\r").expect("select zmodem");
+            loopback_read_until(&mut handle, "via ZMODEM").await;
+
+            let mut client = LoopbackClientBytes { handle };
+            let received = oxidebbs_transfer::zmodem::receive_zmodem_file(&mut client, Some(4096))
+                .await
+                .expect("receive zmodem download");
+            client.write_all(b"R\r\r").await.expect("leave file menu");
+            received
+        });
+
+        let mut input = InputSession::raw();
+        let mut disconnect_reason = "test".to_string();
+        let flow = timeout(
+            Duration::from_secs(5),
+            run_files_flow(
+                Some(&user),
+                &mut transport,
+                &mut input,
+                &db,
+                &config,
+                false,
+                Duration::from_secs(1),
+                &mut disconnect_reason,
+                1,
+            ),
+        );
+        let (flow_result, client_result) = tokio::join!(flow, client_task);
+        let received = client_task.await.expect("client task");
+        flow_result
+            .expect("file flow timeout")
+            .expect("file flow");
+
+        assert_eq!(received.filename, entry.display_name);
+        assert_eq!(received.payload, b"download\xffpayload");
+        let updated = oxidebbs_db::find_file_entry_by_id(db.db(), &entry.id)
+            .expect("find updated file")
+            .expect("updated file");
+        assert_eq!(updated.download_count, 1);
+        let transfers = oxidebbs_db::list_file_transfers(db.db()).expect("list transfers");
+        assert!(transfers.iter().any(|transfer| {
+            transfer.direction == "download"
+                && transfer.protocol == "zmodem"
+                && transfer.outcome == "success"
+                && transfer.file_entry_id.as_deref() == Some(entry.id.as_str())
+        }));
+
+        let _ = std::fs::remove_dir_all(base_dir);
+    }
+
+    #[tokio::test]
+    async fn file_flow_zmodem_upload_persists_pending_entry_and_history() {
+        let (base_dir, config, db, user, area) = file_flow_fixture("zmodem-upload");
+        let (mut transport, handle) = LoopbackTransport::new();
+
+        let client_task = tokio::spawn(async move {
+            let mut handle = handle;
+            loopback_read_until(&mut handle, "Area number").await;
+            handle.write_bytes(b"1\r").expect("select file area");
+            loopback_read_until(&mut handle, "Files: D)ownload").await;
+            handle.write_bytes(b"U\r").expect("select upload");
+            loopback_read_until(&mut handle, "Protocol:").await;
+            handle.write_bytes(b"Z\r").expect("select zmodem");
+            loopback_read_until(&mut handle, "Ready to receive via ZMODEM").await;
+
+            let mut client = LoopbackClientBytes { handle };
+            oxidebbs_transfer::zmodem::send_zmodem_file(
+                &mut client,
+                "caller-upload.bin",
+                b"uploaded payload",
+            )
+            .await
+            .expect("send upload");
+            client.write_all(b"R\r\r").await.expect("leave file menu");
+        });
+
+        let mut input = InputSession::raw();
+        let mut disconnect_reason = "test".to_string();
+        let flow = timeout(
+            Duration::from_secs(5),
+            run_files_flow(
+                Some(&user),
+                &mut transport,
+                &mut input,
+                &db,
+                &config,
+                false,
+                Duration::from_secs(1),
+                &mut disconnect_reason,
+                1,
+            ),
+        );
+        let (flow_result, client_result) = tokio::join!(flow, client_task);
+        client_result.expect("client task");
+        flow_result
+            .expect("file flow timeout")
+            .expect("file flow");
+
+        let entries = oxidebbs_db::list_file_entries(db.db()).expect("list file entries");
+        let upload = entries
+            .iter()
+            .find(|entry| entry.original_name.as_deref() == Some("caller-upload.bin"))
+            .expect("uploaded entry");
+        assert!(!upload.approved);
+        assert_eq!(upload.size_bytes, 16);
+        assert_eq!(upload.uploader_user_id.as_deref(), Some(user.id.as_str()));
+        let stored = Path::new(&area.root_path).join(&upload.storage_name);
+        assert_eq!(
+            std::fs::read(stored).expect("read uploaded file"),
+            b"uploaded payload"
+        );
+        let transfers = oxidebbs_db::list_file_transfers(db.db()).expect("list transfers");
+        assert!(transfers.iter().any(|transfer| {
+            transfer.direction == "upload"
+                && transfer.protocol == "zmodem"
+                && transfer.outcome == "success"
+                && transfer.file_entry_id.as_deref() == Some(upload.id.as_str())
+        }));
+
+        let _ = std::fs::remove_dir_all(base_dir);
+    }
+
+    #[tokio::test]
+    async fn serial_loopback_login_menu_and_logoff_records_session() {
+        let base_dir = temp_dir("serial-loopback-session");
+        let db_path = base_dir.join("oxidebbs.ddb");
+        let config_path = base_dir.join("oxidebbs.toml");
+        let mut config = sysop_submenu_smoke_config(free_loopback_addr(), &base_dir, &db_path);
+        config.terminal.clear_screen_on_connect = false;
+        write_sysop_submenu_smoke_screens(&config);
+        let db = Arc::new(OxideDb::open_or_create(&db_path).expect("open db"));
+        seed_login_user(&db, &config, "SerialUser", "secret");
+        let runtime = Arc::new(ServerRuntime::new("serial smoke".to_string(), 1, 1, 60));
+        let allocation = runtime.try_allocate_node().expect("allocate serial node");
+        let mut menus = HashMap::new();
+        for menu_id in config.menus.keys() {
+            let menu = config.core_menu(menu_id).expect("core menu");
+            menus.insert(menu_id.clone(), Arc::new(menu));
+        }
+        let login_menu = menus
+            .get(&config.flow.login_menu)
+            .expect("login menu")
+            .clone();
+        let main_menu = menus
+            .get(&config.flow.main_menu)
+            .expect("main menu")
+            .clone();
+        let resources = CallerResources {
+            db: Arc::clone(&db),
+            config: Arc::new(config),
+            login_menu,
+            main_menu,
+            menus: Arc::new(menus),
+            runtime,
+        };
+        let (transport, mut client) = SerialLoopback::new();
+        let server = tokio::spawn(async move {
+            handle_caller_transport(
+                allocation,
+                transport,
+                "serial",
+                false,
+                CallerPeer {
+                    address: "serial:test".to_string(),
+                    ip: None,
+                    port: 0,
+                },
+                resources,
+            )
+            .await
+        });
+
+        client
+            .write_bytes(b"L\rSerialUser\rsecret\rL\r")
+            .expect("write serial login flow");
+        let output = serial_read_until(&mut client, "Goodbye.").await;
+        assert!(output.contains("Login successful. Welcome back."));
+        timeout(Duration::from_secs(5), server)
+            .await
+            .expect("serial server timeout")
+            .expect("serial join")
+            .expect("serial session");
+
+        let sessions = oxidebbs_db::list_recent_sessions(db.db(), 10).expect("sessions");
+        assert!(sessions.iter().any(|session| {
+            session.transport == "serial"
+                && session.disconnect_reason.as_deref() == Some("caller_logoff")
+        }));
+
+        let _ = config_path;
+        let _ = std::fs::remove_dir_all(base_dir);
+    }
+
+    #[tokio::test]
     async fn normal_level_caller_cannot_open_sysop_submenu() {
         let output = run_sysop_submenu_access_smoke(10, false).await;
 
@@ -5032,6 +6117,123 @@ mod tests {
 
     fn seed_login_user(db: &OxideDb, config: &OxideConfig, alias: &str, password: &str) {
         seed_login_user_with_level(db, config, alias, password, 10, false);
+    }
+
+    fn file_flow_fixture(name: &str) -> (PathBuf, OxideConfig, OxideDb, User, FileAreaRecord) {
+        let base_dir = temp_dir(name);
+        let db_path = base_dir.join("oxidebbs.ddb");
+        let mut config = smoke_config(free_loopback_addr(), &base_dir, &db_path);
+        config.file_transfers.enabled = true;
+        let db = OxideDb::open_or_create(&db_path).expect("open file flow db");
+        seed_login_user_with_level(&db, &config, "FileUser", "secret", 50, false);
+        let user_record = find_user_by_alias_ci(db.db(), "FileUser")
+            .expect("find file user")
+            .expect("file user exists");
+        let user = user_from_record(&user_record).expect("user from record");
+        let root = base_dir.join("file-area");
+        std::fs::create_dir_all(&root).expect("create file area root");
+        let area = FileAreaRecord {
+            id: String::new(),
+            key: "main".to_string(),
+            name: "Main Files".to_string(),
+            description: "Main file area".to_string(),
+            root_path: root.to_string_lossy().into_owned(),
+            read_security_level: 0,
+            download_security_level: 10,
+            upload_security_level: 10,
+            max_upload_bytes: Some(4096),
+            enabled: true,
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+        oxidebbs_db::insert_file_area(db.db(), &area).expect("insert file area");
+        let stored_area = oxidebbs_db::list_file_areas(db.db())
+            .expect("list file areas")
+            .into_iter()
+            .find(|area| area.key == "main")
+            .expect("stored area");
+        (base_dir, config, db, user, stored_area)
+    }
+
+    fn insert_approved_file(
+        db: &OxideDb,
+        area: &FileAreaRecord,
+        payload: &[u8],
+    ) -> FileEntryRecord {
+        let storage_name = "demo.bin".to_string();
+        std::fs::write(Path::new(&area.root_path).join(&storage_name), payload)
+            .expect("write fixture file");
+        let entry = FileEntryRecord {
+            id: String::new(),
+            area_id: area.id.clone(),
+            storage_name: storage_name.clone(),
+            display_name: "demo.bin".to_string(),
+            original_name: Some("demo.bin".to_string()),
+            size_bytes: payload.len() as i64,
+            content_crc32: None,
+            description: "Fixture file".to_string(),
+            uploader_user_id: None,
+            download_count: 0,
+            approved: true,
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+        oxidebbs_db::insert_file_entry(db.db(), &entry).expect("insert file entry");
+        find_file_entry_by_storage_name(db.db(), &area.id, &storage_name)
+            .expect("find fixture file")
+            .expect("fixture file exists")
+    }
+
+    async fn serial_read_until(client: &mut SerialHandle, needle: &str) -> String {
+        let mut output = Vec::new();
+        timeout(Duration::from_secs(5), async {
+            loop {
+                let Some(byte) = client.read_byte().await else {
+                    panic!(
+                        "serial closed before {needle:?}; output was {:?}",
+                        String::from_utf8_lossy(&output)
+                    );
+                };
+                output.push(byte);
+                if String::from_utf8_lossy(&output).contains(needle) {
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "timed out waiting for serial {needle:?}; output was {:?}",
+                String::from_utf8_lossy(&output)
+            )
+        });
+        String::from_utf8_lossy(&output).to_string()
+    }
+
+    async fn loopback_read_until(client: &mut LoopbackHandle, needle: &str) -> String {
+        let mut output = Vec::new();
+        timeout(Duration::from_secs(5), async {
+            loop {
+                let Some(byte) = client.read_byte().await else {
+                    panic!(
+                        "loopback closed before {needle:?}; output was {:?}",
+                        String::from_utf8_lossy(&output)
+                    );
+                };
+                output.push(byte);
+                if String::from_utf8_lossy(&output).contains(needle) {
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "timed out waiting for loopback {needle:?}; output was {:?}",
+                String::from_utf8_lossy(&output)
+            )
+        });
+        String::from_utf8_lossy(&output).to_string()
     }
 
     fn seed_login_user_with_level(

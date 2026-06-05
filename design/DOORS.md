@@ -166,16 +166,26 @@ UART semantics to DOS door programs.
 
 ## Remote providers
 
-`oxidebbs-door` exposes `RemoteDoorProvider`, `ProviderRegistry`, and first
-local validation adapters for BBSLink and DoorParty-style services. The current
-`BbsLinkProvider` and `DoorPartyProvider` validate required provider config and
-return a successful dry-run result without contacting an external service.
+`oxidebbs-door` exposes `RemoteDoorProvider`, `ProviderRegistry`, and BBSLink
+and DoorParty-style adapters. The adapters support local dry-run validation and
+TCP/telnet live connector sessions. Integration tests use localhost fake
+providers so release validation never contacts external BBSLink or DoorParty
+services.
 
 Remote provider secrets use `RemoteDoorSecret`, which redacts by default through
 `Debug`, `Display`, and the provider redacted-config view. Raw access is limited
 to the explicit secret accessor used by connector code.
 
-Current limitation: remote provider credentials are not yet persisted as secret
-references, and the server CLI/TUI/export paths do not launch remote sessions.
-Do not put raw provider secrets into door TOML or door CLI arguments until the
-secret-reference storage and live connector work is implemented.
+Door records use the existing runtime fields for remote providers:
+
+- `runner = "remote:bbslink"` or `runner = "remote:doorparty"`
+- `working_dir` stores the provider endpoint, such as `telnet://host:port`
+- `command` stores the provider-side game key or command
+
+Provider credentials are stored separately in `door_provider_credentials` as
+secret references. CLI and sysop-service mutations accept reference values such
+as `env:BBSLINK_AUTH_CODE`, `file:/run/secrets/bbslink`, or
+`vault://doors/lord/bbslink`; raw provider secrets are rejected at the CLI
+boundary. CLI output, TUI detail display, audit details, and JSON exports redact
+credential references as `[redacted]`. Importing a redacted JSON export does not
+recreate a fake secret reference.

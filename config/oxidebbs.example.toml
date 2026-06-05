@@ -219,8 +219,31 @@ exclusive = false
 time_limit_minutes = 5
 enabled = false
 
+# Remote provider seed example. Persist provider credential references with
+# `oxidebbs-server doors add/edit --credential-ref ...`; do not put raw provider
+# secrets in this TOML file.
+#
+# [[doors.definitions]]
+# key = "bbslink-lord"
+# name = "BBSLink LORD"
+# runner = "remote:bbslink"
+# working_dir = "telnet://bbslink.example:23"
+# command = "LORD"
+# drop_file = "DOOR.SYS"
+# exclusive = false
+# time_limit_minutes = 30
+# enabled = false
+
 [network]
 enabled = false
+
+[network.binkp_listener]
+enabled = false
+bind = "0.0.0.0:24554"
+max_connections = 10
+# Required when accepting inbound sessions for tls_required links.
+# tls_cert_path = "./certs/binkp.crt"
+# tls_key_path = "./certs/binkp.key"
 
 [network.profiles.fidonet]
 name = "FidoNet"

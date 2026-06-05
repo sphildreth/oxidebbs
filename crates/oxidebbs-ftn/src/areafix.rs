@@ -176,10 +176,7 @@ impl<'db> AreaFixProcessor<'db> {
                     lines.push(format!("Subscribed {}", area.area_tag));
                     if *rescan {
                         rescan_requests.push(area.area_tag.clone());
-                        lines.push(format!(
-                            "Rescan requested for {}; rescan queueing is not implemented yet",
-                            area.area_tag
-                        ));
+                        lines.push(format!("Rescan requested for {}", area.area_tag));
                     }
                 }
                 AreaFixCommand::Unsubscribe { area_tag } => {
@@ -680,7 +677,7 @@ mod tests {
     }
 
     #[test]
-    fn processor_records_rescan_request_but_does_not_queue_it_yet() {
+    fn processor_records_rescan_request_for_caller_queueing() {
         let db = test_db();
         let processor = AreaFixProcessor::new(db.db(), profile(), link());
 
@@ -689,9 +686,7 @@ mod tests {
             .expect("process request");
 
         assert_eq!(result.rescan_requests, vec!["OXIDE.GENERAL".to_string()]);
-        assert!(result.reply.contains(
-            "Rescan requested for OXIDE.GENERAL; rescan queueing is not implemented yet"
-        ));
+        assert!(result.reply.contains("Rescan requested for OXIDE.GENERAL"));
     }
 
     #[test]

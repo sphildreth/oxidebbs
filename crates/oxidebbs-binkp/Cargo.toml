@@ -9,3 +9,6 @@ authors.workspace = true
 tokio.workspace = true
 thiserror.workspace = true
 native-tls = "0.2.18"
+
+[dev-dependencies]
+rcgen = "0.14.8"

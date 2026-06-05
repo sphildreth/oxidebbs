@@ -176,10 +176,34 @@ pub fn find_file_entry_by_id(db: &Db, id: &str) -> decentdb::Result<Option<FileE
     Ok(result.rows().first().map(row_to_file_entry))
 }
 
+pub fn find_file_entry_by_storage_name(
+    db: &Db,
+    area_id: &str,
+    storage_name: &str,
+) -> decentdb::Result<Option<FileEntryRecord>> {
+    let result = db.execute_with_params(
+        "SELECT UUID_TO_STRING(id), UUID_TO_STRING(area_id), storage_name, display_name, original_name, size_bytes, content_crc32, description, UUID_TO_STRING(uploader_user_id), download_count, approved, CAST(created_at AS TEXT), CAST(updated_at AS TEXT)
+         FROM file_entries WHERE area_id = UUID_PARSE($1) AND storage_name = $2 ORDER BY created_at DESC LIMIT 1",
+        &[Value::Text(area_id.to_string()), Value::Text(storage_name.to_string())],
+    )?;
+    Ok(result.rows().first().map(row_to_file_entry))
+}
+
 pub fn update_file_entry_approved(db: &Db, id: &str, approved: bool) -> decentdb::Result<()> {
     db.execute_with_params(
         "UPDATE file_entries SET approved = $2, updated_at = CURRENT_TIMESTAMP WHERE id = UUID_PARSE($1)",
         &[Value::Text(id.to_string()), Value::Bool(approved)],
+    )?;
+    Ok(())
+}
+
+pub fn increment_file_entry_download_count(db: &Db, id: &str) -> decentdb::Result<()> {
+    db.execute_with_params(
+        "UPDATE file_entries
+         SET download_count = download_count + 1,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = UUID_PARSE($1)",
+        &[Value::Text(id.to_string())],
     )?;
     Ok(())
 }
@@ -476,6 +500,17 @@ mod tests {
         assert_eq!(entries[0].storage_name, "PKZ204G.EXE");
         assert_eq!(entries[0].size_bytes, 42166);
         assert!(entries[0].approved);
+
+        let found = find_file_entry_by_storage_name(&db, area_id, "PKZ204G.EXE")
+            .expect("find by storage")
+            .expect("entry found");
+        assert_eq!(found.display_name, "PKZIP 2.04g");
+
+        increment_file_entry_download_count(&db, &found.id).expect("increment downloads");
+        let updated = find_file_entry_by_id(&db, &found.id)
+            .expect("find updated")
+            .expect("updated entry");
+        assert_eq!(updated.download_count, 1);
     }
 
     #[test]

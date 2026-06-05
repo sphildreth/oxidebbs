@@ -354,6 +354,16 @@ struct ImportNetworkNodelistRecord {
     node: i64,
     point: i64,
     parsed_name: Option<String>,
+    #[serde(default)]
+    location: Option<String>,
+    #[serde(default)]
+    sysop_name: Option<String>,
+    #[serde(default)]
+    phone: Option<String>,
+    #[serde(default)]
+    speed: Option<String>,
+    #[serde(default)]
+    flags: String,
     raw_entry: String,
     updated_at: String,
 }
@@ -766,6 +776,11 @@ impl From<ImportNetworkNodelistRecord> for NetworkNodelistRecord {
             node: record.node,
             point: record.point,
             parsed_name: record.parsed_name,
+            location: record.location,
+            sysop_name: record.sysop_name,
+            phone: record.phone,
+            speed: record.speed,
+            flags: record.flags,
             raw_entry: record.raw_entry,
             updated_at: record.updated_at,
         }
@@ -1316,6 +1331,11 @@ fn network_nodelist_json(entry: &NetworkNodelistRecord) -> JsonValue {
         "node": entry.node,
         "point": entry.point,
         "parsed_name": entry.parsed_name,
+        "location": entry.location,
+        "sysop_name": entry.sysop_name,
+        "phone": entry.phone,
+        "speed": entry.speed,
+        "flags": entry.flags,
         "raw_entry": entry.raw_entry,
         "updated_at": entry.updated_at
     })
@@ -2655,10 +2675,10 @@ mod tests {
     use super::*;
     use oxidebbs_db::{
         SCHEMA_VERSION, find_message_by_id, insert_audit_event, insert_door_definition,
-        insert_door_run, insert_message, insert_message_area, insert_oxidenet_application,
-        insert_oxidenet_credential, insert_oxidenet_node, insert_session, insert_user,
-        list_oxidenet_applications, list_oxidenet_credentials_for_node, list_oxidenet_nodes,
-        list_users,
+        insert_door_provider_credential, insert_door_run, insert_message, insert_message_area,
+        insert_oxidenet_application, insert_oxidenet_credential, insert_oxidenet_node,
+        insert_session, insert_user, list_door_provider_credentials, list_oxidenet_applications,
+        list_oxidenet_credentials_for_node, list_oxidenet_nodes, list_users,
     };
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -2973,6 +2993,49 @@ mod tests {
         );
         assert_eq!(credentials.len(), 1);
         assert_eq!(credentials[0].secret_hash, "sha256:abc123");
+    }
+
+    #[test]
+    fn db_export_redacts_door_provider_credentials_and_import_skips_redacted_refs() {
+        let source = test_db();
+        let door = DoorDefinitionRecord {
+            id: "00000000-0000-4000-8000-000000000401".to_string(),
+            key: "bbslink-lord".to_string(),
+            name: "Remote LORD".to_string(),
+            runner: "remote:bbslink".to_string(),
+            working_dir: "telnet://127.0.0.1:2323".to_string(),
+            command: "LORD".to_string(),
+            drop_file: "DOOR.SYS".to_string(),
+            exclusive: false,
+            time_limit_minutes: 30,
+            enabled: true,
+            min_security_level: 0,
+        };
+        let credential = DoorProviderCredentialRecord {
+            id: "00000000-0000-4000-8000-000000000402".to_string(),
+            door_id: door.id.clone(),
+            provider_name: "bbslink".to_string(),
+            credential_ref: "vault://doors/bbslink-lord/auth-code".to_string(),
+            created_at: "2026-01-01T00:00:00.000000Z".to_string(),
+            updated_at: "2026-01-01T00:00:00.000000Z".to_string(),
+        };
+        insert_door_definition(source.db(), &door).expect("seed door");
+        insert_door_provider_credential(source.db(), &credential).expect("seed credential");
+
+        let payload = export_payload(&source);
+
+        assert_eq!(payload.door_provider_credentials.len(), 1);
+        assert_eq!(
+            payload.door_provider_credentials[0].credential_ref,
+            "[redacted]"
+        );
+
+        let target = test_db();
+        perform_db_import(&target, payload).expect("import redacted payload");
+
+        let credentials =
+            list_door_provider_credentials(target.db(), &door.id).expect("list credentials");
+        assert!(credentials.is_empty());
     }
 
     #[test]

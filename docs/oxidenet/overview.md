@@ -1,36 +1,35 @@
 # OxideNet
 
-OxideNet is the first-party FTN-style network profile planned for OxideBBS. It
-uses the shared `oxidebbs-network` model and is intended to sit on top of the
-FTN/BinkP foundations instead of hard-coding network behavior into core caller
-sessions.
+OxideNet is the first-party FTN-style network profile for OxideBBS. It uses the
+shared network schema, DecentDB registry tables, BinkP polling, and the
+`oxidebbs-oxidenet` workflow service.
 
-Current foundation:
+Implemented v1.2 workflows:
 
-- `oxidebbs-oxidenet` defines default addressing, area, application lifecycle,
-  node, and config-package data structures.
-- Address helpers classify `42:1/1`, `42:1/2`, infrastructure, member,
-  test/lab, and future-net ranges, and can allocate the next available
-  top-level member address.
-- Config-package structs model the planned `oxidenet.toml`, `areas.toml`,
-  `nodelist.toml`, and `credentials.toml` contents with validation for
-  addresses, hub settings, matching credentials, policy acceptance, and area
-  tags.
-- Shared network tables and types exist in `oxidebbs-network` and DecentDB.
-- DecentDB schema `8` stores OxideNet application, assigned-node, and
-  credential-hash registry rows for future onboarding and lifecycle workflows.
-- Legacy FTN packet, kludge, duplicate, bundle-classification, BinkP frame, and
-  nodelist foundations exist in adjacent crates.
+- OxideNet defaults for zone `42`, primary hub `42:1/1`, backup hub `42:1/2`,
+  member range `42:1/100-899`, test range `42:1/900+`, and default areas.
+- BBS-native application records with validation, status lookup, admin review,
+  approval, hold, reject, and request-info states.
+- Automatic member address assignment, session credential generation, join
+  token issue/revoke, node suspension/reactivation, and password rotation.
+- Config package generation/import using `oxidenet.toml`, `areas.toml`,
+  `nodelist.toml`, `credentials.toml`, and `manifest.toml`.
+- Hub/member filesystem simulation through package export/import.
+- OxideNet poll enforcement through the BinkP poller, including suspended-node
+  rejection and poll timestamp recording.
+- Local sysop TUI screens for dashboard, applications, nodes, queues,
+  subscriptions, poll logs, nodelist generation, and config package operations.
 
-Not release-ready yet:
+Common commands:
 
-- BBS-native application submission and admin review flows that populate the
-  registry.
-- Token-based join and credential rotation.
-- Config-package generation/import wired to runtime state.
-- Hub/member message flow, nodelist generation, BinkP polling, suspension, and
-  public experimental network workflows.
-- OxideNet TUI screens and daily-operations docs.
-
-Until those gates are implemented, OxideNet is a design and data-model
-foundation rather than an operational network.
+```bash
+oxidebbs-server net oxidenet install-hub --host blackboard.example.net
+oxidebbs-server net oxidenet apply --board-name "Retro BBS" --sysop-alias Sysop \
+  --contact-email sysop@example.net --host retro.example.net \
+  --description "ANSI and echomail" --reason "Join OxideNet"
+oxidebbs-server net oxidenet applications list
+oxidebbs-server net oxidenet applications approve <application-id> --package-dir ./package
+oxidebbs-server net oxidenet package import ./package
+oxidebbs-server net poll oxidenet-hub
+oxidebbs-server net oxidenet nodelist --output ./public/oxidenet.nodelist
+```

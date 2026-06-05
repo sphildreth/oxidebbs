@@ -1,7 +1,7 @@
 use std::io::Write;
 
-use crate::TransferError;
 use crate::crc::crc16_xmodem;
+use crate::{ByteTransport, TransferError, TransferRead};
 
 const ZPAD: u8 = b'*';
 const ZDLE: u8 = 0x18;
@@ -29,6 +29,10 @@ const ESCCTL: u8 = 0x40;
 const ZCBIN: u8 = 0x01;
 
 pub const MAX_SUBPACKET_BYTES: usize = 1024;
+const HEADER_TIMEOUT_SECS: u64 = 10;
+const DATA_TIMEOUT_SECS: u64 = 10;
+const DEFAULT_FRAME_RETRIES: u8 = 10;
+const ACK_INTERVAL_BYTES: usize = 32 * 1024;
 const CANCEL_SEQUENCE: [u8; 20] = [
     ZPAD, ZPAD, CAN, CAN, CAN, CAN, CAN, CAN, CAN, CAN, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08,
     0x08, 0x08, 0x08,
@@ -155,6 +159,19 @@ pub struct ZfileMetadata {
     pub size: Option<u64>,
     pub mtime: Option<u64>,
     pub mode: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ZmodemFile {
+    pub filename: String,
+    pub payload: Vec<u8>,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct ZmodemTransferStats {
+    pub files: usize,
+    pub bytes: u64,
+    pub retries: u32,
 }
 
 impl ZfileMetadata {
@@ -388,12 +405,13 @@ pub fn decode_hex_header(frame: &[u8]) -> Result<ZmodemHeader, TransferError> {
 }
 
 pub fn encode_data_subpacket(subpacket: &ZmodemDataSubpacket, use_crc32: bool) -> Vec<u8> {
+    let end_byte = subpacket.frame_end.to_byte();
     let mut payload = subpacket.data.clone();
-    payload.push(subpacket.frame_end.to_byte());
+    payload.push(end_byte);
 
-    let escaped = zdle_escape(&payload, true);
-    let mut frame = escaped;
-
+    let mut frame = zdle_escape(&subpacket.data, true);
+    frame.push(ZDLE);
+    frame.push(end_byte);
     if use_crc32 {
         let crc = crc32_iso_hdlc(&payload);
         let crc_bytes = crc.to_le_bytes();
@@ -407,6 +425,644 @@ pub fn encode_data_subpacket(subpacket: &ZmodemDataSubpacket, use_crc32: bool) -
     }
 
     frame
+}
+
+pub fn decode_data_subpacket(
+    frame: &[u8],
+    use_crc32: bool,
+) -> Result<ZmodemDataSubpacket, TransferError> {
+    let crc_len = if use_crc32 { 4 } else { 2 };
+    let mut data = Vec::new();
+    let mut index = 0;
+    let frame_end = loop {
+        if index >= frame.len() {
+            return Err(TransferError::ProtocolError);
+        }
+        let byte = frame[index];
+        index += 1;
+        if byte != ZDLE {
+            data.push(byte);
+            continue;
+        }
+        if index >= frame.len() {
+            return Err(TransferError::ProtocolError);
+        }
+        let escaped = frame[index];
+        index += 1;
+        if let Some(frame_end) = FrameEnd::from_byte(escaped) {
+            break frame_end;
+        }
+        data.push(escaped ^ 0x40);
+    };
+    let crc_bytes = zdle_unescape(&frame[index..])?;
+    if crc_bytes.len() != crc_len {
+        return Err(TransferError::ProtocolError);
+    }
+    let mut payload = data.clone();
+    payload.push(frame_end.to_byte());
+    if use_crc32 {
+        let received_crc =
+            u32::from_le_bytes([crc_bytes[0], crc_bytes[1], crc_bytes[2], crc_bytes[3]]);
+        if crc32_iso_hdlc(&payload) != received_crc {
+            return Err(TransferError::ProtocolError);
+        }
+    } else {
+        let received_crc = u16::from_be_bytes([crc_bytes[0], crc_bytes[1]]);
+        if crc16_xmodem(&payload) != received_crc {
+            return Err(TransferError::ProtocolError);
+        }
+    }
+    Ok(ZmodemDataSubpacket { data, frame_end })
+}
+
+/// Send one file to a caller using OxideBBS' owned ZMODEM sender.
+///
+/// # Errors
+///
+/// Returns a transfer error on malformed handshakes, retry exhaustion, caller
+/// cancellation, or underlying transport failures.
+pub async fn send_zmodem_file<T: ByteTransport + ?Sized>(
+    transport: &mut T,
+    filename: &str,
+    payload: &[u8],
+) -> Result<ZmodemTransferStats, TransferError> {
+    send_zmodem_files(
+        transport,
+        &[ZmodemFile {
+            filename: filename.to_string(),
+            payload: payload.to_vec(),
+        }],
+    )
+    .await
+}
+
+/// Send a batch of files to a caller using ZMODEM.
+///
+/// # Errors
+///
+/// Returns a transfer error on malformed handshakes, retry exhaustion, caller
+/// cancellation, or underlying transport failures.
+pub async fn send_zmodem_files<T: ByteTransport + ?Sized>(
+    transport: &mut T,
+    files: &[ZmodemFile],
+) -> Result<ZmodemTransferStats, TransferError> {
+    wait_for_receiver_ready(transport).await?;
+    let mut stats = ZmodemTransferStats::default();
+
+    for file in files {
+        send_zfile_header(transport, file).await?;
+        let mut skipped = false;
+        let position = loop {
+            match read_required_header(transport).await? {
+                header if header.kind == ZmodemFrameKind::Zrpos => {
+                    break header.position() as usize;
+                }
+                header if header.kind == ZmodemFrameKind::Zskip => {
+                    stats.files += 1;
+                    skipped = true;
+                    break 0;
+                }
+                header
+                    if header.kind == ZmodemFrameKind::Zrinit
+                        || header.kind == ZmodemFrameKind::Zrqinit =>
+                {
+                    continue;
+                }
+                header
+                    if header.kind == ZmodemFrameKind::Zabort
+                        || header.kind == ZmodemFrameKind::Zcan =>
+                {
+                    return Err(TransferError::Canceled);
+                }
+                _ => return Err(TransferError::ProtocolError),
+            }
+        };
+        if skipped {
+            continue;
+        }
+
+        let file_stats = send_zmodem_payload(transport, &file.payload, position).await?;
+        stats.files += 1;
+        stats.bytes = stats.bytes.saturating_add(file.payload.len() as u64);
+        stats.retries = stats.retries.saturating_add(file_stats.retries);
+    }
+
+    finish_send_session(transport).await?;
+    Ok(stats)
+}
+
+/// Receive one uploaded file from a caller using ZMODEM.
+///
+/// # Errors
+///
+/// Returns a transfer error on malformed handshakes, retry exhaustion, caller
+/// cancellation, quota denial, or underlying transport failures.
+pub async fn receive_zmodem_file<T: ByteTransport + ?Sized>(
+    transport: &mut T,
+    max_upload_bytes: Option<u64>,
+) -> Result<ZmodemFile, TransferError> {
+    let (mut files, _) = receive_zmodem_files(transport, max_upload_bytes).await?;
+    if files.is_empty() {
+        return Err(TransferError::ProtocolError);
+    }
+    Ok(files.remove(0))
+}
+
+/// Receive a ZMODEM upload batch from a caller.
+///
+/// # Errors
+///
+/// Returns a transfer error on malformed handshakes, retry exhaustion, caller
+/// cancellation, quota denial, or underlying transport failures.
+pub async fn receive_zmodem_files<T: ByteTransport + ?Sized>(
+    transport: &mut T,
+    max_upload_bytes: Option<u64>,
+) -> Result<(Vec<ZmodemFile>, ZmodemTransferStats), TransferError> {
+    let mut files = Vec::new();
+    let mut stats = ZmodemTransferStats::default();
+    write_header(
+        transport,
+        ZmodemHeader::from_flags(ZmodemFrameKind::Zrinit, zrinit_flags(), 0, 0, 0),
+    )
+    .await?;
+
+    loop {
+        let header = match read_header(transport, HEADER_TIMEOUT_SECS).await? {
+            Some(header) => header,
+            None => {
+                write_header(
+                    transport,
+                    ZmodemHeader::from_flags(ZmodemFrameKind::Zrinit, zrinit_flags(), 0, 0, 0),
+                )
+                .await?;
+                continue;
+            }
+        };
+
+        match header.kind {
+            ZmodemFrameKind::Zrqinit => {
+                write_header(
+                    transport,
+                    ZmodemHeader::from_flags(ZmodemFrameKind::Zrinit, zrinit_flags(), 0, 0, 0),
+                )
+                .await?;
+            }
+            ZmodemFrameKind::Zfile => {
+                let metadata_packet =
+                    read_data_subpacket_from_transport(transport, true, 4096).await?;
+                let metadata = ZfileMetadata::parse(&metadata_packet.data)?;
+                let declared_size = metadata.size.ok_or(TransferError::ProtocolError)?;
+                if let Some(max) = max_upload_bytes
+                    && declared_size > max
+                {
+                    write_header(transport, ZmodemHeader::new(ZmodemFrameKind::Zferr, 0)).await?;
+                    return Err(TransferError::QuotaDenied);
+                }
+                write_header(transport, ZmodemHeader::new(ZmodemFrameKind::Zrpos, 0)).await?;
+                let (payload, retries) =
+                    receive_zmodem_payload(transport, declared_size, max_upload_bytes).await?;
+                let payload_len = payload.len() as u64;
+                files.push(ZmodemFile {
+                    filename: metadata.pathname,
+                    payload,
+                });
+                stats.files += 1;
+                stats.bytes = stats.bytes.saturating_add(payload_len);
+                stats.retries = stats.retries.saturating_add(retries);
+                write_header(
+                    transport,
+                    ZmodemHeader::from_flags(ZmodemFrameKind::Zrinit, zrinit_flags(), 0, 0, 0),
+                )
+                .await?;
+            }
+            ZmodemFrameKind::Zfin => {
+                write_header(transport, ZmodemHeader::new(ZmodemFrameKind::Zfin, 0)).await?;
+                transport.write_all(b"OO").await?;
+                transport.flush().await?;
+                return Ok((files, stats));
+            }
+            ZmodemFrameKind::Zabort | ZmodemFrameKind::Zcan => {
+                return Err(TransferError::Canceled);
+            }
+            ZmodemFrameKind::Zcommand => {
+                write_header(transport, ZmodemHeader::new(ZmodemFrameKind::Zferr, 0)).await?;
+                return Err(TransferError::Unsupported);
+            }
+            ZmodemFrameKind::Zfreecnt => {
+                let free = max_upload_bytes
+                    .unwrap_or(u32::MAX as u64)
+                    .min(u32::MAX as u64) as u32;
+                write_header(transport, ZmodemHeader::new(ZmodemFrameKind::Zack, free)).await?;
+            }
+            _ => {
+                write_header(transport, ZmodemHeader::new(ZmodemFrameKind::Znak, 0)).await?;
+            }
+        }
+    }
+}
+
+async fn wait_for_receiver_ready<T: ByteTransport + ?Sized>(
+    transport: &mut T,
+) -> Result<(), TransferError> {
+    for _ in 0..=DEFAULT_FRAME_RETRIES {
+        write_header(transport, ZmodemHeader::new(ZmodemFrameKind::Zrqinit, 0)).await?;
+        match read_header(transport, HEADER_TIMEOUT_SECS).await? {
+            Some(header) if header.kind == ZmodemFrameKind::Zrinit => return Ok(()),
+            Some(header)
+                if header.kind == ZmodemFrameKind::Zabort
+                    || header.kind == ZmodemFrameKind::Zcan =>
+            {
+                return Err(TransferError::Canceled);
+            }
+            Some(_) | None => {}
+        }
+    }
+    Err(TransferError::Timeout)
+}
+
+async fn send_zfile_header<T: ByteTransport + ?Sized>(
+    transport: &mut T,
+    file: &ZmodemFile,
+) -> Result<(), TransferError> {
+    let metadata = ZfileMetadata {
+        pathname: file.filename.clone(),
+        size: Some(file.payload.len() as u64),
+        mtime: Some(0),
+        mode: Some(0o100644),
+    };
+    write_header(
+        transport,
+        ZmodemHeader {
+            kind: ZmodemFrameKind::Zfile,
+            flags: zfile_flags(),
+        },
+    )
+    .await?;
+    let subpacket = ZmodemDataSubpacket {
+        data: metadata.encode(),
+        frame_end: FrameEnd::Zcrcw,
+    };
+    transport
+        .write_all(&encode_data_subpacket(&subpacket, true))
+        .await?;
+    transport.flush().await
+}
+
+async fn send_zmodem_payload<T: ByteTransport + ?Sized>(
+    transport: &mut T,
+    payload: &[u8],
+    mut position: usize,
+) -> Result<ZmodemTransferStats, TransferError> {
+    let mut retries = 0_u32;
+    'resend: loop {
+        if position > payload.len() {
+            return Err(TransferError::ProtocolError);
+        }
+        write_header(
+            transport,
+            ZmodemHeader::new(ZmodemFrameKind::Zdata, position as u32),
+        )
+        .await?;
+        let mut offset = position;
+        let mut bytes_since_ack = 0_usize;
+        while offset < payload.len() {
+            let end = (offset + MAX_SUBPACKET_BYTES).min(payload.len());
+            let chunk = &payload[offset..end];
+            offset = end;
+            bytes_since_ack += chunk.len();
+            let frame_end = if offset == payload.len() {
+                FrameEnd::Zcrce
+            } else if bytes_since_ack >= ACK_INTERVAL_BYTES {
+                bytes_since_ack = 0;
+                FrameEnd::Zcrcw
+            } else {
+                FrameEnd::Zcrcg
+            };
+            let subpacket = ZmodemDataSubpacket {
+                data: chunk.to_vec(),
+                frame_end,
+            };
+            transport
+                .write_all(&encode_data_subpacket(&subpacket, true))
+                .await?;
+            transport.flush().await?;
+            if frame_end == FrameEnd::Zcrcw {
+                match read_required_header(transport).await? {
+                    header if header.kind == ZmodemFrameKind::Zack => {}
+                    header if header.kind == ZmodemFrameKind::Zrpos => {
+                        retries = retries.saturating_add(1);
+                        if retries > u32::from(DEFAULT_FRAME_RETRIES) {
+                            return Err(TransferError::ProtocolError);
+                        }
+                        position = header.position() as usize;
+                        continue 'resend;
+                    }
+                    header
+                        if header.kind == ZmodemFrameKind::Zabort
+                            || header.kind == ZmodemFrameKind::Zcan =>
+                    {
+                        return Err(TransferError::Canceled);
+                    }
+                    _ => return Err(TransferError::ProtocolError),
+                }
+            }
+        }
+
+        write_header(
+            transport,
+            ZmodemHeader::new(ZmodemFrameKind::Zeof, payload.len() as u32),
+        )
+        .await?;
+        match read_required_header(transport).await? {
+            header if header.kind == ZmodemFrameKind::Zrinit => {
+                return Ok(ZmodemTransferStats {
+                    files: 1,
+                    bytes: payload.len() as u64,
+                    retries,
+                });
+            }
+            header if header.kind == ZmodemFrameKind::Zrpos => {
+                retries = retries.saturating_add(1);
+                if retries > u32::from(DEFAULT_FRAME_RETRIES) {
+                    return Err(TransferError::ProtocolError);
+                }
+                position = header.position() as usize;
+            }
+            header
+                if header.kind == ZmodemFrameKind::Zabort
+                    || header.kind == ZmodemFrameKind::Zcan =>
+            {
+                return Err(TransferError::Canceled);
+            }
+            _ => return Err(TransferError::ProtocolError),
+        }
+    }
+}
+
+async fn receive_zmodem_payload<T: ByteTransport + ?Sized>(
+    transport: &mut T,
+    declared_size: u64,
+    max_upload_bytes: Option<u64>,
+) -> Result<(Vec<u8>, u32), TransferError> {
+    let mut payload = Vec::new();
+    let mut retries = 0_u32;
+
+    loop {
+        let header = read_required_header(transport).await?;
+        match header.kind {
+            ZmodemFrameKind::Zdata if header.position() as usize == payload.len() => loop {
+                match read_data_subpacket_from_transport(transport, true, MAX_SUBPACKET_BYTES).await
+                {
+                    Ok(subpacket) => {
+                        payload.extend_from_slice(&subpacket.data);
+                        if let Some(max) = max_upload_bytes
+                            && payload.len() as u64 > max
+                        {
+                            write_header(
+                                transport,
+                                ZmodemHeader::new(ZmodemFrameKind::Zferr, payload.len() as u32),
+                            )
+                            .await?;
+                            return Err(TransferError::QuotaDenied);
+                        }
+                        match subpacket.frame_end {
+                            FrameEnd::Zcrce => break,
+                            FrameEnd::Zcrcg => {}
+                            FrameEnd::Zcrcq | FrameEnd::Zcrcw => {
+                                write_header(
+                                    transport,
+                                    ZmodemHeader::new(ZmodemFrameKind::Zack, payload.len() as u32),
+                                )
+                                .await?;
+                            }
+                        }
+                    }
+                    Err(TransferError::ProtocolError) => {
+                        retries = retries.saturating_add(1);
+                        if retries > u32::from(DEFAULT_FRAME_RETRIES) {
+                            return Err(TransferError::ProtocolError);
+                        }
+                        write_header(
+                            transport,
+                            ZmodemHeader::new(ZmodemFrameKind::Zrpos, payload.len() as u32),
+                        )
+                        .await?;
+                        break;
+                    }
+                    Err(error) => return Err(error),
+                }
+            },
+            ZmodemFrameKind::Zeof if u64::from(header.position()) == payload.len() as u64 => {
+                if payload.len() as u64 != declared_size {
+                    return Err(TransferError::ProtocolError);
+                }
+                return Ok((payload, retries));
+            }
+            ZmodemFrameKind::Zabort | ZmodemFrameKind::Zcan => {
+                return Err(TransferError::Canceled);
+            }
+            _ => {
+                retries = retries.saturating_add(1);
+                if retries > u32::from(DEFAULT_FRAME_RETRIES) {
+                    return Err(TransferError::ProtocolError);
+                }
+                write_header(
+                    transport,
+                    ZmodemHeader::new(ZmodemFrameKind::Zrpos, payload.len() as u32),
+                )
+                .await?;
+            }
+        }
+    }
+}
+
+async fn finish_send_session<T: ByteTransport + ?Sized>(
+    transport: &mut T,
+) -> Result<(), TransferError> {
+    for _ in 0..=DEFAULT_FRAME_RETRIES {
+        write_header(transport, ZmodemHeader::new(ZmodemFrameKind::Zfin, 0)).await?;
+        match read_header(transport, HEADER_TIMEOUT_SECS).await? {
+            Some(header) if header.kind == ZmodemFrameKind::Zfin => {
+                let _ = transport.write_all(b"OO").await;
+                let _ = transport.flush().await;
+                return Ok(());
+            }
+            Some(header)
+                if header.kind == ZmodemFrameKind::Zabort
+                    || header.kind == ZmodemFrameKind::Zcan =>
+            {
+                return Err(TransferError::Canceled);
+            }
+            Some(_) | None => {}
+        }
+    }
+    Err(TransferError::Timeout)
+}
+
+async fn write_header<T: ByteTransport + ?Sized>(
+    transport: &mut T,
+    header: ZmodemHeader,
+) -> Result<(), TransferError> {
+    let encoded = match header.kind {
+        ZmodemFrameKind::Zrqinit | ZmodemFrameKind::Zrinit | ZmodemFrameKind::Zfin => {
+            encode_hex_header(header)
+        }
+        _ => encode_binary32_header(header),
+    };
+    transport.write_all(&encoded).await?;
+    transport.flush().await
+}
+
+async fn read_required_header<T: ByteTransport + ?Sized>(
+    transport: &mut T,
+) -> Result<ZmodemHeader, TransferError> {
+    read_header(transport, HEADER_TIMEOUT_SECS)
+        .await?
+        .ok_or(TransferError::Timeout)
+}
+
+async fn read_header<T: ByteTransport + ?Sized>(
+    transport: &mut T,
+    timeout_secs: u64,
+) -> Result<Option<ZmodemHeader>, TransferError> {
+    loop {
+        match read_raw_byte(transport, timeout_secs).await? {
+            Some(ZPAD) => break,
+            Some(_) => {}
+            None => return Ok(None),
+        }
+    }
+
+    let mut frame = vec![ZPAD];
+    let next = read_required_raw_byte(transport, timeout_secs).await?;
+    let marker = if next == ZPAD {
+        frame.push(next);
+        read_required_raw_byte(transport, timeout_secs).await?
+    } else {
+        next
+    };
+    if marker != ZDLE {
+        return Err(TransferError::ProtocolError);
+    }
+    frame.push(marker);
+    let encoding = read_required_raw_byte(transport, timeout_secs).await?;
+    frame.push(encoding);
+
+    match encoding {
+        ZBIN => {
+            let mut rest = read_raw_exact(transport, 7, timeout_secs).await?;
+            frame.append(&mut rest);
+            decode_binary_header(&frame).map(Some)
+        }
+        ZBIN32 => {
+            let mut rest = read_raw_exact(transport, 9, timeout_secs).await?;
+            frame.append(&mut rest);
+            decode_binary32_header(&frame).map(Some)
+        }
+        ZHEX => {
+            let mut rest = read_raw_exact(transport, 16, timeout_secs).await?;
+            frame.append(&mut rest);
+            Ok(Some(decode_hex_header(&frame)?))
+        }
+        _ => Err(TransferError::ProtocolError),
+    }
+}
+
+async fn read_data_subpacket_from_transport<T: ByteTransport + ?Sized>(
+    transport: &mut T,
+    use_crc32: bool,
+    max_data_len: usize,
+) -> Result<ZmodemDataSubpacket, TransferError> {
+    let mut data = Vec::new();
+    loop {
+        let byte = read_required_raw_byte(transport, DATA_TIMEOUT_SECS).await?;
+        match byte {
+            XON | XOFF => {}
+            ZDLE => {
+                let escaped = read_required_raw_byte(transport, DATA_TIMEOUT_SECS).await?;
+                if let Some(frame_end) = FrameEnd::from_byte(escaped) {
+                    let crc_len = if use_crc32 { 4 } else { 2 };
+                    let crc_bytes =
+                        read_decoded_exact(transport, crc_len, DATA_TIMEOUT_SECS).await?;
+                    let mut payload = data.clone();
+                    payload.push(escaped);
+                    if use_crc32 {
+                        let received_crc = u32::from_le_bytes([
+                            crc_bytes[0],
+                            crc_bytes[1],
+                            crc_bytes[2],
+                            crc_bytes[3],
+                        ]);
+                        if crc32_iso_hdlc(&payload) != received_crc {
+                            return Err(TransferError::ProtocolError);
+                        }
+                    } else {
+                        let received_crc = u16::from_be_bytes([crc_bytes[0], crc_bytes[1]]);
+                        if crc16_xmodem(&payload) != received_crc {
+                            return Err(TransferError::ProtocolError);
+                        }
+                    }
+                    return Ok(ZmodemDataSubpacket { data, frame_end });
+                }
+                data.push(escaped ^ 0x40);
+            }
+            other => data.push(other),
+        }
+
+        if data.len() > max_data_len {
+            return Err(TransferError::ProtocolError);
+        }
+    }
+}
+
+async fn read_decoded_exact<T: ByteTransport + ?Sized>(
+    transport: &mut T,
+    len: usize,
+    timeout_secs: u64,
+) -> Result<Vec<u8>, TransferError> {
+    let mut bytes = Vec::with_capacity(len);
+    while bytes.len() < len {
+        let byte = read_required_raw_byte(transport, timeout_secs).await?;
+        if byte == ZDLE {
+            let escaped = read_required_raw_byte(transport, timeout_secs).await?;
+            bytes.push(escaped ^ 0x40);
+        } else {
+            bytes.push(byte);
+        }
+    }
+    Ok(bytes)
+}
+
+async fn read_raw_exact<T: ByteTransport + ?Sized>(
+    transport: &mut T,
+    len: usize,
+    timeout_secs: u64,
+) -> Result<Vec<u8>, TransferError> {
+    let mut bytes = Vec::with_capacity(len);
+    while bytes.len() < len {
+        bytes.push(read_required_raw_byte(transport, timeout_secs).await?);
+    }
+    Ok(bytes)
+}
+
+async fn read_required_raw_byte<T: ByteTransport + ?Sized>(
+    transport: &mut T,
+    timeout_secs: u64,
+) -> Result<u8, TransferError> {
+    read_raw_byte(transport, timeout_secs)
+        .await?
+        .ok_or(TransferError::Timeout)
+}
+
+async fn read_raw_byte<T: ByteTransport + ?Sized>(
+    transport: &mut T,
+    timeout_secs: u64,
+) -> Result<Option<u8>, TransferError> {
+    match transport.read_byte(timeout_secs).await? {
+        TransferRead::Byte(byte) => Ok(Some(byte)),
+        TransferRead::TimedOut => Ok(None),
+        TransferRead::Closed => Err(TransferError::Transport),
+    }
 }
 
 pub fn send_cancel<W: Write>(writer: &mut W) -> Result<(), TransferError> {
@@ -428,6 +1084,62 @@ pub fn zfile_flags() -> [u8; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::future::Future;
+    use std::pin::Pin;
+    use tokio::sync::mpsc;
+
+    struct MemoryByteTransport {
+        rx: mpsc::UnboundedReceiver<u8>,
+        tx: mpsc::UnboundedSender<u8>,
+    }
+
+    fn memory_pair() -> (MemoryByteTransport, MemoryByteTransport) {
+        let (a_tx, b_rx) = mpsc::unbounded_channel();
+        let (b_tx, a_rx) = mpsc::unbounded_channel();
+        (
+            MemoryByteTransport { rx: a_rx, tx: a_tx },
+            MemoryByteTransport { rx: b_rx, tx: b_tx },
+        )
+    }
+
+    impl crate::ByteTransport for MemoryByteTransport {
+        fn read_byte(
+            &mut self,
+            timeout_secs: u64,
+        ) -> Pin<Box<dyn Future<Output = Result<crate::TransferRead, TransferError>> + Send + '_>>
+        {
+            Box::pin(async move {
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(timeout_secs),
+                    self.rx.recv(),
+                )
+                .await
+                {
+                    Ok(Some(byte)) => Ok(crate::TransferRead::Byte(byte)),
+                    Ok(None) => Ok(crate::TransferRead::Closed),
+                    Err(_) => Ok(crate::TransferRead::TimedOut),
+                }
+            })
+        }
+
+        fn write_all<'a>(
+            &'a mut self,
+            buf: &'a [u8],
+        ) -> Pin<Box<dyn Future<Output = Result<(), TransferError>> + Send + 'a>> {
+            Box::pin(async move {
+                for &byte in buf {
+                    self.tx.send(byte).map_err(|_| TransferError::Transport)?;
+                }
+                Ok(())
+            })
+        }
+
+        fn flush(
+            &mut self,
+        ) -> Pin<Box<dyn Future<Output = Result<(), TransferError>> + Send + '_>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
 
     #[test]
     fn binary_header_round_trips() {
@@ -623,5 +1335,194 @@ mod tests {
         send_cancel(&mut buf).expect("send cancel");
         assert_eq!(buf.len(), 20);
         assert_eq!(buf, CANCEL_SEQUENCE);
+    }
+
+    #[tokio::test]
+    async fn zmodem_loopback_download_round_trips_payload() {
+        let (mut sender, mut receiver) = memory_pair();
+        let receive_task = tokio::spawn(async move {
+            receive_zmodem_file(&mut receiver, Some(4096))
+                .await
+                .expect("receive zmodem file")
+        });
+
+        let stats = send_zmodem_file(&mut sender, "hello.bin", b"hello\xffzmodem")
+            .await
+            .expect("send zmodem file");
+        let file = receive_task.await.expect("receiver task");
+
+        assert_eq!(stats.files, 1);
+        assert_eq!(stats.bytes, 12);
+        assert_eq!(file.filename, "hello.bin");
+        assert_eq!(file.payload, b"hello\xffzmodem");
+    }
+
+    #[tokio::test]
+    async fn zmodem_loopback_batch_round_trips_multiple_files() {
+        let (mut sender, mut receiver) = memory_pair();
+        let receive_task = tokio::spawn(async move {
+            receive_zmodem_files(&mut receiver, Some(4096))
+                .await
+                .expect("receive zmodem files")
+        });
+        let files = vec![
+            ZmodemFile {
+                filename: "one.txt".to_string(),
+                payload: b"one".to_vec(),
+            },
+            ZmodemFile {
+                filename: "two.bin".to_string(),
+                payload: vec![0, 1, 2, 0xff],
+            },
+            ZmodemFile {
+                filename: "three.dat".to_string(),
+                payload: b"three".to_vec(),
+            },
+        ];
+
+        let stats = send_zmodem_files(&mut sender, &files)
+            .await
+            .expect("send zmodem batch");
+        let (received, receive_stats) = receive_task.await.expect("receiver task");
+
+        assert_eq!(stats.files, 3);
+        assert_eq!(receive_stats.files, 3);
+        assert_eq!(received, files);
+    }
+
+    #[tokio::test]
+    async fn zmodem_sender_reports_receiver_cancel() {
+        let (mut sender, mut receiver) = memory_pair();
+        let receiver_task = tokio::spawn(async move {
+            let header = read_required_header(&mut receiver)
+                .await
+                .expect("read zrqinit");
+            assert_eq!(header.kind, ZmodemFrameKind::Zrqinit);
+            write_header(
+                &mut receiver,
+                ZmodemHeader::from_flags(ZmodemFrameKind::Zrinit, zrinit_flags(), 0, 0, 0),
+            )
+            .await
+            .expect("write zrinit");
+            let header = read_required_header(&mut receiver)
+                .await
+                .expect("read zfile");
+            assert_eq!(header.kind, ZmodemFrameKind::Zfile);
+            write_header(&mut receiver, ZmodemHeader::new(ZmodemFrameKind::Zcan, 0))
+                .await
+                .expect("write zcan");
+        });
+
+        let error = send_zmodem_file(&mut sender, "cancel.bin", b"cancel")
+            .await
+            .expect_err("send should be canceled");
+        receiver_task.await.expect("receiver task");
+
+        assert_eq!(error, TransferError::Canceled);
+    }
+
+    #[tokio::test]
+    async fn zmodem_receiver_retries_after_bad_data_crc() {
+        let (mut sender, mut receiver) = memory_pair();
+        let receiver_task = tokio::spawn(async move {
+            receive_zmodem_file(&mut receiver, Some(4096))
+                .await
+                .expect("receive after retry")
+        });
+
+        let header = read_required_header(&mut sender)
+            .await
+            .expect("read initial zrinit");
+        assert_eq!(header.kind, ZmodemFrameKind::Zrinit);
+
+        let metadata = ZfileMetadata {
+            pathname: "retry.bin".to_string(),
+            size: Some(5),
+            mtime: Some(0),
+            mode: Some(0o100644),
+        };
+        write_header(
+            &mut sender,
+            ZmodemHeader {
+                kind: ZmodemFrameKind::Zfile,
+                flags: zfile_flags(),
+            },
+        )
+        .await
+        .expect("write zfile");
+        sender
+            .write_all(&encode_data_subpacket(
+                &ZmodemDataSubpacket {
+                    data: metadata.encode(),
+                    frame_end: FrameEnd::Zcrcw,
+                },
+                true,
+            ))
+            .await
+            .expect("write metadata");
+        assert_eq!(
+            read_required_header(&mut sender)
+                .await
+                .expect("read zrpos")
+                .kind,
+            ZmodemFrameKind::Zrpos
+        );
+
+        write_header(&mut sender, ZmodemHeader::new(ZmodemFrameKind::Zdata, 0))
+            .await
+            .expect("write zdata");
+        let mut bad = encode_data_subpacket(
+            &ZmodemDataSubpacket {
+                data: b"retry".to_vec(),
+                frame_end: FrameEnd::Zcrce,
+            },
+            true,
+        );
+        let last = bad.last_mut().expect("bad frame has crc");
+        *last ^= 0x55;
+        sender.write_all(&bad).await.expect("write bad data");
+        let retry_header = read_required_header(&mut sender)
+            .await
+            .expect("read retry zrpos");
+        assert_eq!(retry_header.kind, ZmodemFrameKind::Zrpos);
+        assert_eq!(retry_header.position(), 0);
+
+        write_header(&mut sender, ZmodemHeader::new(ZmodemFrameKind::Zdata, 0))
+            .await
+            .expect("write retry zdata");
+        sender
+            .write_all(&encode_data_subpacket(
+                &ZmodemDataSubpacket {
+                    data: b"retry".to_vec(),
+                    frame_end: FrameEnd::Zcrce,
+                },
+                true,
+            ))
+            .await
+            .expect("write good data");
+        write_header(&mut sender, ZmodemHeader::new(ZmodemFrameKind::Zeof, 5))
+            .await
+            .expect("write zeof");
+        assert_eq!(
+            read_required_header(&mut sender)
+                .await
+                .expect("read post-file zrinit")
+                .kind,
+            ZmodemFrameKind::Zrinit
+        );
+        write_header(&mut sender, ZmodemHeader::new(ZmodemFrameKind::Zfin, 0))
+            .await
+            .expect("write zfin");
+        assert_eq!(
+            read_required_header(&mut sender)
+                .await
+                .expect("read finish zfin")
+                .kind,
+            ZmodemFrameKind::Zfin
+        );
+
+        let file = receiver_task.await.expect("receiver task");
+        assert_eq!(file.filename, "retry.bin");
+        assert_eq!(file.payload, b"retry");
     }
 }

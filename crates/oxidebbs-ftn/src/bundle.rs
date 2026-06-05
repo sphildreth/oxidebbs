@@ -50,9 +50,6 @@ pub enum BundleError {
     #[error("unsupported FTN bundle extension {extension:?} for {path}")]
     UnsupportedExtension { path: PathBuf, extension: String },
 
-    #[error("extraction for {format:?} is not implemented yet: {path}")]
-    UnsupportedExtraction { path: PathBuf, format: BundleFormat },
-
     #[error("bundle I/O failed while trying to {operation} {path}: {message}")]
     Io {
         path: PathBuf,
@@ -164,14 +161,13 @@ pub fn classify_bundle_path(path: impl AsRef<Path>) -> Result<BundleClassificati
 pub struct BundleExtractor;
 
 impl BundleExtractor {
-    /// Return packet paths for a raw `.pkt`, extract packet entries from a ZIP
-    /// bundle, or return an explicit unsupported error for ARJ bundles.
+    /// Return packet paths for a raw `.pkt`, or extract top-level packet
+    /// entries from a ZIP or ARJ bundle.
     ///
     /// # Errors
     ///
     /// Returns classification errors for unsupported filenames. Returns
-    /// archive and I/O errors when ZIP extraction fails. Returns
-    /// `BundleError::UnsupportedExtraction` for ARJ bundles.
+    /// archive and I/O errors when ZIP or ARJ extraction fails.
     pub fn extract_packets(
         input_path: impl AsRef<Path>,
         output_dir: impl AsRef<Path>,

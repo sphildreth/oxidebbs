@@ -60,6 +60,7 @@ export default defineConfig({
         text: 'FTN Networking',
         items: [
           { text: 'Architecture', link: '/ftn/architecture' },
+          { text: 'Configuration', link: '/ftn/configuration' },
           { text: 'CLI', link: '/ftn/cli' },
           { text: 'Tosser', link: '/ftn/tosser' },
           { text: 'Scanner', link: '/ftn/scanner' },
@@ -70,7 +71,8 @@ export default defineConfig({
           { text: 'Netmail Routing', link: '/ftn/netmail-routing' },
           { text: 'AreaFix', link: '/ftn/areafix' },
           { text: 'Bundles', link: '/ftn/bundles' },
-          { text: 'BinkP', link: '/ftn/binkp' }
+          { text: 'BinkP', link: '/ftn/binkp' },
+          { text: 'Troubleshooting', link: '/ftn/troubleshooting' }
         ]
       },
       {
@@ -78,8 +80,13 @@ export default defineConfig({
         items: [
           { text: 'Overview', link: '/oxidenet/overview' },
           { text: 'Addressing', link: '/oxidenet/addressing' },
+          { text: 'Policy', link: '/oxidenet/policy' },
+          { text: 'Areas', link: '/oxidenet/areas' },
           { text: 'Registry', link: '/oxidenet/registry' },
-          { text: 'Config Package', link: '/oxidenet/config-package' }
+          { text: 'Config Package', link: '/oxidenet/config-package' },
+          { text: 'Setup Member', link: '/oxidenet/setup-member' },
+          { text: 'Hub Admin', link: '/oxidenet/hub-admin' },
+          { text: 'Troubleshooting', link: '/oxidenet/troubleshooting' }
         ]
       },
       {

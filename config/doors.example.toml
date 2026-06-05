@@ -8,3 +8,24 @@ drop_file = "DORINFO1.DEF"
 exclusive = false
 time_limit_minutes = 5
 enabled = true
+
+# Remote provider seed example. Store provider credential references through:
+#
+#   oxidebbs-server doors add bbslink-lord "BBSLink LORD" \
+#     --provider bbslink \
+#     --endpoint telnet://bbslink.example:23 \
+#     --credential-ref env:BBSLINK_AUTH_CODE \
+#     . LORD
+#
+# Do not place raw BBSLink or DoorParty secrets in TOML.
+#
+# [[definitions]]
+# key = "bbslink-lord"
+# name = "BBSLink LORD"
+# runner = "remote:bbslink"
+# working_dir = "telnet://bbslink.example:23"
+# command = "LORD"
+# drop_file = "DOOR.SYS"
+# exclusive = false
+# time_limit_minutes = 30
+# enabled = false

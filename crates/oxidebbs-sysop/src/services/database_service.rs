@@ -158,6 +158,48 @@ impl DatabaseAdminService {
         Self::count_table(db, "door_runs")
     }
 
+    pub fn backup_database_file(path: &Path) -> Result<std::path::PathBuf, SysopError> {
+        if !path.exists() {
+            return Err(SysopError::Message(format!(
+                "database file {} does not exist",
+                path.display()
+            )));
+        }
+        let backup = path.with_extension(format!(
+            "{}tui-backup",
+            path.extension()
+                .and_then(|extension| extension.to_str())
+                .map(|extension| format!("{extension}."))
+                .unwrap_or_default()
+        ));
+        fs::copy(path, &backup)?;
+        Ok(backup)
+    }
+
+    pub fn export_summary(db: &Db, output: &Path) -> Result<(), SysopError> {
+        if let Some(parent) = output.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            fs::create_dir_all(parent)?;
+        }
+        let payload = serde_json::json!({
+            "schema_version": Self::schema_version(db)?,
+            "users": Self::count_users(db)?,
+            "messages": Self::count_messages(db)?,
+            "sessions": Self::count_sessions(db)?,
+            "doors": Self::count_doors(db)?,
+            "door_runs": Self::count_door_runs(db)?,
+            "audit_events": Self::count_audit_events(db)?
+        });
+        fs::write(
+            output,
+            serde_json::to_vec_pretty(&payload).map_err(|error| {
+                SysopError::Message(format!("database export serialization failed: {error}"))
+            })?,
+        )?;
+        Ok(())
+    }
+
     pub fn run_doctor(
         db: Option<&OxideDb>,
         db_path: Option<&Path>,

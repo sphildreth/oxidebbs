@@ -4,20 +4,22 @@ AreaFix is the FTN netmail robot used to manage echomail subscriptions. A linked
 system sends netmail to `AreaFix` at the board's FTN address, with the link
 password in the subject line and commands in the message body.
 
-OxideBBS v1.2 currently includes the pure `oxidebbs-ftn` command parser and a
-local sysop-side executor:
+OxideBBS v1.2 includes the pure `oxidebbs-ftn` command parser, inbound tosser
+processing for netmail addressed to `AreaFix` or `AreaMgr`, and a local
+sysop-side executor:
 
 ```bash
 oxidebbs-server net areafix send <link> "<commands>" --password <password> [--network <network>]
 ```
 
 The executor authenticates the supplied password against the configured link
-password, applies subscription commands to DecentDB, audits the activity, and
-prints the reply text that would be sent to the link. It is intended for local
-operator testing and for proving the AreaFix state transitions before inbound
-netmail processing is wired into the tosser.
+password, applies subscription commands to DecentDB, audits the activity, queues
+an AreaFix reply as outbound netmail, prints the reply text, and queues targeted
+per-area/per-link rescans for `+AREA.TAG !` commands. Inbound AreaFix netmail
+uses the same processor and queues reply netmail plus rescan requests during
+`net toss`.
 
-The parser recognizes every planned command form and normalizes area tags to
+The parser recognizes every supported command form and normalizes area tags to
 uppercase ASCII.
 
 Supported commands:
@@ -42,10 +44,16 @@ Example body:
 %QUERY
 ```
 
-Current runtime boundaries:
+Runtime behavior:
 
-- inbound netmail addressed to `AreaFix` is not processed automatically yet
-- generated replies are printed by the CLI but are not queued as netmail yet
-- rescan requests are acknowledged but do not enqueue historical messages yet
-- manual `net areas subscribe` and `net areas unsubscribe` remain the current
-  direct operator-side subscription mutation commands
+- inbound AreaFix netmail is authenticated against the configured link password
+- `%LIST`, `%QUERY`, `%HELP`, subscribe, unsubscribe, and rescan commands are
+  audited
+- generated replies are queued as pending outbound netmail packets and are
+  materialized by `net scan`
+- `+AREA.TAG !` creates a pending `network_rescan_queue` row for that link and
+  area
+- `net rescan list/process/cancel` lets the sysop inspect, process, or cancel
+  queued rescans
+- manual `net areas subscribe` and `net areas unsubscribe` remain available for
+  direct operator-side subscription changes

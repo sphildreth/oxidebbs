@@ -4,48 +4,38 @@ BinkP is the TCP/IP mailer protocol used by OxideBBS for FTN packet and bundle
 exchange. Caller file-transfer protocols such as XMODEM-CRC and ZMODEM are not
 used for network mail exchange.
 
-The `oxidebbs-binkp` crate currently provides tested frame primitives:
+The `oxidebbs-binkp` crate provides:
 
-- command and data frame encoding
-- command and data frame decoding
-- stream read/write helpers
-- protocol errors for truncated or malformed frames
-- client handshake sending with `M_ADR` and optional `M_PWD`
-- server handshake acceptance with address/password validation and `M_OK` /
-  `M_ERR` responses
-- secret-safe refusal errors that do not echo configured passwords
-- `M_FILE` offer parsing and writing
-- bounded data-frame send/receive helpers
-- `M_GOT` acknowledgement and `M_EOB` end-of-batch handling
-- batch send/receive helpers for empty and multi-file stream exchanges
-- acknowledged batch sending for synchronous send-then-receive sessions
-- session-level filename validation that rejects path-like names
-- transport-security preflight policy for `tls_required`,
-  `tls_opportunistic`, and `plaintext_legacy`
-- exponential retry policy calculation for poll loops
-- in-process one-active-session-per-link guard primitive
+- command and data frame encoding/decoding with stream read/write helpers
+- command constants for `M_NUL`, `M_ADR`, `M_PWD`, `M_FILE`, `M_OK`, `M_EOB`,
+  `M_GOT`, `M_ERR`, `M_BSY`, `M_GET`, and `M_SKIP`
+- client and server handshakes with address/password validation
+- per-link password validation for inbound listener sessions
+- TLS-required, TLS-opportunistic, and plaintext-legacy security planning
+- TLS client and server socket helpers using TLS 1.2 or newer
+- file offer, bounded data-frame send/receive, `M_GOT`, and `M_EOB` helpers
+- batch send/receive helpers for empty polls, multi-file exchange, and large
+  files
+- retry policy and one-active-session-per-link guard primitives
 
-Implemented command constants include `M_NUL`, `M_ADR`, `M_PWD`, `M_FILE`,
-`M_OK`, `M_EOB`, `M_GOT`, `M_ERR`, `M_BSY`, `M_GET`, and `M_SKIP`.
+`net poll <link>` opens a BinkP client session, sends pending outbound packet
+files, receives the peer batch into the inbound drop directory, marks
+acknowledged outbound packet rows processed, and writes `network_poll_log`
+rows. `net poll --all` repeats that workflow for enabled links.
 
-`net poll --dry-run` uses the transport-security policy helper to report
-whether a link requires TLS, attempts TLS, allows plaintext, or needs an
-operator warning. Non-dry-run `net poll` currently supports plaintext-legacy
-client polling: it sends ready outbound files, receives the peer batch into the
-inbound drop directory, marks acknowledged outbound packets processed, and
-records `network_poll_log` rows.
+TLS-required links attempt TLS and fail the poll if certificate validation or
+the TLS handshake fails. TLS-opportunistic links attempt TLS first and fall back
+to plaintext only when the link is explicitly legacy-compatible. Plaintext
+legacy links skip TLS and emit operator-visible warnings through the security
+preflight and poll-log surfaces.
 
-Batch helpers remain stream-level primitives: an empty batch writes only
-`M_EOB`, received files are acknowledged with `M_GOT`, and the server listener
-connection lifetime remains outside the helper.
+The inbound BinkP listener accepts plaintext or TLS sockets, authenticates the
+remote address/password against enabled links, rejects plaintext sessions for
+TLS-required links before `M_OK`, writes received files into the selected
+network profile inbound drop directory, sends pending outbound files for the
+authenticated link, and marks DB-backed outbound packets processed after
+acknowledgement.
 
-Retry policy support is calculation-only. It decides whether more attempts
-remain and what delay should precede the next attempt; it does not sleep or run
-poll loops.
-
-The link session guard is also a primitive: it can prevent a second active
-session for the same link once poll/listener loops use it.
-
-TLS socket/session implementation, retry execution, one-session guard
-integration, and inbound server/listener loops are tracked by the BinkP
-transport phase in the v1.2 release plan.
+Only one active session per link is allowed inside each running poll/listener
+process. A second concurrent session for the same link is refused by the
+session guard.

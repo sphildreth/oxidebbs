@@ -6,4 +6,5 @@ pub mod log_service;
 pub mod message_service;
 pub mod network_service;
 pub mod node_service;
+pub mod oxidenet_service;
 pub mod user_service;

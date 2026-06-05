@@ -161,6 +161,11 @@ pub struct NetworkNodelistRecord {
     pub node: i64,
     pub point: i64,
     pub parsed_name: Option<String>,
+    pub location: Option<String>,
+    pub sysop_name: Option<String>,
+    pub phone: Option<String>,
+    pub speed: Option<String>,
+    pub flags: String,
     pub raw_entry: String,
     pub updated_at: String,
 }
@@ -466,8 +471,8 @@ pub fn insert_network_nodelist_entry(
     entry: &NetworkNodelistRecord,
 ) -> decentdb::Result<()> {
     db.execute_with_params(
-        "INSERT INTO network_nodelist (id, network_id, zone, net, node, point, parsed_name, raw_entry, updated_at)
-         VALUES (UUID_PARSE($1), UUID_PARSE($2), $3, $4, $5, $6, $7, $8, $9)",
+        "INSERT INTO network_nodelist (id, network_id, zone, net, node, point, parsed_name, location, sysop_name, phone, speed, flags, raw_entry, updated_at)
+         VALUES (UUID_PARSE($1), UUID_PARSE($2), $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
         &[
             Value::Text(entry.id.clone()),
             Value::Text(entry.network_id.clone()),
@@ -480,6 +485,27 @@ pub fn insert_network_nodelist_entry(
                 .as_ref()
                 .map(|value| Value::Text(value.clone()))
                 .unwrap_or(Value::Null),
+            entry
+                .location
+                .as_ref()
+                .map(|value| Value::Text(value.clone()))
+                .unwrap_or(Value::Null),
+            entry
+                .sysop_name
+                .as_ref()
+                .map(|value| Value::Text(value.clone()))
+                .unwrap_or(Value::Null),
+            entry
+                .phone
+                .as_ref()
+                .map(|value| Value::Text(value.clone()))
+                .unwrap_or(Value::Null),
+            entry
+                .speed
+                .as_ref()
+                .map(|value| Value::Text(value.clone()))
+                .unwrap_or(Value::Null),
+            Value::Text(entry.flags.clone()),
             Value::Text(entry.raw_entry.clone()),
             Value::Text(entry.updated_at.clone()),
         ],
@@ -649,7 +675,7 @@ pub fn list_network_subscriptions(db: &Db) -> decentdb::Result<Vec<NetworkSubscr
 
 pub fn list_network_nodelist_entries(db: &Db) -> decentdb::Result<Vec<NetworkNodelistRecord>> {
     let result = db.execute(
-        "SELECT UUID_TO_STRING(id), UUID_TO_STRING(network_id), zone, net, node, point, parsed_name, raw_entry, CAST(updated_at AS TEXT)
+        "SELECT UUID_TO_STRING(id), UUID_TO_STRING(network_id), zone, net, node, point, parsed_name, location, sysop_name, phone, speed, flags, raw_entry, CAST(updated_at AS TEXT)
          FROM network_nodelist ORDER BY network_id, zone, net, node",
     )?;
     Ok(result
@@ -668,7 +694,7 @@ pub fn find_network_nodelist_entry(
     point: i64,
 ) -> decentdb::Result<Option<NetworkNodelistRecord>> {
     let result = db.execute_with_params(
-        "SELECT UUID_TO_STRING(id), UUID_TO_STRING(network_id), zone, net, node, point, parsed_name, raw_entry, CAST(updated_at AS TEXT)
+        "SELECT UUID_TO_STRING(id), UUID_TO_STRING(network_id), zone, net, node, point, parsed_name, location, sysop_name, phone, speed, flags, raw_entry, CAST(updated_at AS TEXT)
          FROM network_nodelist
          WHERE network_id = UUID_PARSE($1) AND zone = $2 AND net = $3 AND node = $4 AND point = $5",
         &[
@@ -680,6 +706,22 @@ pub fn find_network_nodelist_entry(
         ],
     )?;
     Ok(result.rows().first().map(network_nodelist_from_row))
+}
+
+pub fn count_network_nodelist_entries(db: &Db, network_id: &str) -> decentdb::Result<i64> {
+    let result = db.execute_with_params(
+        "SELECT COUNT(*) FROM network_nodelist WHERE network_id = UUID_PARSE($1)",
+        &[Value::Text(network_id.to_string())],
+    )?;
+    Ok(result
+        .rows()
+        .first()
+        .and_then(|row| row.values().first())
+        .and_then(|value| match value {
+            Value::Int64(count) => Some(*count),
+            _ => None,
+        })
+        .unwrap_or(0))
 }
 
 pub fn find_network_profile_by_key(
@@ -824,6 +866,30 @@ pub fn mark_network_packet_quarantined(
          WHERE id = UUID_PARSE($2)",
         &[
             Value::Text(reason.to_string()),
+            Value::Text(packet_id.to_string()),
+        ],
+    )?;
+    Ok(result.affected_rows() > 0)
+}
+
+pub fn update_network_packet_file_status(
+    db: &Db,
+    packet_id: &str,
+    filename: &str,
+    sha256: &str,
+    size_bytes: i64,
+    status: &str,
+) -> decentdb::Result<bool> {
+    let result = db.execute_with_params(
+        "UPDATE network_packets
+         SET filename = $1, sha256 = $2, size_bytes = $3, status = $4,
+             error_message = NULL, processed_at = NULL
+         WHERE id = UUID_PARSE($5)",
+        &[
+            Value::Text(filename.to_string()),
+            Value::Text(sha256.to_string()),
+            Value::Int64(size_bytes),
+            Value::Text(status.to_string()),
             Value::Text(packet_id.to_string()),
         ],
     )?;
@@ -1033,8 +1099,13 @@ fn network_nodelist_from_row(row: &decentdb::QueryRow) -> NetworkNodelistRecord 
         node: int_value(&values[4]),
         point: int_value(&values[5]),
         parsed_name: opt_text_value(&values[6]),
-        raw_entry: text_value(&values[7]),
-        updated_at: text_value(&values[8]),
+        location: opt_text_value(&values[7]),
+        sysop_name: opt_text_value(&values[8]),
+        phone: opt_text_value(&values[9]),
+        speed: opt_text_value(&values[10]),
+        flags: text_value(&values[11]),
+        raw_entry: text_value(&values[12]),
+        updated_at: text_value(&values[13]),
     }
 }
 
@@ -1232,17 +1303,7 @@ pub fn count_network_packets_before(db: &Db, cutoff_timestamp: &str) -> decentdb
 pub fn delete_network_packets_older_than(db: &Db, cutoff_timestamp: &str) -> decentdb::Result<i64> {
     let before = count_network_packets_before(db, cutoff_timestamp)?;
 
-    // Delete associated records first (foreign key constraints)
-    db.execute_with_params(
-        "DELETE FROM network_messages
-         WHERE packet_id IN (
-             SELECT id FROM network_packets
-             WHERE created_at < CAST($1 AS TIMESTAMPTZ)
-             AND status IN ('processed', 'failed')
-         )",
-        &[Value::Text(cutoff_timestamp.to_string())],
-    )?;
-
+    // Delete associated records from leaf tables first.
     db.execute_with_params(
         "DELETE FROM network_seen_by
          WHERE message_id IN (
@@ -1265,6 +1326,16 @@ pub fn delete_network_packets_older_than(db: &Db, cutoff_timestamp: &str) -> dec
                  WHERE created_at < CAST($1 AS TIMESTAMPTZ)
                  AND status IN ('processed', 'failed')
              )
+         )",
+        &[Value::Text(cutoff_timestamp.to_string())],
+    )?;
+
+    db.execute_with_params(
+        "DELETE FROM network_messages
+         WHERE packet_id IN (
+             SELECT id FROM network_packets
+             WHERE created_at < CAST($1 AS TIMESTAMPTZ)
+             AND status IN ('processed', 'failed')
          )",
         &[Value::Text(cutoff_timestamp.to_string())],
     )?;
@@ -1652,6 +1723,11 @@ mod tests {
             node: 3,
             point: 0,
             parsed_name: Some("Node".to_string()),
+            location: Some("City".to_string()),
+            sysop_name: Some("Sysop".to_string()),
+            phone: Some("555-1212".to_string()),
+            speed: Some("9600".to_string()),
+            flags: "CM,IBN".to_string(),
             raw_entry: "Zone:1".to_string(),
             updated_at: "2026-01-01T00:00:00.000000Z".to_string(),
         }
@@ -1796,6 +1872,35 @@ mod tests {
     }
 
     #[test]
+    fn packet_file_status_update_materializes_pending_packet() {
+        let db = test_db();
+        let profile = profile();
+        insert_network_profile(&db, &profile).expect("insert profile");
+        insert_network_packet(&db, &packet(&profile.id, None)).expect("insert packet");
+
+        assert!(
+            update_network_packet_file_status(
+                &db,
+                PACKET_ID,
+                "/tmp/ready/00000001.pkt",
+                "def456",
+                123,
+                "pending",
+            )
+            .expect("update packet file status")
+        );
+
+        let packet = find_network_packet_by_id(&db, PACKET_ID)
+            .expect("find packet")
+            .expect("packet exists");
+        assert_eq!(packet.filename, "/tmp/ready/00000001.pkt");
+        assert_eq!(packet.sha256, "def456");
+        assert_eq!(packet.size_bytes, 123);
+        assert_eq!(packet.status, "pending");
+        assert_eq!(packet.processed_at, None);
+    }
+
+    #[test]
     fn message_records_preserve_raw_text_bytes() {
         let db = test_db();
         let profile = profile();
@@ -1937,6 +2042,11 @@ mod tests {
             node: 42,
             point: 7,
             parsed_name: Some("Point Node".to_string()),
+            location: Some("Point City".to_string()),
+            sysop_name: Some("Point Sysop".to_string()),
+            phone: Some("555-1213".to_string()),
+            speed: Some("14400".to_string()),
+            flags: "CM".to_string(),
             raw_entry: "Point,7,Point_Node".to_string(),
             updated_at: "2026-01-02T00:00:00.000000Z".to_string(),
         };
@@ -1947,9 +2057,11 @@ mod tests {
         let nodes = list_network_nodelist_entries(&db).expect("list nodelist");
         let found =
             find_network_nodelist_entry(&db, &profile.id, 1, 2, 42, 7).expect("find nodelist");
+        let count = count_network_nodelist_entries(&db, &profile.id).expect("count nodelist");
 
         assert_eq!(nodes, vec![replacement.clone()]);
         assert_eq!(found, Some(replacement));
+        assert_eq!(count, 1);
     }
 
     #[test]
@@ -1991,6 +2103,11 @@ mod tests {
                     node,
                     point: 0,
                     parsed_name: Some(format!("Node_{}", i)),
+                    location: Some(format!("City_{}", i)),
+                    sysop_name: Some(format!("Sysop_{}", i)),
+                    phone: Some("555-1212".to_string()),
+                    speed: Some("9600".to_string()),
+                    flags: "CM".to_string(),
                     raw_entry: format!("{},{},{},Node_{}", zone, net, node, i),
                     updated_at: "2026-06-04T00:00:00.000000Z".to_string(),
                 }

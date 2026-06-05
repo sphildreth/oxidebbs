@@ -17,7 +17,7 @@ mod schema;
 mod session_repo;
 mod user_repo;
 
-pub const SCHEMA_VERSION: i64 = 7;
+pub const SCHEMA_VERSION: i64 = 9;
 
 pub use audit_repo::{
     AuditEventRecord, insert_audit_event, insert_audit_event_preserving_record, list_audit_events,
@@ -38,9 +38,10 @@ pub use door_repo::{
 };
 pub use file_repo::{
     FileAreaRecord, FileEntryRecord, FileTransferRecord, find_file_area_by_key,
-    find_file_entry_by_id, find_file_transfer_by_id, insert_file_area, insert_file_entry,
-    insert_file_transfer, list_file_areas, list_file_entries, list_file_transfers,
-    update_file_area, update_file_entry_approved,
+    find_file_entry_by_id, find_file_entry_by_storage_name, find_file_transfer_by_id,
+    increment_file_entry_download_count, insert_file_area, insert_file_entry, insert_file_transfer,
+    list_file_areas, list_file_entries, list_file_transfers, update_file_area,
+    update_file_entry_approved,
 };
 pub use message_repo::{
     MessageAreaRecord, MessageRecord, find_message_area_by_key, find_message_by_id, insert_message,
@@ -53,22 +54,23 @@ pub use network_repo::{
     NetworkAreaRecord, NetworkDuplicateLogRecord, NetworkLinkRecord, NetworkMessageRecord,
     NetworkNodelistRecord, NetworkOperationsStats, NetworkPacketRecord, NetworkPacketSummaryRecord,
     NetworkPathNode, NetworkPollLogRecord, NetworkProfileRecord, NetworkRescanQueueRecord,
-    NetworkSeenByNode, NetworkSubscriptionRecord, count_network_packets_before,
-    delete_network_packets_older_than, find_network_area_by_tag_and_profile,
-    find_network_link_by_key, find_network_nodelist_entry, find_network_packet_by_id,
-    find_network_profile_by_id, find_network_profile_by_key, find_network_rescan_by_id,
-    finish_network_packet, finish_network_poll, get_network_operations_stats, insert_network_area,
-    insert_network_duplicate_log, insert_network_link, insert_network_message,
-    insert_network_nodelist_entry, insert_network_packet, insert_network_path,
-    insert_network_path_node, insert_network_poll_log, insert_network_profile,
-    insert_network_rescan_queue, insert_network_seen_by, insert_network_seen_by_node,
-    insert_network_subscription, list_network_areas, list_network_duplicates, list_network_links,
-    list_network_messages, list_network_nodelist_entries, list_network_packets,
-    list_network_packets_for_retention, list_network_path, list_network_poll_logs,
-    list_network_profiles, list_network_rescan_queue, list_network_seen_by,
-    list_network_subscriptions, mark_network_packet_quarantined, replace_network_nodelist_entries,
-    requeue_network_packet, set_network_area_subscribed, set_network_profile_enabled,
-    set_network_subscription_status, summarize_network_packets, update_network_rescan_status,
+    NetworkSeenByNode, NetworkSubscriptionRecord, count_network_nodelist_entries,
+    count_network_packets_before, delete_network_packets_older_than,
+    find_network_area_by_tag_and_profile, find_network_link_by_key, find_network_nodelist_entry,
+    find_network_packet_by_id, find_network_profile_by_id, find_network_profile_by_key,
+    find_network_rescan_by_id, finish_network_packet, finish_network_poll,
+    get_network_operations_stats, insert_network_area, insert_network_duplicate_log,
+    insert_network_link, insert_network_message, insert_network_nodelist_entry,
+    insert_network_packet, insert_network_path, insert_network_path_node, insert_network_poll_log,
+    insert_network_profile, insert_network_rescan_queue, insert_network_seen_by,
+    insert_network_seen_by_node, insert_network_subscription, list_network_areas,
+    list_network_duplicates, list_network_links, list_network_messages,
+    list_network_nodelist_entries, list_network_packets, list_network_packets_for_retention,
+    list_network_path, list_network_poll_logs, list_network_profiles, list_network_rescan_queue,
+    list_network_seen_by, list_network_subscriptions, mark_network_packet_quarantined,
+    replace_network_nodelist_entries, requeue_network_packet, set_network_area_subscribed,
+    set_network_profile_enabled, set_network_subscription_status, summarize_network_packets,
+    update_network_packet_file_status, update_network_rescan_status,
 };
 pub use oxidenet_repo::{
     OxideNetApplicationRecord, OxideNetCredentialRecord, OxideNetNodeRecord,

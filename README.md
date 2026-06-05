@@ -118,6 +118,9 @@ GitHub Releases publish `oxidebbs-server` packages and SHA-256 checksums for:
 
 Each package includes the server binary, bundled assets, example configs, the
 Oxide-owned `oxide-check` test door fixture, license files, and security policy.
+Manual release workflow dispatches default to a dry run that builds and smokes
+all three archive formats, verifies checksums, builds docs, and builds the
+Docker image without uploading artifacts.
 Docker remains the simplest deployment path for Windows and macOS sysops who
 want DOS door support because live door execution targets a Linux runtime with
 DOSEMU2.
@@ -289,10 +292,9 @@ update the relevant design docs and ADRs.
 - DecentDB is the only system database.
 - Remote caller UI is ANSI/CP437 byte-oriented, not Unicode-first.
 - Ratatui is used only for the local sysop console, not caller screens.
-- Physical modem/serial support, BinkP polling for FTN/FidoNet mail exchange,
-  full FTN/OxideNet runtime, caller file-area transfer support, remote admin,
-  and other previously deferred features are tracked in the v1.2 release plan
-  and are not all complete yet.
+- Physical modem/serial support, full caller file-area transfer support, remote
+  admin hardening, and other remaining deferred features are tracked in the v1.2
+  release plan and are not all complete yet.
   See [`design/RELEASE_v1_2_PLAN.md`](design/RELEASE_v1_2_PLAN.md) for the
   full deferred-scope implementation map.
 - Caller file-transfer design uses ZMODEM as the primary protocol with

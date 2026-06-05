@@ -30,6 +30,28 @@ impl BinkpServer {
         crate::handshake::accept_client_handshake(stream, policy)
     }
 
+    /// Accept the initial BinkP server handshake and enforce whether the
+    /// established transport satisfies any per-link TLS requirements.
+    ///
+    /// # Errors
+    ///
+    /// Returns protocol errors for invalid local policy or malformed peer
+    /// commands, connection refusal for address/password mismatches,
+    /// `TlsRequired` when a TLS-required link arrives over plaintext, or I/O
+    /// errors from the stream.
+    pub fn accept_handshake_with_transport_security<S: Read + Write>(
+        &self,
+        stream: &mut S,
+        policy: &BinkpServerHandshake,
+        secure_transport: bool,
+    ) -> Result<BinkpSession, BinkpError> {
+        crate::handshake::accept_client_handshake_with_transport_security(
+            stream,
+            policy,
+            secure_transport,
+        )
+    }
+
     /// Send one BinkP file offer and payload on an authenticated stream.
     ///
     /// # Errors

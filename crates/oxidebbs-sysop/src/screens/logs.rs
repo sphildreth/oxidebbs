@@ -13,6 +13,7 @@ pub struct LogsScreen {
     pub entries: Vec<crate::services::log_service::LogEntry>,
     pub table_state: TableState,
     pub log_path: PathBuf,
+    pub status: String,
 }
 
 impl LogsScreen {
@@ -24,6 +25,7 @@ impl LogsScreen {
             entries: Vec::new(),
             table_state,
             log_path,
+            status: "Idle".to_string(),
         }
     }
 
@@ -55,6 +57,17 @@ impl LogsScreen {
                 KeyCode::Esc => {
                     return UiAction::Navigate(ScreenId::Dashboard);
                 }
+                KeyCode::Char('e') => {
+                    let output = if self.log_path.is_dir() {
+                        self.log_path.join("sysop-tui-log-export.tsv")
+                    } else {
+                        self.log_path.with_extension("sysop-export.tsv")
+                    };
+                    match LogService::export(&self.entries, &output) {
+                        Ok(()) => self.status = format!("Exported to {}", output.display()),
+                        Err(error) => self.status = format!("Export failed: {error}"),
+                    }
+                }
                 KeyCode::PageUp => {
                     let current = self.table_state.selected().unwrap_or(0);
                     self.table_state.select(Some(current.saturating_sub(5)));
@@ -79,9 +92,10 @@ impl LogsScreen {
 
     pub fn render(&self, frame: &mut Frame, area: Rect) {
         let toolbar_text = format!(
-            "Log Entries: {} | Path: {}",
+            "Log Entries: {} | Path: {} | {}",
             self.entries.len(),
             self.log_path.display(),
+            self.status,
         );
         let toolbar = Paragraph::new(toolbar_text).style(self.theme.label_style());
 
@@ -143,7 +157,7 @@ impl LogsScreen {
             &mut table_state,
         );
 
-        let hints = "↑↓ Move | Esc Back";
+        let hints = "↑↓ Move | E Export Range | Esc Back";
         Paragraph::new(hints)
             .style(self.theme.muted_style())
             .block(Block::default().borders(Borders::ALL))

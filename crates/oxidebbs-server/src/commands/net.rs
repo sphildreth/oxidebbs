@@ -7,6 +7,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use clap::Subcommand;
 use serde_json::{Value as JsonValue, json};
+use sha2::{Digest, Sha256};
 
 use oxidebbs_binkp::{
     BinkpClient, BinkpClientHandshake, BinkpOutboundFile, BinkpRetryPolicy, BinkpStream,
@@ -16,20 +17,27 @@ use oxidebbs_core::FtnAddress;
 use oxidebbs_db::{
     NetworkAreaRecord, NetworkLinkRecord, NetworkNodelistRecord, NetworkPacketRecord,
     NetworkPacketSummaryRecord, NetworkPollLogRecord, NetworkProfileRecord,
-    NetworkSubscriptionRecord, count_network_packets_before, delete_network_packets_older_than,
-    find_network_area_by_tag_and_profile, find_network_link_by_key, find_network_nodelist_entry,
-    find_network_packet_by_id, find_network_profile_by_id, find_network_profile_by_key,
-    find_network_rescan_by_id, finish_network_packet, get_network_operations_stats,
-    insert_network_poll_log, insert_network_subscription, list_network_areas, list_network_links,
-    list_network_messages, list_network_nodelist_entries, list_network_packets,
-    list_network_packets_for_retention, list_network_poll_logs, list_network_profiles,
-    list_network_rescan_queue, list_network_subscriptions, mark_network_packet_quarantined,
+    NetworkSubscriptionRecord, count_network_nodelist_entries, count_network_packets_before,
+    delete_network_packets_older_than, find_network_area_by_tag_and_profile,
+    find_network_link_by_key, find_network_nodelist_entry, find_network_packet_by_id,
+    find_network_profile_by_id, find_network_profile_by_key, find_network_rescan_by_id,
+    find_oxidenet_application_by_id, find_oxidenet_node_by_address, finish_network_packet,
+    get_network_operations_stats, insert_network_message, insert_network_packet,
+    insert_network_poll_log, insert_network_rescan_queue, insert_network_subscription,
+    list_network_areas, list_network_links, list_network_messages, list_network_nodelist_entries,
+    list_network_packets, list_network_packets_for_retention, list_network_poll_logs,
+    list_network_profiles, list_network_rescan_queue, list_network_subscriptions,
+    list_oxidenet_applications, list_oxidenet_nodes, mark_network_packet_quarantined,
     replace_network_nodelist_entries, requeue_network_packet, set_network_area_subscribed,
     set_network_subscription_status, summarize_network_packets, update_network_rescan_status,
 };
 use oxidebbs_ftn::{
     AreaFixCommand, FtnNodelistEntry, Scanner, ScannerPaths, Tosser, TosserPaths,
     apply_nodelist_diff_with_options, parse_areafix_commands, parse_nodelist,
+};
+use oxidebbs_oxidenet::{
+    ApplicationSubmission, ConfigPackage, DEFAULT_MAX_ACTIVE_JOIN_TOKENS, HubSettings,
+    OXIDENET_NETWORK_KEY, OxideNetAdmin, ReviewDecision,
 };
 
 use crate::sysop_cli::{
@@ -90,6 +98,11 @@ pub enum NetCommand {
         #[command(subcommand)]
         command: NetRescanCommand,
     },
+    #[command(name = "oxidenet")]
+    OxideNet {
+        #[command(subcommand)]
+        command: NetOxideNetCommand,
+    },
 }
 
 #[derive(Subcommand)]
@@ -118,6 +131,10 @@ pub enum NodelistCommand {
         network: Option<String>,
         #[arg(short, long, default_value_t = 50)]
         limit: usize,
+    },
+    Count {
+        #[arg(long)]
+        network: Option<String>,
     },
 }
 
@@ -227,6 +244,145 @@ pub enum NetRescanCommand {
     },
 }
 
+#[derive(Subcommand)]
+pub enum NetOxideNetCommand {
+    Status,
+    InstallHub {
+        #[arg(long, default_value = "Blackboard BBS")]
+        board_name: String,
+        #[arg(long, default_value = "Blackboard Sysop")]
+        sysop_alias: String,
+        #[arg(long, default_value = "blackboard.example.net")]
+        host: String,
+        #[arg(long, default_value_t = 24554)]
+        binkp_port: u16,
+    },
+    Apply {
+        #[arg(long)]
+        board_name: String,
+        #[arg(long)]
+        sysop_alias: String,
+        #[arg(long)]
+        contact_email: String,
+        #[arg(long)]
+        host: String,
+        #[arg(long, default_value_t = 24554)]
+        binkp_port: u16,
+        #[arg(long)]
+        telnet_host: Option<String>,
+        #[arg(long)]
+        telnet_port: Option<u16>,
+        #[arg(long, default_value = "OxideBBS")]
+        software: String,
+        #[arg(long, default_value = env!("CARGO_PKG_VERSION"))]
+        software_version: String,
+        #[arg(long, default_value = "UTC")]
+        timezone: String,
+        #[arg(long, default_value = "public")]
+        region: String,
+        #[arg(long)]
+        description: String,
+        #[arg(long)]
+        reason: String,
+        #[arg(long, default_value = oxidebbs_oxidenet::OXIDENET_POLICY_VERSION)]
+        policy_version: String,
+    },
+    Applications {
+        #[command(subcommand)]
+        command: OxideNetApplicationCommand,
+    },
+    Nodes {
+        #[command(subcommand)]
+        command: OxideNetNodeCommand,
+    },
+    Tokens {
+        #[command(subcommand)]
+        command: OxideNetTokenCommand,
+    },
+    Package {
+        #[command(subcommand)]
+        command: OxideNetPackageCommand,
+    },
+    Nodelist {
+        #[arg(long)]
+        output: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum OxideNetApplicationCommand {
+    List,
+    Show {
+        application_id: String,
+    },
+    Approve {
+        application_id: String,
+        #[arg(long)]
+        address: Option<String>,
+        #[arg(long)]
+        reviewer: Option<String>,
+        #[arg(long)]
+        notes: Option<String>,
+        #[arg(long)]
+        package_dir: Option<String>,
+    },
+    Reject {
+        application_id: String,
+        #[arg(long)]
+        reviewer: Option<String>,
+        #[arg(long)]
+        notes: Option<String>,
+    },
+    RequestInfo {
+        application_id: String,
+        #[arg(long)]
+        reviewer: Option<String>,
+        #[arg(long)]
+        notes: Option<String>,
+    },
+    Hold {
+        application_id: String,
+        #[arg(long)]
+        reviewer: Option<String>,
+        #[arg(long)]
+        notes: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum OxideNetNodeCommand {
+    List,
+    Suspend { node: String },
+    Activate { node: String },
+    RotatePassword { node: String },
+}
+
+#[derive(Subcommand)]
+pub enum OxideNetTokenCommand {
+    Issue {
+        node: String,
+        #[arg(long, default_value_t = DEFAULT_MAX_ACTIVE_JOIN_TOKENS)]
+        max_active: usize,
+    },
+    Revoke {
+        credential_id: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum OxideNetPackageCommand {
+    Generate {
+        node: String,
+        #[arg(long)]
+        session_password: String,
+        #[arg(long)]
+        output: String,
+    },
+    Import {
+        dir: String,
+    },
+}
+
 pub fn run_net(command: NetCommand, ctx: &AppContext) -> CliResult<()> {
     match command {
         NetCommand::Toss { network } => run_net_toss(ctx, &network),
@@ -262,7 +418,722 @@ pub fn run_net(command: NetCommand, ctx: &AppContext) -> CliResult<()> {
             NetRescanCommand::Process { rescan_id } => run_net_rescan_process(ctx, &rescan_id),
             NetRescanCommand::Cancel { rescan_id } => run_net_rescan_cancel(ctx, &rescan_id),
         },
+        NetCommand::OxideNet { command } => run_net_oxidenet(command, ctx),
     }
+}
+
+fn run_net_oxidenet(command: NetOxideNetCommand, ctx: &AppContext) -> CliResult<()> {
+    let db = open_database(&ctx.config)?;
+    match command {
+        NetOxideNetCommand::Status => {
+            let applications = list_oxidenet_applications(db.db(), 100)?;
+            let nodes = list_oxidenet_nodes(db.db(), 100)?;
+            let profile = find_network_profile_by_key(db.db(), OXIDENET_NETWORK_KEY)?;
+            if ctx.json {
+                print_json(&json!({
+                    "profile": profile.as_ref().map(network_profile_json),
+                    "applications": applications.iter().map(oxidenet_application_json).collect::<Vec<_>>(),
+                    "nodes": nodes.iter().map(oxidenet_node_json).collect::<Vec<_>>()
+                }))
+            } else {
+                println!(
+                    "oxidenet\tprofile={}\tapplications={}\tnodes={}",
+                    profile
+                        .as_ref()
+                        .map(|profile| profile.key.as_str())
+                        .unwrap_or("not-installed"),
+                    applications.len(),
+                    nodes.len()
+                );
+                for application in applications
+                    .iter()
+                    .filter(|application| application.status == "submitted")
+                {
+                    println!(
+                        "pending\t{}\t{}\t{}\t{}",
+                        application.id,
+                        application.board_name,
+                        application.sysop_alias,
+                        application.host
+                    );
+                }
+                Ok(())
+            }
+        }
+        NetOxideNetCommand::InstallHub {
+            board_name,
+            sysop_alias,
+            host,
+            binkp_port,
+        } => {
+            let hub = HubSettings {
+                board_name,
+                sysop_alias,
+                host,
+                binkp_port,
+                ..HubSettings::default()
+            };
+            let report =
+                OxideNetAdmin::install_default_hub(db.db(), &hub).map_err(oxidenet_cli_error)?;
+            audit(
+                &db,
+                "oxidenet:install_hub",
+                None,
+                None,
+                &format!(
+                    "profile_created={} hub_node_created={} local_areas_created={} network_areas_created={}",
+                    report.profile_created,
+                    report.hub_node_created,
+                    report.local_areas_created,
+                    report.network_areas_created
+                ),
+            )?;
+            emit_ok(
+                ctx.json,
+                "oxidenet hub installed",
+                json!({
+                    "profile_created": report.profile_created,
+                    "hub_node_created": report.hub_node_created,
+                    "local_areas_created": report.local_areas_created,
+                    "network_areas_created": report.network_areas_created
+                }),
+            )
+        }
+        NetOxideNetCommand::Apply {
+            board_name,
+            sysop_alias,
+            contact_email,
+            host,
+            binkp_port,
+            telnet_host,
+            telnet_port,
+            software,
+            software_version,
+            timezone,
+            region,
+            description,
+            reason,
+            policy_version,
+        } => {
+            let application = OxideNetAdmin::submit_application(
+                db.db(),
+                &ApplicationSubmission {
+                    applicant_user_id: None,
+                    board_name,
+                    sysop_alias,
+                    contact_email,
+                    host,
+                    binkp_port,
+                    telnet_host,
+                    telnet_port,
+                    software,
+                    software_version,
+                    timezone,
+                    region,
+                    description,
+                    reason,
+                    policy_version,
+                },
+            )
+            .map_err(oxidenet_cli_error)?;
+            audit(
+                &db,
+                "oxidenet:application_submit",
+                None,
+                None,
+                &format!(
+                    "application_id={} board={} host={}",
+                    application.id, application.board_name, application.host
+                ),
+            )?;
+            if ctx.json {
+                print_json(&oxidenet_application_json(&application))
+            } else {
+                println!(
+                    "application={}\tstatus={}\tboard={}\tsysop={}",
+                    application.id,
+                    application.status,
+                    application.board_name,
+                    application.sysop_alias
+                );
+                Ok(())
+            }
+        }
+        NetOxideNetCommand::Applications { command } => {
+            run_net_oxidenet_applications(command, ctx, &db)
+        }
+        NetOxideNetCommand::Nodes { command } => run_net_oxidenet_nodes(command, ctx, &db),
+        NetOxideNetCommand::Tokens { command } => run_net_oxidenet_tokens(command, ctx, &db),
+        NetOxideNetCommand::Package { command } => run_net_oxidenet_package(command, ctx, &db),
+        NetOxideNetCommand::Nodelist { output } => {
+            let records = OxideNetAdmin::generate_nodelist(db.db()).map_err(oxidenet_cli_error)?;
+            if let Some(output) = output {
+                let path = PathBuf::from(output);
+                if let Some(parent) = path.parent()
+                    && !parent.as_os_str().is_empty()
+                {
+                    fs::create_dir_all(parent)?;
+                }
+                let text = records
+                    .iter()
+                    .map(|record| record.raw_entry.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                fs::write(&path, format!("{text}\n"))?;
+                audit(
+                    &db,
+                    "oxidenet:nodelist_generate",
+                    None,
+                    None,
+                    &format!("entries={} output={}", records.len(), path.display()),
+                )?;
+            }
+            if ctx.json {
+                print_json(&json!({
+                    "entries": records.iter().map(network_nodelist_json).collect::<Vec<_>>()
+                }))
+            } else {
+                println!("nodelist_entries={}", records.len());
+                for record in &records {
+                    println!("{}", record.raw_entry);
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+fn run_net_oxidenet_applications(
+    command: OxideNetApplicationCommand,
+    ctx: &AppContext,
+    db: &oxidebbs_db::OxideDb,
+) -> CliResult<()> {
+    match command {
+        OxideNetApplicationCommand::List => {
+            let applications = list_oxidenet_applications(db.db(), 500)?;
+            if ctx.json {
+                print_json(&json!(
+                    applications
+                        .iter()
+                        .map(oxidenet_application_json)
+                        .collect::<Vec<_>>()
+                ))
+            } else {
+                for application in applications {
+                    println!(
+                        "{}\t{}\t{}\t{}\t{}",
+                        application.id,
+                        application.status,
+                        application.board_name,
+                        application.sysop_alias,
+                        application.assigned_address.as_deref().unwrap_or("")
+                    );
+                }
+                Ok(())
+            }
+        }
+        OxideNetApplicationCommand::Show { application_id } => {
+            let application = find_oxidenet_application_by_id(db.db(), &application_id)?
+                .ok_or_else(|| {
+                    CliError::Message(format!("OxideNet application {application_id:?} not found"))
+                })?;
+            if ctx.json {
+                print_json(&oxidenet_application_json(&application))
+            } else {
+                println!(
+                    "{}\tstatus={}\tboard={}\tsysop={}\thost={}\tassigned={}",
+                    application.id,
+                    application.status,
+                    application.board_name,
+                    application.sysop_alias,
+                    application.host,
+                    application.assigned_address.as_deref().unwrap_or("")
+                );
+                println!("description={}", application.description);
+                println!("reason={}", application.reason);
+                Ok(())
+            }
+        }
+        OxideNetApplicationCommand::Approve {
+            application_id,
+            address,
+            reviewer,
+            notes,
+            package_dir,
+        } => {
+            let outcome = OxideNetAdmin::approve_application(
+                db.db(),
+                &application_id,
+                reviewer.as_deref(),
+                address.as_deref(),
+                notes.as_deref(),
+                &HubSettings::default(),
+            )
+            .map_err(oxidenet_cli_error)?;
+            if let Some(package_dir) = package_dir.as_deref() {
+                write_config_package_dir(Path::new(package_dir), &outcome.config_package)?;
+            }
+            audit(
+                db,
+                "oxidenet:application_approve",
+                reviewer.as_deref(),
+                None,
+                &format!(
+                    "application_id={} address={} package_dir={}",
+                    outcome.application.id,
+                    outcome.node.address,
+                    package_dir.as_deref().unwrap_or("")
+                ),
+            )?;
+            if ctx.json {
+                print_json(&json!({
+                    "application": oxidenet_application_json(&outcome.application),
+                    "node": oxidenet_node_json(&outcome.node),
+                    "credential": oxidenet_credential_json(&outcome.credential),
+                    "session_password": outcome.session_password,
+                    "package_written": package_dir
+                }))
+            } else {
+                println!(
+                    "approved\tapplication={}\taddress={}\tsession_password={}",
+                    outcome.application.id, outcome.node.address, outcome.session_password
+                );
+                if let Some(package_dir) = package_dir {
+                    println!("package_dir={package_dir}");
+                }
+                Ok(())
+            }
+        }
+        OxideNetApplicationCommand::Reject {
+            application_id,
+            reviewer,
+            notes,
+        } => review_oxidenet_application(
+            ctx,
+            db,
+            &application_id,
+            ReviewDecision::Reject,
+            reviewer.as_deref(),
+            notes.as_deref(),
+        ),
+        OxideNetApplicationCommand::RequestInfo {
+            application_id,
+            reviewer,
+            notes,
+        } => review_oxidenet_application(
+            ctx,
+            db,
+            &application_id,
+            ReviewDecision::RequestInfo,
+            reviewer.as_deref(),
+            notes.as_deref(),
+        ),
+        OxideNetApplicationCommand::Hold {
+            application_id,
+            reviewer,
+            notes,
+        } => review_oxidenet_application(
+            ctx,
+            db,
+            &application_id,
+            ReviewDecision::Hold,
+            reviewer.as_deref(),
+            notes.as_deref(),
+        ),
+    }
+}
+
+fn review_oxidenet_application(
+    ctx: &AppContext,
+    db: &oxidebbs_db::OxideDb,
+    application_id: &str,
+    decision: ReviewDecision,
+    reviewer: Option<&str>,
+    notes: Option<&str>,
+) -> CliResult<()> {
+    let application =
+        OxideNetAdmin::review_application(db.db(), application_id, decision, reviewer, notes)
+            .map_err(oxidenet_cli_error)?;
+    audit(
+        db,
+        "oxidenet:application_review",
+        reviewer,
+        None,
+        &format!(
+            "application_id={} status={} notes={}",
+            application.id,
+            application.status,
+            notes.unwrap_or("")
+        ),
+    )?;
+    if ctx.json {
+        print_json(&oxidenet_application_json(&application))
+    } else {
+        println!(
+            "application={}\tstatus={}",
+            application.id, application.status
+        );
+        Ok(())
+    }
+}
+
+fn run_net_oxidenet_nodes(
+    command: OxideNetNodeCommand,
+    ctx: &AppContext,
+    db: &oxidebbs_db::OxideDb,
+) -> CliResult<()> {
+    match command {
+        OxideNetNodeCommand::List => {
+            let nodes = list_oxidenet_nodes(db.db(), 500)?;
+            if ctx.json {
+                print_json(&json!(
+                    nodes.iter().map(oxidenet_node_json).collect::<Vec<_>>()
+                ))
+            } else {
+                for node in nodes {
+                    println!(
+                        "{}\t{}\t{}\t{}\tlast_success={}",
+                        node.id,
+                        node.address,
+                        node.status,
+                        node.board_name,
+                        node.last_successful_poll_at.as_deref().unwrap_or("")
+                    );
+                }
+                Ok(())
+            }
+        }
+        OxideNetNodeCommand::Suspend { node } => {
+            let node = require_oxidenet_node(db, &node)?;
+            OxideNetAdmin::set_node_suspended(db.db(), &node.id, true)
+                .map_err(oxidenet_cli_error)?;
+            audit(
+                db,
+                "oxidenet:node_suspend",
+                None,
+                None,
+                &format!("node_id={} address={}", node.id, node.address),
+            )?;
+            emit_ok(
+                ctx.json,
+                "oxidenet node suspended",
+                json!({"node_id": node.id, "address": node.address}),
+            )
+        }
+        OxideNetNodeCommand::Activate { node } => {
+            let node = require_oxidenet_node(db, &node)?;
+            OxideNetAdmin::set_node_suspended(db.db(), &node.id, false)
+                .map_err(oxidenet_cli_error)?;
+            audit(
+                db,
+                "oxidenet:node_activate",
+                None,
+                None,
+                &format!("node_id={} address={}", node.id, node.address),
+            )?;
+            emit_ok(
+                ctx.json,
+                "oxidenet node activated",
+                json!({"node_id": node.id, "address": node.address}),
+            )
+        }
+        OxideNetNodeCommand::RotatePassword { node } => {
+            let node = require_oxidenet_node(db, &node)?;
+            let token = OxideNetAdmin::rotate_session_password(db.db(), &node.id)
+                .map_err(oxidenet_cli_error)?;
+            audit(
+                db,
+                "oxidenet:node_rotate_password",
+                None,
+                None,
+                &format!("node_id={} address={}", node.id, node.address),
+            )?;
+            if ctx.json {
+                print_json(&json!({
+                    "credential": oxidenet_credential_json(&token.credential),
+                    "session_password": token.plaintext
+                }))
+            } else {
+                println!(
+                    "node={}\taddress={}\tsession_password={}",
+                    node.id, node.address, token.plaintext
+                );
+                Ok(())
+            }
+        }
+    }
+}
+
+fn run_net_oxidenet_tokens(
+    command: OxideNetTokenCommand,
+    ctx: &AppContext,
+    db: &oxidebbs_db::OxideDb,
+) -> CliResult<()> {
+    match command {
+        OxideNetTokenCommand::Issue { node, max_active } => {
+            let node = require_oxidenet_node(db, &node)?;
+            let token = OxideNetAdmin::issue_join_token(db.db(), &node.id, max_active)
+                .map_err(oxidenet_cli_error)?;
+            audit(
+                db,
+                "oxidenet:token_issue",
+                None,
+                None,
+                &format!("node_id={} credential_id={}", node.id, token.credential.id),
+            )?;
+            if ctx.json {
+                print_json(&json!({
+                    "credential": oxidenet_credential_json(&token.credential),
+                    "token": token.plaintext
+                }))
+            } else {
+                println!(
+                    "node={}\tcredential={}\ttoken={}",
+                    node.address, token.credential.id, token.plaintext
+                );
+                Ok(())
+            }
+        }
+        OxideNetTokenCommand::Revoke { credential_id } => {
+            let revoked =
+                OxideNetAdmin::revoke_token(db.db(), &credential_id).map_err(oxidenet_cli_error)?;
+            audit(
+                db,
+                "oxidenet:token_revoke",
+                None,
+                None,
+                &format!("credential_id={credential_id} revoked={revoked}"),
+            )?;
+            emit_ok(
+                ctx.json,
+                "oxidenet token revoked",
+                json!({"credential_id": credential_id, "revoked": revoked}),
+            )
+        }
+    }
+}
+
+fn run_net_oxidenet_package(
+    command: OxideNetPackageCommand,
+    ctx: &AppContext,
+    db: &oxidebbs_db::OxideDb,
+) -> CliResult<()> {
+    match command {
+        OxideNetPackageCommand::Generate {
+            node,
+            session_password,
+            output,
+        } => {
+            let node = require_oxidenet_node(db, &node)?;
+            let package = OxideNetAdmin::config_package_for_node(
+                db.db(),
+                &node,
+                &HubSettings::default(),
+                &session_password,
+                &current_timestamp(db)?,
+            )
+            .map_err(oxidenet_cli_error)?;
+            write_config_package_dir(Path::new(&output), &package)?;
+            audit(
+                db,
+                "oxidenet:package_generate",
+                None,
+                None,
+                &format!(
+                    "node_id={} address={} output={}",
+                    node.id, node.address, output
+                ),
+            )?;
+            emit_ok(
+                ctx.json,
+                "oxidenet config package generated",
+                json!({"node_id": node.id, "address": node.address, "output": output}),
+            )
+        }
+        OxideNetPackageCommand::Import { dir } => {
+            let package = read_config_package_dir(Path::new(&dir))?;
+            let report = OxideNetAdmin::import_config_package(db.db(), &package)
+                .map_err(oxidenet_cli_error)?;
+            audit(
+                db,
+                "oxidenet:package_import",
+                None,
+                None,
+                &format!(
+                    "dir={} profile_created={} link_created={} local_areas_created={} network_areas_created={}",
+                    dir,
+                    report.profile_created,
+                    report.link_created,
+                    report.local_areas_created,
+                    report.network_areas_created
+                ),
+            )?;
+            emit_ok(
+                ctx.json,
+                "oxidenet config package imported",
+                json!({
+                    "profile_created": report.profile_created,
+                    "link_created": report.link_created,
+                    "local_areas_created": report.local_areas_created,
+                    "network_areas_created": report.network_areas_created
+                }),
+            )
+        }
+    }
+}
+
+fn require_oxidenet_node(
+    db: &oxidebbs_db::OxideDb,
+    id_or_address: &str,
+) -> CliResult<oxidebbs_db::OxideNetNodeRecord> {
+    if let Some(node) = find_oxidenet_node_by_address(db.db(), id_or_address)? {
+        return Ok(node);
+    }
+    list_oxidenet_nodes(db.db(), 10_000)?
+        .into_iter()
+        .find(|node| node.id == id_or_address)
+        .ok_or_else(|| CliError::Message(format!("OxideNet node {id_or_address:?} was not found")))
+}
+
+fn write_config_package_dir(path: &Path, package: &ConfigPackage) -> CliResult<()> {
+    package.validate().map_err(oxidenet_cli_error)?;
+    fs::create_dir_all(path)?;
+    fs::write(
+        path.join("oxidenet.toml"),
+        toml::to_string_pretty(&package.oxidenet)?,
+    )?;
+    fs::write(
+        path.join("areas.toml"),
+        toml::to_string_pretty(&package.areas)?,
+    )?;
+    fs::write(
+        path.join("nodelist.toml"),
+        toml::to_string_pretty(&package.nodelist)?,
+    )?;
+    fs::write(
+        path.join("credentials.toml"),
+        toml::to_string_pretty(&package.credentials)?,
+    )?;
+    fs::write(
+        path.join("manifest.toml"),
+        toml::to_string_pretty(&BTreeMap::from([
+            ("generated_at".to_string(), package.generated_at.clone()),
+            ("token_hash".to_string(), package.token_hash.clone()),
+        ]))?,
+    )?;
+    Ok(())
+}
+
+fn read_config_package_dir(path: &Path) -> CliResult<ConfigPackage> {
+    let oxidenet = toml::from_str(&fs::read_to_string(path.join("oxidenet.toml"))?)?;
+    let areas = toml::from_str(&fs::read_to_string(path.join("areas.toml"))?)?;
+    let nodelist = toml::from_str(&fs::read_to_string(path.join("nodelist.toml"))?)?;
+    let credentials = toml::from_str(&fs::read_to_string(path.join("credentials.toml"))?)?;
+    let manifest: BTreeMap<String, String> =
+        toml::from_str(&fs::read_to_string(path.join("manifest.toml"))?)?;
+    let package = ConfigPackage {
+        oxidenet,
+        areas,
+        nodelist,
+        credentials,
+        generated_at: manifest.get("generated_at").cloned().unwrap_or_default(),
+        token_hash: manifest.get("token_hash").cloned().unwrap_or_default(),
+    };
+    package.validate().map_err(oxidenet_cli_error)?;
+    Ok(package)
+}
+
+fn oxidenet_application_json(application: &oxidebbs_db::OxideNetApplicationRecord) -> JsonValue {
+    json!({
+        "id": application.id,
+        "created_at": application.created_at,
+        "updated_at": application.updated_at,
+        "submitted_at": application.submitted_at,
+        "reviewed_at": application.reviewed_at,
+        "status": application.status,
+        "board_name": application.board_name,
+        "sysop_alias": application.sysop_alias,
+        "contact_email": application.contact_email,
+        "host": application.host,
+        "binkp_port": application.binkp_port,
+        "telnet_host": application.telnet_host,
+        "telnet_port": application.telnet_port,
+        "software": application.software,
+        "software_version": application.software_version,
+        "timezone": application.timezone,
+        "region": application.region,
+        "description": application.description,
+        "reason": application.reason,
+        "policy_version": application.policy_version,
+        "policy_accepted_at": application.policy_accepted_at,
+        "admin_notes": application.admin_notes,
+        "reviewed_by_user_id": application.reviewed_by_user_id,
+        "assigned_address": application.assigned_address
+    })
+}
+
+fn oxidenet_node_json(node: &oxidebbs_db::OxideNetNodeRecord) -> JsonValue {
+    json!({
+        "id": node.id,
+        "application_id": node.application_id,
+        "network_key": node.network_key,
+        "address": node.address,
+        "hub_address": node.hub_address,
+        "board_name": node.board_name,
+        "sysop_alias": node.sysop_alias,
+        "contact_email": node.contact_email,
+        "host": node.host,
+        "binkp_port": node.binkp_port,
+        "telnet_host": node.telnet_host,
+        "telnet_port": node.telnet_port,
+        "software": node.software,
+        "software_version": node.software_version,
+        "status": node.status,
+        "created_at": node.created_at,
+        "updated_at": node.updated_at,
+        "activated_at": node.activated_at,
+        "suspended_at": node.suspended_at,
+        "retired_at": node.retired_at,
+        "last_poll_at": node.last_poll_at,
+        "last_successful_poll_at": node.last_successful_poll_at,
+        "flags": node.flags
+    })
+}
+
+fn oxidenet_credential_json(credential: &oxidebbs_db::OxideNetCredentialRecord) -> JsonValue {
+    json!({
+        "id": credential.id,
+        "node_id": credential.node_id,
+        "credential_kind": credential.credential_kind,
+        "secret_hash": "[redacted]",
+        "created_at": credential.created_at,
+        "rotated_at": credential.rotated_at,
+        "expires_at": credential.expires_at,
+        "status": credential.status
+    })
+}
+
+fn network_nodelist_json(entry: &NetworkNodelistRecord) -> JsonValue {
+    json!({
+        "id": entry.id,
+        "network_id": entry.network_id,
+        "zone": entry.zone,
+        "net": entry.net,
+        "node": entry.node,
+        "point": entry.point,
+        "name": entry.parsed_name,
+        "location": entry.location,
+        "sysop_name": entry.sysop_name,
+        "phone": entry.phone,
+        "speed": entry.speed,
+        "flags": entry.flags,
+        "raw_entry": entry.raw_entry,
+        "updated_at": entry.updated_at
+    })
+}
+
+fn oxidenet_cli_error(error: oxidebbs_oxidenet::OxideNetError) -> CliError {
+    CliError::Message(error.to_string())
 }
 
 fn run_net_scan(ctx: &AppContext, network: &str) -> CliResult<()> {
@@ -283,6 +1154,7 @@ fn run_net_scan(ctx: &AppContext, network: &str) -> CliResult<()> {
     let netmail_materialized = scanner
         .materialize_outbound_netmail()
         .map_err(|error| CliError::Message(error.to_string()))?;
+    let bundles_created = bundle_ready_packets_for_profile(&db, &scanner, &profile)?;
 
     audit(
         &db,
@@ -290,7 +1162,7 @@ fn run_net_scan(ctx: &AppContext, network: &str) -> CliResult<()> {
         None,
         None,
         &format!(
-            "scanned outbound messages for network {} into {}; links={} packets={} messages={} skipped={} errors={} netmail_materialized={}",
+            "scanned outbound messages for network {} into {}; links={} packets={} messages={} skipped={} errors={} netmail_materialized={} bundles_created={}",
             profile.key,
             paths.outbound_root.display(),
             result.links_scanned,
@@ -298,7 +1170,8 @@ fn run_net_scan(ctx: &AppContext, network: &str) -> CliResult<()> {
             result.messages_scanned,
             result.messages_skipped,
             result.errors.len(),
-            netmail_materialized
+            netmail_materialized,
+            bundles_created
         ),
     )?;
 
@@ -312,12 +1185,13 @@ fn run_net_scan(ctx: &AppContext, network: &str) -> CliResult<()> {
                 "messages_scanned": result.messages_scanned,
                 "messages_skipped": result.messages_skipped,
                 "errors": result.errors,
-                "netmail_materialized": netmail_materialized
+                "netmail_materialized": netmail_materialized,
+                "bundles_created": bundles_created
             }
         }))
     } else {
         println!(
-            "network={}\toutbound={}\tlinks={}\tpackets={}\tmessages={}\tskipped={}\terrors={}\tnetmail={}",
+            "network={}\toutbound={}\tlinks={}\tpackets={}\tmessages={}\tskipped={}\terrors={}\tnetmail={}\tbundles={}",
             profile.key,
             paths.outbound_root.display(),
             result.links_scanned,
@@ -325,13 +1199,35 @@ fn run_net_scan(ctx: &AppContext, network: &str) -> CliResult<()> {
             result.messages_scanned,
             result.messages_skipped,
             result.errors.len(),
-            netmail_materialized
+            netmail_materialized,
+            bundles_created
         );
         for error in result.errors {
             println!("error={error}");
         }
         Ok(())
     }
+}
+
+fn bundle_ready_packets_for_profile(
+    db: &oxidebbs_db::OxideDb,
+    scanner: &Scanner<'_>,
+    profile: &NetworkProfileRecord,
+) -> CliResult<usize> {
+    let mut bundles_created = 0;
+    for link in matching_links(db, &profile.id)?
+        .into_iter()
+        .filter(|link| link.enabled && link.compression == "zip")
+    {
+        if scanner
+            .bundle_ready_packets(&link)
+            .map_err(|error| CliError::Message(error.to_string()))?
+            .is_some()
+        {
+            bundles_created += 1;
+        }
+    }
+    Ok(bundles_created)
 }
 
 fn run_net_toss(ctx: &AppContext, network: &str) -> CliResult<()> {
@@ -519,11 +1415,20 @@ fn poll_link_once(
     link: &NetworkLinkRecord,
     paths: &TosserPaths,
 ) -> CliResult<PollExecution> {
+    poll_link_once_with_retry(db, profile, link, paths, BinkpRetryPolicy::default())
+}
+
+fn poll_link_once_with_retry(
+    db: &oxidebbs_db::OxideDb,
+    profile: &NetworkProfileRecord,
+    link: &NetworkLinkRecord,
+    paths: &TosserPaths,
+    retry_policy: BinkpRetryPolicy,
+) -> CliResult<PollExecution> {
     let _session_permit = binkp_link_sessions()
         .try_acquire(&link.key)
         .map_err(|error| CliError::Message(error.to_string()))?;
 
-    let retry_policy = BinkpRetryPolicy::default();
     let mut failed_attempts = 0;
 
     loop {
@@ -534,6 +1439,10 @@ fn poll_link_once(
             Ok(mut execution) => {
                 execution.status = "success".to_string();
                 insert_poll_log(db, link, &started_at, &execution)?;
+                if profile.adapter == OXIDENET_NETWORK_KEY {
+                    OxideNetAdmin::record_node_poll(db.db(), &link.address, true)
+                        .map_err(oxidenet_cli_error)?;
+                }
                 return Ok(execution);
             }
             Err(error) => {
@@ -561,6 +1470,10 @@ fn poll_link_once(
                     error_message: Some(error.to_string()),
                 };
                 insert_poll_log(db, link, &started_at, &execution)?;
+                if profile.adapter == OXIDENET_NETWORK_KEY {
+                    OxideNetAdmin::record_node_poll(db.db(), &link.address, false)
+                        .map_err(oxidenet_cli_error)?;
+                }
                 return Err(error);
             }
         }
@@ -577,6 +1490,11 @@ fn execute_binkp_poll(
     link: &NetworkLinkRecord,
     paths: &TosserPaths,
 ) -> CliResult<PollExecution> {
+    if profile.adapter == OXIDENET_NETWORK_KEY {
+        OxideNetAdmin::ensure_node_can_exchange(db.db(), &link.address)
+            .map_err(oxidenet_cli_error)?;
+    }
+
     let security_plan = transport_security_plan(&link.transport_security)
         .map_err(|error| CliError::Message(error.to_string()))?;
 
@@ -1216,24 +2134,10 @@ fn run_net_packets_cleanup(
 }
 
 fn calculate_cutoff_timestamp(_now: &str, days: u32) -> CliResult<String> {
-    // Parse ISO 8601 timestamp and subtract days
-    // Format: 2026-06-04T15:27:58-05:00 or similar
-    let seconds_per_day = 86400;
-    let cutoff_seconds = days as i64 * seconds_per_day;
-
-    // Get current time in seconds since epoch
-    let now_secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|e| CliError::Message(format!("Failed to get current time: {}", e)))?
-        .as_secs() as i64;
-
-    let cutoff = now_secs - cutoff_seconds;
-
-    // Format as ISO 8601
-    // Simple format: YYYY-MM-DDTHH:MM:SSZ
-    // For now, just return seconds since epoch with Z suffix
-    // In production, use chrono or time crate for proper formatting
-    Ok(format!("{}Z", cutoff))
+    let cutoff = time::OffsetDateTime::now_utc() - time::Duration::days(i64::from(days));
+    cutoff
+        .format(&time::format_description::well_known::Rfc3339)
+        .map_err(|error| CliError::Message(format!("failed to format retention cutoff: {error}")))
 }
 
 fn run_nodelist(command: NodelistCommand, ctx: &AppContext) -> CliResult<()> {
@@ -1249,6 +2153,7 @@ fn run_nodelist(command: NodelistCommand, ctx: &AppContext) -> CliResult<()> {
         NodelistCommand::List { network, limit } => {
             run_nodelist_list(ctx, network.as_deref(), limit)
         }
+        NodelistCommand::Count { network } => run_nodelist_count(ctx, network.as_deref()),
     }
 }
 
@@ -1343,11 +2248,29 @@ fn nodelist_records_from_entries(
             node: i64::from(entry.address.node),
             point: i64::from(entry.address.point.unwrap_or(0)),
             parsed_name: entry.name,
+            location: entry.location,
+            sysop_name: entry.sysop_name,
+            phone: entry.phone,
+            speed: entry.speed,
+            flags: entry.flags.join(","),
             raw_entry: entry.raw_entry,
             updated_at: imported_at.clone(),
         });
     }
     Ok(records)
+}
+
+fn run_nodelist_count(ctx: &AppContext, network: Option<&str>) -> CliResult<()> {
+    let db = open_database(&ctx.config)?;
+    let profile = resolve_network_profile(&db, network)?;
+    let count = count_network_nodelist_entries(db.db(), &profile.id)?;
+
+    if ctx.json {
+        print_json(&json!({"network": profile.key, "entries": count}))
+    } else {
+        println!("{}\tentries={}", profile.key, count);
+        Ok(())
+    }
 }
 
 fn run_nodelist_lookup(ctx: &AppContext, address: &str, network: Option<String>) -> CliResult<()> {
@@ -1564,15 +2487,18 @@ fn run_net_areafix_send(
     let commands = parse_areafix_commands(command_body)
         .map_err(|error| CliError::Message(error.to_string()))?;
     let reply = execute_areafix_commands(&db, &profile, &link_record, &commands)?;
+    let reply_packet_id = queue_areafix_reply_netmail(&db, &profile, &link_record, &reply)?;
 
     if ctx.json {
         print_json(&json!({
             "network": network_profile_json(&profile),
             "link": network_link_json(&link_record),
-            "reply": reply
+            "reply": reply,
+            "reply_packet_id": reply_packet_id
         }))
     } else {
         println!("{reply}");
+        println!("reply_packet_id={reply_packet_id}");
         Ok(())
     }
 }
@@ -1636,10 +2562,8 @@ fn execute_areafix_commands(
                 )?;
                 lines.push(format!("Subscribed {}", area.area_tag));
                 if *rescan {
-                    lines.push(format!(
-                        "Rescan requested for {}; rescan queueing is not implemented yet",
-                        area.area_tag
-                    ));
+                    queue_areafix_rescan_request(db, profile, link, &area.area_tag)?;
+                    lines.push(format!("Rescan queued for {}", area.area_tag));
                 }
             }
             AreaFixCommand::Unsubscribe { area_tag } => {
@@ -1674,6 +2598,108 @@ fn execute_areafix_commands(
     )?;
 
     Ok(lines.join("\n"))
+}
+
+fn queue_areafix_reply_netmail(
+    db: &oxidebbs_db::OxideDb,
+    profile: &NetworkProfileRecord,
+    link: &NetworkLinkRecord,
+    reply: &str,
+) -> CliResult<String> {
+    let created_at = current_timestamp(db)?;
+    let packet_id = generated_uuid(db)?;
+    let message_id = generated_uuid(db)?;
+    let reply_body = reply.as_bytes().to_vec();
+    let sha256 = sha256_bytes(&reply_body);
+
+    insert_network_packet(
+        db.db(),
+        &NetworkPacketRecord {
+            id: packet_id.clone(),
+            network_id: profile.id.clone(),
+            direction: "outbound".to_string(),
+            link_id: Some(link.id.clone()),
+            filename: format!("areafix-{}.pkt", packet_id.replace('-', "")),
+            sha256,
+            size_bytes: i64::try_from(reply_body.len()).unwrap_or(i64::MAX),
+            status: "pending".to_string(),
+            error_message: None,
+            received_at: None,
+            processed_at: None,
+            created_at: created_at.clone(),
+        },
+    )?;
+
+    insert_network_message(
+        db.db(),
+        &oxidebbs_db::NetworkMessageRecord {
+            id: message_id,
+            network_id: profile.id.clone(),
+            local_message_id: None,
+            message_type: "netmail".to_string(),
+            area_tag: None,
+            origin_address: profile_address(profile),
+            destination_address: Some(link.address.clone()),
+            from_name: "AreaFix".to_string(),
+            to_name: Some("Sysop".to_string()),
+            subject: "AreaFix Response".to_string(),
+            raw_text: reply_body.clone(),
+            display_body: reply.to_string(),
+            msgid: None,
+            replyid: None,
+            created_at,
+            imported_at: None,
+            exported_at: None,
+            duplicate_hash: None,
+            packet_id: Some(packet_id.clone()),
+            status: "pending".to_string(),
+        },
+    )?;
+
+    audit(
+        db,
+        "network:areafix:reply-queued",
+        None,
+        None,
+        &format!(
+            "queued AreaFix reply netmail packet {} for link {} on network {}",
+            packet_id, link.key, profile.key
+        ),
+    )?;
+
+    Ok(packet_id)
+}
+
+fn queue_areafix_rescan_request(
+    db: &oxidebbs_db::OxideDb,
+    profile: &NetworkProfileRecord,
+    link: &NetworkLinkRecord,
+    area_tag: &str,
+) -> CliResult<()> {
+    let requested_at = current_timestamp(db)?;
+    insert_network_rescan_queue(
+        db.db(),
+        &oxidebbs_db::NetworkRescanQueueRecord {
+            id: generated_uuid(db)?,
+            network_id: profile.id.clone(),
+            link_id: link.id.clone(),
+            area_tag: area_tag.to_string(),
+            status: "pending".to_string(),
+            requested_at,
+            processed_at: None,
+        },
+    )?;
+    audit(
+        db,
+        "network:areafix:rescan-queued",
+        None,
+        None,
+        &format!(
+            "queued AreaFix rescan for link {} area {} on network {}",
+            link.key, area_tag, profile.key
+        ),
+    )?;
+    Ok(())
 }
 
 fn run_net_rescan_list(
@@ -2188,9 +3214,14 @@ fn address_for_nodelist_entry(entry: &NetworkNodelistRecord) -> String {
 
 fn print_nodelist_entry(entry: &NetworkNodelistRecord) {
     println!(
-        "{}\t{}\tupdated={}",
+        "{}\t{}\tlocation={}\tsysop={}\tphone={}\tspeed={}\tflags={}\tupdated={}",
         address_for_nodelist_entry(entry),
         entry.parsed_name.as_deref().unwrap_or(""),
+        entry.location.as_deref().unwrap_or(""),
+        entry.sysop_name.as_deref().unwrap_or(""),
+        entry.phone.as_deref().unwrap_or(""),
+        entry.speed.as_deref().unwrap_or(""),
+        entry.flags,
         entry.updated_at
     );
 }
@@ -2316,9 +3347,19 @@ fn nodelist_entry_json(entry: &NetworkNodelistRecord) -> JsonValue {
         "node": entry.node,
         "point": entry.point,
         "parsed_name": entry.parsed_name,
+        "location": entry.location,
+        "sysop_name": entry.sysop_name,
+        "phone": entry.phone,
+        "speed": entry.speed,
+        "flags": entry.flags,
         "raw_entry": entry.raw_entry,
         "updated_at": entry.updated_at
     })
+}
+
+fn sha256_bytes(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn poll_log_json(log: &NetworkPollLogRecord) -> JsonValue {
@@ -2340,11 +3381,14 @@ fn poll_log_json(log: &NetworkPollLogRecord) -> JsonValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use oxidebbs_binkp::{BinkpOutboundFile, BinkpServer, BinkpServerHandshake};
+    use oxidebbs_binkp::{
+        BinkpOutboundFile, BinkpServer, BinkpServerHandshake, BinkpTlsServerConfig, accept_tls,
+        identity_from_pkcs8_pem,
+    };
     use oxidebbs_db::{
         MessageAreaRecord, OxideDb, insert_message_area, insert_network_area, insert_network_link,
-        insert_network_packet, insert_network_profile, list_network_poll_logs,
-        list_network_subscriptions,
+        insert_network_packet, insert_network_profile, list_network_messages, list_network_packets,
+        list_network_poll_logs, list_network_subscriptions,
     };
     use std::net::TcpListener;
     use std::thread;
@@ -2384,11 +3428,18 @@ mod tests {
             node: 42,
             point: 7,
             parsed_name: Some("Point".to_string()),
+            location: Some("City".to_string()),
+            sysop_name: Some("Sysop".to_string()),
+            phone: Some("555-1212".to_string()),
+            speed: Some("9600".to_string()),
+            flags: "CM,IBN".to_string(),
             raw_entry: "Point,7,Point".to_string(),
             updated_at: "now".to_string(),
         };
 
         assert_eq!(nodelist_entry_json(&entry)["address"], "1:105/42.7");
+        assert_eq!(nodelist_entry_json(&entry)["location"], "City");
+        assert_eq!(nodelist_entry_json(&entry)["flags"], "CM,IBN");
     }
 
     #[test]
@@ -2556,6 +3607,159 @@ mod tests {
     }
 
     #[test]
+    fn poll_link_opportunistic_tls_falls_back_to_plaintext() {
+        let db = OxideDb::open_memory().expect("open db");
+        let profile = test_profile();
+        let mut link = test_link(&profile.id);
+        link.id = "00000000-0000-4000-8000-000000003011".to_string();
+        link.key = "fallback".to_string();
+        link.transport_security = "tls_opportunistic".to_string();
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind fake BinkP server");
+        link.host = "127.0.0.1".to_string();
+        link.binkp_port = i64::from(listener.local_addr().expect("addr").port());
+        insert_network_profile(db.db(), &profile).expect("insert profile");
+        insert_network_link(db.db(), &link).expect("insert link");
+        let root = temp_root("poll-opportunistic");
+
+        let server = thread::spawn(move || {
+            let (tls_probe, _) = listener.accept().expect("accept TLS probe");
+            drop(tls_probe);
+            let (mut stream, _) = listener.accept().expect("accept plaintext fallback");
+            let server = BinkpServer::new();
+            server
+                .accept_handshake(
+                    &mut stream,
+                    &BinkpServerHandshake::new(
+                        vec!["1:105/42".to_string()],
+                        Some("SECRET".to_string()),
+                    ),
+                )
+                .expect("accept handshake");
+            let files = server.receive_batch(&mut stream).expect("receive outbound");
+            assert!(files.is_empty());
+            server
+                .send_batch(&mut stream, &[])
+                .expect("send empty batch");
+        });
+
+        let execution = poll_link_once(
+            &db,
+            &profile,
+            &link,
+            &TosserPaths::under_runtime(&root, "fidonet"),
+        )
+        .expect("poll link");
+        server.join().expect("fake server joined");
+
+        assert_eq!(execution.status, "success");
+        assert_eq!(execution.packets_in, 0);
+        assert_eq!(execution.packets_out, 0);
+        let logs = list_network_poll_logs(db.db()).expect("list poll logs");
+        assert_eq!(logs[0].status, "success");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn poll_link_retries_after_failed_session_attempt() {
+        let db = OxideDb::open_memory().expect("open db");
+        let profile = test_profile();
+        let mut link = test_link(&profile.id);
+        link.id = "00000000-0000-4000-8000-000000003012".to_string();
+        link.key = "retry".to_string();
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind fake BinkP server");
+        link.host = "127.0.0.1".to_string();
+        link.binkp_port = i64::from(listener.local_addr().expect("addr").port());
+        insert_network_profile(db.db(), &profile).expect("insert profile");
+        insert_network_link(db.db(), &link).expect("insert link");
+        let root = temp_root("poll-retry");
+
+        let server = thread::spawn(move || {
+            let (failed_stream, _) = listener.accept().expect("accept failed attempt");
+            drop(failed_stream);
+            let (mut stream, _) = listener.accept().expect("accept retry attempt");
+            let server = BinkpServer::new();
+            server
+                .accept_handshake(
+                    &mut stream,
+                    &BinkpServerHandshake::new(
+                        vec!["1:105/42".to_string()],
+                        Some("SECRET".to_string()),
+                    ),
+                )
+                .expect("accept handshake");
+            let files = server.receive_batch(&mut stream).expect("receive outbound");
+            assert!(files.is_empty());
+            server
+                .send_batch(&mut stream, &[])
+                .expect("send empty batch");
+        });
+        let retry_policy =
+            BinkpRetryPolicy::new(2, Duration::from_millis(1), Duration::from_millis(1), 1)
+                .expect("retry policy");
+
+        let execution = poll_link_once_with_retry(
+            &db,
+            &profile,
+            &link,
+            &TosserPaths::under_runtime(&root, "fidonet"),
+            retry_policy,
+        )
+        .expect("poll link");
+        server.join().expect("fake server joined");
+
+        assert_eq!(execution.status, "success");
+        let logs = list_network_poll_logs(db.db()).expect("list poll logs");
+        assert_eq!(logs[0].status, "success");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn tls_required_poll_rejects_untrusted_server_certificate() {
+        let db = OxideDb::open_memory().expect("open db");
+        let profile = test_profile();
+        let mut link = test_link(&profile.id);
+        link.id = "00000000-0000-4000-8000-000000003013".to_string();
+        link.key = "tls-invalid".to_string();
+        link.transport_security = "tls_required".to_string();
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind TLS server");
+        link.host = "localhost".to_string();
+        link.binkp_port = i64::from(listener.local_addr().expect("addr").port());
+        insert_network_profile(db.db(), &profile).expect("insert profile");
+        insert_network_link(db.db(), &link).expect("insert link");
+        let root = temp_root("poll-tls-invalid");
+        let identity = tls_identity("localhost");
+
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().expect("accept TLS client");
+            let result = accept_tls(
+                stream,
+                &BinkpTlsServerConfig {
+                    identity,
+                    require_client_cert: false,
+                    client_certificates: Vec::new(),
+                },
+            );
+            assert!(result.is_err());
+        });
+
+        let error = execute_binkp_poll(
+            &db,
+            &profile,
+            &link,
+            &TosserPaths::under_runtime(&root, "fidonet"),
+        )
+        .expect_err("untrusted TLS certificate rejected");
+        server.join().expect("TLS server joined");
+
+        assert!(
+            error
+                .to_string()
+                .contains("TLS required for link tls-invalid but handshake failed")
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn areafix_subscribe_mutates_subscription_and_returns_reply() {
         let db = OxideDb::open_memory().expect("open db");
         let profile = test_profile();
@@ -2606,11 +3810,33 @@ mod tests {
         .expect("execute areafix");
 
         assert!(reply.contains("Subscribed OXIDE.GENERAL"));
-        assert!(reply.contains("Rescan requested"));
+        assert!(reply.contains("Rescan queued for OXIDE.GENERAL"));
         let subscriptions = list_network_subscriptions(db.db()).expect("subscriptions");
         assert_eq!(subscriptions.len(), 1);
         assert!(subscriptions[0].subscribed);
         assert_eq!(subscriptions[0].source, "areafix");
+        let rescans = list_network_rescan_queue(db.db(), Some(&profile.id), Some("pending"))
+            .expect("rescan queue");
+        assert_eq!(rescans.len(), 1);
+        assert_eq!(rescans[0].link_id, link.id);
+        assert_eq!(rescans[0].area_tag, "OXIDE.GENERAL");
+
+        let packet_id =
+            queue_areafix_reply_netmail(&db, &profile, &link, &reply).expect("queue reply");
+        let packets = list_network_packets(db.db()).expect("packets");
+        let reply_packet = packets
+            .iter()
+            .find(|packet| packet.id == packet_id)
+            .expect("reply packet");
+        assert_eq!(reply_packet.direction, "outbound");
+        assert_eq!(reply_packet.link_id.as_deref(), Some(link.id.as_str()));
+        assert_eq!(reply_packet.status, "pending");
+        let messages = list_network_messages(db.db()).expect("messages");
+        assert!(messages.iter().any(|message| {
+            message.packet_id.as_deref() == Some(packet_id.as_str())
+                && message.message_type == "netmail"
+                && message.status == "pending"
+        }));
     }
 
     fn test_profile() -> NetworkProfileRecord {
@@ -2653,5 +3879,16 @@ mod tests {
             .expect("time")
             .as_nanos();
         std::env::temp_dir().join(format!("oxidebbs-net-{test_name}-{suffix}"))
+    }
+
+    fn tls_identity(hostname: &str) -> oxidebbs_binkp::BinkpTlsIdentity {
+        let rcgen::CertifiedKey { cert, signing_key } =
+            rcgen::generate_simple_self_signed(vec![hostname.to_string()])
+                .expect("generate certificate");
+        identity_from_pkcs8_pem(
+            cert.pem().as_bytes(),
+            signing_key.serialize_pem().as_bytes(),
+        )
+        .expect("identity")
     }
 }

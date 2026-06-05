@@ -1,45 +1,34 @@
 # OxideNet Registry
 
-OxideNet registry storage is present in DecentDB schema `8`. It is the local
-data-model foundation for future BBS-native application review, address
-assignment, node lifecycle tracking, and credential rotation.
+DecentDB schema `8` stores OxideNet registry state.
 
-The registry is not a live public network workflow yet. It stores operator data
-and gives backup/import paths a durable shape while application screens,
-approval commands, package generation, hub polling, and suspension workflows are
-completed.
+Tables:
 
-## Tables
+- `network_applications`: application metadata, lifecycle status, policy
+  acceptance, review notes, reviewer, and assigned address.
+- `network_nodes`: assigned node records, routing metadata, lifecycle status,
+  poll timestamps, suspension state, and nodelist flags.
+- `network_credentials`: per-node hashes for BinkP session passwords and invite
+  tokens.
 
-- `network_applications` stores application metadata, lifecycle status, optional
-  applicant/reviewer user references, policy acceptance, review notes, and the
-  assigned address when one has been chosen.
-- `network_nodes` stores assigned node records, address parts, hub address,
-  contact/routing metadata, lifecycle timestamps, poll timestamps, and nodelist
-  flags.
-- `network_credentials` stores per-node credential hashes for BinkP sessions and
-  invite tokens. Plaintext secrets are not stored.
+Lifecycle commands:
 
-## Backup and Restore
+```bash
+oxidebbs-server net oxidenet applications list
+oxidebbs-server net oxidenet applications show <application-id>
+oxidebbs-server net oxidenet applications approve <application-id>
+oxidebbs-server net oxidenet applications reject <application-id>
+oxidebbs-server net oxidenet applications request-info <application-id>
+oxidebbs-server net oxidenet applications hold <application-id>
 
-`oxidebbs-server db export --format json` includes:
+oxidebbs-server net oxidenet nodes list
+oxidebbs-server net oxidenet nodes suspend 42:1/100
+oxidebbs-server net oxidenet nodes activate 42:1/100
+oxidebbs-server net oxidenet nodes rotate-password 42:1/100
 
-- `oxidenet_applications`
-- `oxidenet_nodes`
-- `oxidenet_credentials`
+oxidebbs-server net oxidenet tokens issue 42:1/100
+oxidebbs-server net oxidenet tokens revoke <credential-id>
+```
 
-`db import --format json` restores those sections after shared `network_*`
-tables and before runtime sessions, doors, and audit events. Restore validation
-checks duplicate application IDs, duplicate node addresses, missing node
-references, known lifecycle labels, valid port ranges, and nonblank credential
-hashes.
-
-## Current Boundaries
-
-- Registry rows can be inserted and queried through `oxidebbs-db` repository
-  APIs.
-- Address parsing/classification and config-package validation live in
-  `oxidebbs-oxidenet`.
-- BBS-native application submission, sysop review screens, token issuing,
-  config-package generation/import, hub polling, and suspension enforcement are
-  still future OxideNet runtime work.
+Suspended nodes are rejected by the OxideNet poll path before BinkP exchange.
+Poll attempts update the node registry and the shared network poll log.

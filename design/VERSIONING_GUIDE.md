@@ -234,3 +234,11 @@ GitHub release artifacts are built from the release tag by default. The workflow
 builds with Rust target triples but names packages with friendlier platform
 suffixes, such as `oxidebbs-v1.2.0-linux-x86_64-gnu.tar.gz`. Each uploaded
 archive should include a matching `.sha256` checksum file.
+
+Manual release workflow dispatch defaults to `dry_run = true`. A dry run checks
+out the requested release ref, builds and smokes the Linux, macOS, and Windows
+archives, verifies each generated checksum file, builds the VitePress docs, and
+builds/smokes the Docker image without requiring an existing GitHub release or
+uploading artifacts. Published GitHub release events run the same archive,
+checksum, docs, and Docker validation paths, then upload archives and checksum
+files to the release.
