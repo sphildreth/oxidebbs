@@ -34,7 +34,7 @@ Status values:
 | P5 | Door ecosystem expansion | Complete | Mutable door CLI, DecentDB door sync, exclusive local-door run enforcement, all current drop-file writers/tests, BBSLink/DoorParty dry-run and live connectors with fake-server tests, provider secret redaction primitives, provider credential secret-reference storage (door_provider_credentials table with migration 6→7), and credential redaction across CLI/TUI/logs/backups/exports exist. |
 | P6 | Database maintenance operations | Complete | Audit purge, db verify, export, import, and output-file `db compact --output <path> [--overwrite]` exist; active database replacement remains an explicit offline operator step. |
 | P7 | Sysop CLI completion | Complete | Deferred user, message, ANSI, config, door, file-transfer, network state, toss, scan, plaintext BinkP poll, local AreaFix subscription execution, subscription metadata, write-audit CLI coverage, inbound AreaFix netmail processing, reply netmail generation with outbound packet creation, rescan queueing with targeted per-area per-link rescan, and nodediff CRC validation wired to CLI exist. |
-| P8 | Sysop TUI completion | Complete | Local TUI includes dashboard, nodes, users, messages, network, OxideNet, doors, ANSI, config, database, doctor, logs, audit, and help screens; read-only guards, confirmation/audit paths, database/config/ANSI/log/audit workflows, and OxideNet operations are wired. |
+| P8 | Sysop TUI completion | Complete | Local TUI includes dashboard, nodes, users, messages, files, network, OxideNet, doors, ANSI, config, database, doctor, logs, audit, and help screens; read-only guards, confirmation/audit paths, file/database/config/ANSI/log/audit workflows, and OxideNet operations are wired. |
 | P9 | Shared network foundation | Complete | `oxidebbs-network` provides planned shared types/conversions; shared `network_*` tables and repository APIs exist; docs and tests cover the foundation. |
 | P10 | Legacy FTN packet and message engine | Complete | Type-2 packet I/O, kludge parsing/composition, duplicate-key policy, DecentDB-backed duplicate detection, docs, and tests exist. |
 | P11 | FTN toss, scan, and bundles | Complete | Network tables, packet scaffolding, raw/ZIP/ARJ bundle classification, raw pass-through, safe ZIP packet extraction, outbound ZIP bundle creation, inbound raw/ZIP/ARJ echomail tossing, outbound echomail packet scanning, netmail forwarding via NetmailRouter with .pkt file materialization, bundle creation integration, and AreaFix reply netmail composition exist. |
@@ -112,7 +112,7 @@ declared complete.
 | `messages search` | `OxideBBS_SYSOP_INTERFACE.md`, TUI specs | P7, P8 |
 | `ansi convert` | `OxideBBS_SYSOP_INTERFACE.md` | P7, P8 |
 | `config set` and config editing | `OxideBBS_SYSOP_INTERFACE.md`, TUI specs | P7, P8 |
-| TUI user edit | `SYSOP_TUI_IMPLEMENTATION_PROMPT.md` | P8 |
+| TUI user edit | `OXIDEBBS_SYSOP_INTERFACE_AND_TUI_MASTER_SPEC.md` | P8 |
 | TUI door check/drop-file viewer/dry-run/test/runtime cleanup | TUI specs | P8 |
 | TUI message area add/edit, pin/move, network metadata | TUI specs | P8, P15 |
 | TUI message search | TUI specs | P8 |
@@ -159,8 +159,9 @@ declared complete.
 
 Coverage audit update 2026-06-04:
 
-- Partial: P8, P13, P15, and P18 remain not release-complete. P7, P11,
-  P12, and P14 have been revalidated and completed for the FTN operations slice.
+- Partial: P13 and P18 remain not release-complete. P7, P8, P11, P12, P14,
+  and P15 have been revalidated and completed for the local sysop and network
+  operations slices.
 - Complete: P2 schema/config/DbWriter foundation and P3 caller authorization
   and flow polish are implemented, documented, and covered by targeted
   acceptance tests.
@@ -178,13 +179,19 @@ Coverage audit update 2026-06-04:
 - Complete: P7 sysop CLI coverage includes deferred user/message/ANSI/config/
   door/file-transfer commands, real FTN network operations, write-audit coverage,
   nodelist diff CRC validation, AreaFix reply/rescan queueing, and targeted
-  rescan processing. P8 TUI coverage still has incomplete advanced workflows.
+  rescan processing.
+- Complete: P8 TUI coverage includes local file-area operations, read-only
+  mutation guards, confirmation/audit paths, database/config/ANSI/log/audit
+  workflows, and live network/OxideNet operational views.
 - Complete: P9 shared network foundation and P10 legacy FTN packet/message
   primitives are implemented, documented, and tested.
 - Complete: P11-P12 and P14 FTN toss/scan/bundle, routing/nodelist/AreaFix,
   and operations workflows are implemented with DecentDB-backed state and
-  targeted stress/concurrency coverage. P15 OxideNet remains incomplete, and
-  P13 BinkP status is tracked separately.
+  targeted stress/concurrency coverage. P13 BinkP status is tracked separately.
+- Complete: P15 OxideNet has application review, address assignment, token and
+  credential lifecycle, config-package generation/import, hub/member defaults,
+  nodelist publication, suspended-node enforcement, CLI/TUI operations, and
+  daily-operations docs.
 - Complete: P16 remote admin/status coverage has disabled config validation,
   docs, an opt-in loopback read-only `/status` endpoint, authenticated read API
   views, cookie-backed sysop sessions, CSRF validation, replay nonce/timestamp
@@ -776,8 +783,8 @@ Status: Complete
 Audit update 2026-06-04:
 
 - Done: the local Ratatui sysop console exists with dashboard, nodes, users,
-  messages, network, doors, ANSI, config, database, doctor, logs, audit, and
-  help screens. Several user, door, database, and message workflows exist.
+  messages, files, network, doors, ANSI, config, database, doctor, logs, audit,
+  and help screens. User, door, file, database, and message workflows exist.
 - Done: a read-only Network screen is wired into `ScreenId`, the screen module
   list, navigation, and the command palette. It summarizes profiles, links,
   areas, packets, messages, poll logs, duplicate events, packet statuses, and
@@ -861,7 +868,6 @@ Acceptance criteria:
 Documentation updates:
 
 - `design/OXIDEBBS_SYSOP_INTERFACE_AND_TUI_MASTER_SPEC.md`
-- `design/SYSOP_TUI_IMPLEMENTATION_PROMPT.md`
 - `docs/project/sysop-cli.md`
 - `docs/project/sysop-tui-themes.md`
 
@@ -1532,13 +1538,13 @@ Acceptance criteria:
 Documentation updates:
 
 - `docs/oxidenet/PRD.md`
-- `docs/oxidenet/POLICY.md`
+- `docs/oxidenet/policy.md`
 - `docs/oxidenet/SETUP_MEMBER.md`
 - `docs/oxidenet/HUB_ADMIN.md`
-- `docs/oxidenet/ADDRESSING.md`
-- `docs/oxidenet/AREAS.md`
+- `docs/oxidenet/addressing.md`
+- `docs/oxidenet/areas.md`
 - `docs/oxidenet/CONFIG_PACKAGE.md`
-- `docs/oxidenet/TROUBLESHOOTING.md`
+- `docs/oxidenet/troubleshooting.md`
 - `design/OXIDENET_PRD.md`
 - `design/OXIDEBBS_SYSOP_INTERFACE_AND_TUI_MASTER_SPEC.md`
 

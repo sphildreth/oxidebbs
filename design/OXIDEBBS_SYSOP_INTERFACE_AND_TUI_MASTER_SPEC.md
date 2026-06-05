@@ -714,8 +714,8 @@ For the initial TUI:
 - No editing raw DecentDB internals.
 - No replacing the remote caller menu system.
 - No direct bundling of DOS door binaries.
-- No caller-facing file-transfer workflows in the initial TUI; file-area
-  administration is CLI-backed in v1.2.
+- No caller-facing file-transfer workflows in the local TUI; file-area
+  administration is available through the v1.2 Files screen and CLI.
 - No full ANSI art editor in the first version.
 
 ### Recommended command
@@ -2048,10 +2048,10 @@ _Note: door config check, drop-file viewer, dry-run, test launch, and runtime cl
 - Soft-delete via `MessageAdminService`.
 
 _v1.2 adds message-area enable/disable and detailed network metadata display
-for network messages. The local TUI also includes Network and OxideNet screens
-that summarize profiles, links, areas, packets, messages, poll logs, duplicate
-events, nodelist counts, applications, nodes, queues, and subscriptions from
-DecentDB._
+for network messages. The local TUI also includes Files, Network, and OxideNet
+screens that summarize file areas, file entries, transfer history, profiles,
+links, areas, packets, messages, poll logs, duplicate events, nodelist counts,
+applications, nodes, queues, and subscriptions from DecentDB._
 
 #### Milestone TUI-5: Database, logs, audit ✅ (v1.1)
 

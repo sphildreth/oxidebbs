@@ -1,7 +1,12 @@
+use std::collections::BTreeSet;
+
 use oxidebbs_db::{
-    OxideDb, OxideNetApplicationRecord, OxideNetNodeRecord, find_oxidenet_node_by_address,
-    list_network_packets, list_network_poll_logs, list_network_subscriptions,
-    list_oxidenet_applications, list_oxidenet_credentials_for_node, list_oxidenet_nodes,
+    NetworkAreaRecord, NetworkLinkRecord, NetworkNodelistRecord, NetworkPacketRecord,
+    NetworkPollLogRecord, NetworkSubscriptionRecord, OxideDb, OxideNetApplicationRecord,
+    OxideNetNodeRecord, find_network_profile_by_key, find_oxidenet_node_by_address,
+    list_network_areas, list_network_links, list_network_nodelist_entries, list_network_packets,
+    list_network_poll_logs, list_network_subscriptions, list_oxidenet_applications,
+    list_oxidenet_credentials_for_node, list_oxidenet_nodes,
 };
 use oxidebbs_oxidenet::{
     DEFAULT_MAX_ACTIVE_JOIN_TOKENS, HubSettings, OXIDENET_NETWORK_KEY, OxideNetAdmin,
@@ -11,10 +16,16 @@ use oxidebbs_oxidenet::{
 use crate::SysopError;
 use crate::services::audit_service::AuditService;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct OxideNetDashboard {
     pub applications: Vec<OxideNetApplicationRecord>,
     pub nodes: Vec<OxideNetNodeRecord>,
+    pub links: Vec<NetworkLinkRecord>,
+    pub areas: Vec<NetworkAreaRecord>,
+    pub packets: Vec<NetworkPacketRecord>,
+    pub subscription_rows: Vec<NetworkSubscriptionRecord>,
+    pub poll_log_rows: Vec<NetworkPollLogRecord>,
+    pub nodelist: Vec<NetworkNodelistRecord>,
     pub pending_applications: usize,
     pub suspended_nodes: usize,
     pub active_tokens: usize,
@@ -46,9 +57,42 @@ impl OxideNetAdminService {
                 })
                 .count();
         }
+        let profile = find_network_profile_by_key(db.db(), OXIDENET_NETWORK_KEY)?;
+        let profile_id = profile.as_ref().map(|profile| profile.id.as_str());
+        let links = list_network_links(db.db())?
+            .into_iter()
+            .filter(|link| profile_id == Some(link.network_id.as_str()))
+            .collect::<Vec<_>>();
+        let link_ids = links
+            .iter()
+            .map(|link| link.id.as_str())
+            .collect::<BTreeSet<_>>();
+        let areas = list_network_areas(db.db())?
+            .into_iter()
+            .filter(|area| profile_id == Some(area.network_id.as_str()))
+            .collect::<Vec<_>>();
+        let area_ids = areas
+            .iter()
+            .map(|area| area.id.as_str())
+            .collect::<BTreeSet<_>>();
         let packets = list_network_packets(db.db())?
             .into_iter()
-            .filter(|packet| packet.network_id == OXIDENET_NETWORK_KEY)
+            .filter(|packet| profile_id == Some(packet.network_id.as_str()))
+            .collect::<Vec<_>>();
+        let subscriptions = list_network_subscriptions(db.db())?
+            .into_iter()
+            .filter(|subscription| {
+                area_ids.contains(subscription.area_id.as_str())
+                    || link_ids.contains(subscription.link_id.as_str())
+            })
+            .collect::<Vec<_>>();
+        let poll_logs = list_network_poll_logs(db.db())?
+            .into_iter()
+            .filter(|poll| link_ids.contains(poll.link_id.as_str()))
+            .collect::<Vec<_>>();
+        let nodelist = list_network_nodelist_entries(db.db())?
+            .into_iter()
+            .filter(|entry| profile_id == Some(entry.network_id.as_str()))
             .collect::<Vec<_>>();
 
         Ok(OxideNetDashboard {
@@ -62,6 +106,11 @@ impl OxideNetAdminService {
                 .count(),
             applications,
             nodes,
+            links,
+            areas,
+            subscription_rows: subscriptions.clone(),
+            poll_log_rows: poll_logs.clone(),
+            nodelist,
             active_tokens,
             packet_queue_count: packets
                 .iter()
@@ -71,8 +120,9 @@ impl OxideNetAdminService {
                 .iter()
                 .filter(|packet| packet.status == "quarantined")
                 .count(),
-            subscriptions: list_network_subscriptions(db.db())?.len(),
-            poll_logs: list_network_poll_logs(db.db())?.len(),
+            subscriptions: subscriptions.len(),
+            poll_logs: poll_logs.len(),
+            packets,
         })
     }
 
@@ -227,5 +277,62 @@ impl OxideNetAdminService {
         Ok(list_oxidenet_nodes(db.db(), 500)?
             .into_iter()
             .find(|node| node.id == id_or_address))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::OxideNetAdminService;
+    use oxidebbs_db::{NetworkPacketRecord, OxideDb, insert_network_packet};
+    use oxidebbs_oxidenet::{HubSettings, OXIDENET_NETWORK_KEY, OxideNetAdmin};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn load_counts_only_oxidenet_profile_packets() {
+        let db_path = temp_db_path("oxidenet-dashboard");
+        let db = OxideDb::open_or_create(&db_path).expect("open db");
+        OxideNetAdmin::install_default_hub(db.db(), &HubSettings::default()).expect("install hub");
+        let profile = oxidebbs_db::find_network_profile_by_key(db.db(), OXIDENET_NETWORK_KEY)
+            .expect("find profile")
+            .expect("profile exists");
+        insert_network_packet(
+            db.db(),
+            &NetworkPacketRecord {
+                id: "00000000-0000-4000-8000-000000000651".to_string(),
+                network_id: profile.id.clone(),
+                direction: "inbound".to_string(),
+                link_id: None,
+                filename: "packet.pkt".to_string(),
+                sha256: "a".repeat(64),
+                size_bytes: 128,
+                status: "pending".to_string(),
+                error_message: None,
+                received_at: None,
+                processed_at: None,
+                created_at: "2026-06-04T00:00:00.000000Z".to_string(),
+            },
+        )
+        .expect("insert packet");
+
+        let dashboard = OxideNetAdminService::load(&db).expect("load dashboard");
+
+        assert_eq!(dashboard.packet_queue_count, 1);
+        assert_eq!(dashboard.packets.len(), 1);
+        assert_eq!(
+            dashboard.areas.len(),
+            oxidebbs_oxidenet::DEFAULT_AREAS.len()
+        );
+        let _ = std::fs::remove_file(db_path);
+    }
+
+    fn temp_db_path(name: &str) -> std::path::PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock after epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "oxidebbs-sysop-{name}-{}-{nanos}.ddb",
+            std::process::id()
+        ))
     }
 }

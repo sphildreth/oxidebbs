@@ -107,10 +107,10 @@ as active v1.2 deferred-scope work per
 [`design/RELEASE_v1_2_PLAN.md`](./RELEASE_v1_2_PLAN.md) and
 [ADR 0018](./adr/0018-v1-2-completes-deferred-scope.md).
 
-- [ ] Physical serial/modem transport
+- [x] Physical serial/modem transport
 - [ ] BinkP polling for FTN/FidoNet mail exchange
 - [ ] Full FTN tosser/scanner
 - [ ] OxideNet network support
-- [ ] Caller file-area transfers: ZMODEM primary and XMODEM-CRC fallback
+- [x] Caller file-area transfers: ZMODEM primary and XMODEM-CRC fallback
 - [x] Dedicated logoff screen rendering
 - [x] DbWriter service

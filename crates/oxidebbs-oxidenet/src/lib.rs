@@ -1211,10 +1211,11 @@ impl OxideNetAdmin {
         {
             let address = parse_oxidenet_address(&node.address)?;
             let raw_entry = format!(
-                "Node,{},{},{},24554,{}",
+                "Node,{},{},{},{},{}",
                 node.address,
                 sanitize_nodelist_text(&node.board_name),
                 sanitize_nodelist_text(&node.sysop_alias),
+                node.binkp_port,
                 node.flags
             );
             records.push(oxidebbs_db::NetworkNodelistRecord {

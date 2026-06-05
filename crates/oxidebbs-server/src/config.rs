@@ -1576,6 +1576,7 @@ fn parse_menu_action(action: &str, target: Option<&str>) -> Result<MenuAction, C
     match action.trim().to_ascii_lowercase().as_str() {
         "doors" => Ok(MenuAction::Doors),
         "messages" => Ok(MenuAction::Messages),
+        "files" => Ok(MenuAction::Files),
         "logoff" => Ok(MenuAction::Logoff),
         "new_user" | "new-user" | "newuser" => Ok(MenuAction::NewUser),
         "login" | "logon" => Ok(MenuAction::Login),
@@ -2473,6 +2474,10 @@ reserved_network_name = "FidoNet"
         assert_eq!(
             menu.route("M"),
             Some(oxidebbs_core::menu::MenuAction::Messages)
+        );
+        assert_eq!(
+            menu.route("F"),
+            Some(oxidebbs_core::menu::MenuAction::Files)
         );
         assert_eq!(menu.route("z"), None);
         assert_eq!(

@@ -23,6 +23,7 @@ pub enum ScreenId {
     Nodes,
     Users,
     Messages,
+    Files,
     Network,
     OxideNet,
     Doors,
@@ -42,6 +43,7 @@ impl ScreenId {
             Self::Nodes => "Nodes",
             Self::Users => "Users",
             Self::Messages => "Messages",
+            Self::Files => "Files",
             Self::Network => "Network",
             Self::OxideNet => "OxideNet",
             Self::Doors => "Doors",
@@ -61,6 +63,7 @@ impl ScreenId {
             Self::Nodes,
             Self::Users,
             Self::Messages,
+            Self::Files,
             Self::Network,
             Self::OxideNet,
             Self::Doors,
@@ -93,6 +96,7 @@ pub fn translate_key(key: KeyEvent) -> UiEvent {
         KeyCode::Char('u' | 'U') if control => UiEvent::NavigateTo(ScreenId::Users),
         KeyCode::Char('d' | 'D') if control => UiEvent::NavigateTo(ScreenId::Doors),
         KeyCode::Char('m' | 'M') if control => UiEvent::NavigateTo(ScreenId::Messages),
+        KeyCode::Char('f' | 'F') if control => UiEvent::NavigateTo(ScreenId::Files),
         KeyCode::Char('x' | 'X') if control => UiEvent::NavigateTo(ScreenId::Network),
         KeyCode::Char('o' | 'O') if control => UiEvent::NavigateTo(ScreenId::OxideNet),
         KeyCode::Char('l' | 'L') if control => UiEvent::NavigateTo(ScreenId::Logs),
@@ -140,6 +144,7 @@ mod tests {
     #[test]
     fn network_screen_is_in_navigation_order() {
         assert!(ScreenId::all().contains(&ScreenId::Network));
+        assert!(ScreenId::all().contains(&ScreenId::Files));
         assert!(ScreenId::all().contains(&ScreenId::OxideNet));
         assert_eq!(
             translate_key(KeyEvent::new(
@@ -147,6 +152,13 @@ mod tests {
                 KeyModifiers::CONTROL | KeyModifiers::SHIFT
             )),
             UiEvent::NavigateTo(ScreenId::Network)
+        );
+        assert_eq!(
+            translate_key(KeyEvent::new(
+                KeyCode::Char('F'),
+                KeyModifiers::CONTROL | KeyModifiers::SHIFT
+            )),
+            UiEvent::NavigateTo(ScreenId::Files)
         );
         assert_eq!(
             translate_key(KeyEvent::new(

@@ -103,8 +103,8 @@ v1.2 tasks; see the phase status map above for current completion state.
 - [x] Audit retention purge CLI wrapper.
 - [x] Dedicated logoff screen rendering from `terminal.logoff_screen`.
 - [x] DbWriter service for high-contention write scaling.
-- [ ] Physical serial/modem caller transport.
-- [ ] Caller file-area transfers: ZMODEM primary and XMODEM-CRC fallback.
+- [x] Physical serial/modem caller transport.
+- [x] Caller file-area transfers: ZMODEM primary and XMODEM-CRC fallback.
 - [x] FTN implementation slice for packet parser/writer, tosser, scanner,
   inbound bundle extraction, outbound ZIP bundle creation, nodelist import and
   lookup, duplicate detection, netmail routing runtime integration, AreaFix,

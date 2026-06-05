@@ -6,6 +6,7 @@ pub mod dashboard;
 pub mod database;
 pub mod doctor;
 pub mod doors;
+pub mod files;
 pub mod help;
 pub mod logs;
 pub mod messages;

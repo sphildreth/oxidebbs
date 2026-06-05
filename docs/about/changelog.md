@@ -36,7 +36,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `files` sysop CLI group for file-area list/add/edit, file list/import/remove,
   and transfer-history inspection.
 - `oxidebbs-transfer` CRC-16/XMODEM, XMODEM-CRC send/receive fallback, and
-  ZMODEM header framing primitives with protocol tests.
+  owned ZMODEM send/receive state machines with metadata, retry, cancel, batch,
+  and protocol loopback coverage.
+- Caller file-area workflows for ZMODEM and XMODEM-CRC uploads/downloads,
+  including security gates, upload path sanitization, pending-review uploads,
+  transfer history persistence, and telnet IAC escaping for binary transfers.
 - `oxidebbs-ftn` Type-2 packet reader/writer, echomail kludge
   parser/composer, duplicate-key policy, and DecentDB-backed duplicate detector.
 - `oxidebbs-ftn` bundle classification boundary for raw `.pkt`, ZIP arcmail,

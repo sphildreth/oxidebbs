@@ -199,8 +199,12 @@ impl FilesScreen {
             FilesView::Transfers => self.render_transfers(frame, layout[1]),
         }
         let hints = match self.view {
-            FilesView::Areas => "1-3 Tabs | Up/Down Move | D Enable/Disable | F5 Refresh | Esc Back",
-            FilesView::Entries => "1-3 Tabs | Up/Down Move | A Approve/Unapprove | F5 Refresh | Esc Back",
+            FilesView::Areas => {
+                "1-3 Tabs | Up/Down Move | D Enable/Disable | F5 Refresh | Esc Back"
+            }
+            FilesView::Entries => {
+                "1-3 Tabs | Up/Down Move | A Approve/Unapprove | F5 Refresh | Esc Back"
+            }
             FilesView::Transfers => "1-3 Tabs | Up/Down Move | F5 Refresh | Esc Back",
         };
         Paragraph::new(hints)
@@ -287,18 +291,20 @@ impl FilesScreen {
             frame,
             area,
             &mut state,
-            rows,
-            vec!["Key", "Name", "On", "Read", "Down", "Up", "Root"],
-            [
-                Constraint::Length(12),
-                Constraint::Length(22),
-                Constraint::Length(4),
-                Constraint::Length(6),
-                Constraint::Length(6),
-                Constraint::Length(6),
-                Constraint::Min(18),
-            ],
-            " File Areas ",
+            TableSpec {
+                rows,
+                header: vec!["Key", "Name", "On", "Read", "Down", "Up", "Root"],
+                widths: [
+                    Constraint::Length(12),
+                    Constraint::Length(22),
+                    Constraint::Length(4),
+                    Constraint::Length(6),
+                    Constraint::Length(6),
+                    Constraint::Length(6),
+                    Constraint::Min(18),
+                ],
+                title: " File Areas ",
+            },
             &self.theme,
         );
     }
@@ -332,17 +338,26 @@ impl FilesScreen {
             frame,
             area,
             &mut state,
-            rows,
-            vec!["Approved", "Name", "Bytes", "Down", "Original", "Description"],
-            [
-                Constraint::Length(10),
-                Constraint::Length(24),
-                Constraint::Length(10),
-                Constraint::Length(7),
-                Constraint::Length(18),
-                Constraint::Min(18),
-            ],
-            " File Entries ",
+            TableSpec {
+                rows,
+                header: vec![
+                    "Approved",
+                    "Name",
+                    "Bytes",
+                    "Down",
+                    "Original",
+                    "Description",
+                ],
+                widths: [
+                    Constraint::Length(10),
+                    Constraint::Length(24),
+                    Constraint::Length(10),
+                    Constraint::Length(7),
+                    Constraint::Length(18),
+                    Constraint::Min(18),
+                ],
+                title: " File Entries ",
+            },
             &self.theme,
         );
     }
@@ -377,18 +392,22 @@ impl FilesScreen {
             frame,
             area,
             &mut state,
-            rows,
-            vec!["Started", "Dir", "Proto", "Outcome", "Node", "Bytes", "Error"],
-            [
-                Constraint::Length(20),
-                Constraint::Length(8),
-                Constraint::Length(8),
-                Constraint::Length(12),
-                Constraint::Length(6),
-                Constraint::Length(10),
-                Constraint::Min(18),
-            ],
-            " Transfer History ",
+            TableSpec {
+                rows,
+                header: vec![
+                    "Started", "Dir", "Proto", "Outcome", "Node", "Bytes", "Error",
+                ],
+                widths: [
+                    Constraint::Length(20),
+                    Constraint::Length(8),
+                    Constraint::Length(8),
+                    Constraint::Length(12),
+                    Constraint::Length(6),
+                    Constraint::Length(10),
+                    Constraint::Min(18),
+                ],
+                title: " Transfer History ",
+            },
             &self.theme,
         );
     }
@@ -438,24 +457,28 @@ impl FilesScreen {
     }
 }
 
+struct TableSpec<'a, const N: usize> {
+    rows: Vec<Row<'a>>,
+    header: Vec<&'a str>,
+    widths: [Constraint; N],
+    title: &'a str,
+}
+
 fn render_table<const N: usize>(
     frame: &mut Frame,
     area: Rect,
     state: &mut TableState,
-    rows: Vec<Row<'_>>,
-    header: Vec<&str>,
-    widths: [Constraint; N],
-    title: &str,
+    spec: TableSpec<'_, N>,
     theme: &Theme,
 ) {
     ratatui::prelude::StatefulWidget::render(
-        Table::new(rows, widths)
-            .header(Row::new(header).style(theme.label_style()))
+        Table::new(spec.rows, spec.widths)
+            .header(Row::new(spec.header).style(theme.label_style()))
             .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .border_style(theme.block_style(true))
-                    .title(title)
+                    .title(spec.title)
                     .title_style(theme.title_style()),
             )
             .row_highlight_style(theme.selected_style()),

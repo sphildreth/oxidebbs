@@ -24,6 +24,7 @@ use crate::screens::dashboard::DashboardScreen;
 use crate::screens::database::DatabaseScreen;
 use crate::screens::doctor::DoctorScreen;
 use crate::screens::doors::DoorsScreen;
+use crate::screens::files::FilesScreen;
 use crate::screens::help::HelpScreen;
 use crate::screens::logs::LogsScreen;
 use crate::screens::messages::MessagesScreen;
@@ -94,6 +95,7 @@ pub struct App {
     pub nodes_screen: NodesScreen,
     pub users_screen: UsersScreen,
     pub messages_screen: MessagesScreen,
+    pub files_screen: FilesScreen,
     pub network_screen: NetworkScreen,
     pub oxidenet_screen: OxideNetScreen,
     pub doors_screen: DoorsScreen,
@@ -150,6 +152,7 @@ impl App {
             nodes_screen: NodesScreen::new(theme.clone(), node_count),
             users_screen: UsersScreen::new(theme.clone()),
             messages_screen: MessagesScreen::new(theme.clone()),
+            files_screen: FilesScreen::new(theme.clone()),
             network_screen: NetworkScreen::new(theme.clone()),
             oxidenet_screen: OxideNetScreen::new(theme.clone()),
             doors_screen: DoorsScreen::new(theme.clone()),
@@ -205,6 +208,14 @@ impl App {
                 shortcut: Some("Ctrl+M".into()),
                 is_destructive: false,
                 action: PaletteAction::Navigate(ScreenId::Messages),
+            },
+            PaletteCommand {
+                id: "nav.files".into(),
+                label: "Go to Files".into(),
+                description: "Manage file areas, uploads, and transfer history".into(),
+                shortcut: Some("Ctrl+F".into()),
+                is_destructive: false,
+                action: PaletteAction::Navigate(ScreenId::Files),
             },
             PaletteCommand {
                 id: "nav.network".into(),
@@ -330,6 +341,7 @@ impl App {
             self.users_screen.refresh(db);
             self.doors_screen.refresh(db);
             self.messages_screen.refresh(db);
+            self.files_screen.refresh(db);
             self.network_screen.refresh(db);
             self.oxidenet_screen.refresh(db);
             self.database_screen.refresh(db);
@@ -397,6 +409,10 @@ impl App {
                 self.messages_screen
                     .handle_event(event, &self.db, self.config.readonly)
             }
+            ScreenId::Files => {
+                self.files_screen
+                    .handle_event(event, &self.db, self.config.readonly)
+            }
             ScreenId::Network => {
                 self.network_screen
                     .handle_event(event, &self.db, self.config.readonly)
@@ -437,6 +453,7 @@ impl App {
             ScreenId::Nodes => self.nodes_screen.render(frame, area),
             ScreenId::Users => self.users_screen.render(frame, area),
             ScreenId::Messages => self.messages_screen.render(frame, area),
+            ScreenId::Files => self.files_screen.render(frame, area),
             ScreenId::Network => self.network_screen.render(frame, area),
             ScreenId::OxideNet => self.oxidenet_screen.render(frame, area),
             ScreenId::Doors => self.doors_screen.render(frame, area),
@@ -671,6 +688,7 @@ fn handle_ui_event(app: &mut App, event: UiEvent) {
                 app.users_screen.cancel_pending_action();
                 app.doors_screen.cancel_pending_action();
                 app.messages_screen.cancel_pending_action();
+                app.files_screen.cancel_pending_action();
                 app.oxidenet_screen.cancel_pending_action();
                 app.modal = None;
             }
@@ -735,6 +753,7 @@ fn handle_ui_event(app: &mut App, event: UiEvent) {
                             app.users_screen.cancel_pending_action();
                             app.doors_screen.cancel_pending_action();
                             app.messages_screen.cancel_pending_action();
+                            app.files_screen.cancel_pending_action();
                             app.oxidenet_screen.cancel_pending_action();
                             app.modal = None;
                         }
@@ -921,6 +940,7 @@ fn block_readonly_action(app: &mut App, title: &str) {
     app.users_screen.cancel_pending_action();
     app.doors_screen.cancel_pending_action();
     app.messages_screen.cancel_pending_action();
+    app.files_screen.cancel_pending_action();
     app.oxidenet_screen.cancel_pending_action();
     set_info_message(
         app,
@@ -1245,6 +1265,17 @@ fn handle_confirm_submit(app: &mut App, title: &str) {
                 Err(error) => set_error(app, title, error),
             }
         }
+        "Enable File Area"
+        | "Disable File Area"
+        | "Approve File Entry"
+        | "Unapprove File Entry" => match app.files_screen.confirm_pending_action(&app.db) {
+            Ok(Some(message)) => {
+                app.refresh_data();
+                app.set_status(message);
+            }
+            Ok(None) => app.refresh_data(),
+            Err(error) => set_error(app, title, error),
+        },
         "Install OxideNet Hub"
         | "Approve OxideNet Application"
         | "Reject OxideNet Application"

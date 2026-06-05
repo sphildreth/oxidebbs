@@ -1684,17 +1684,17 @@ Acceptance criteria:
 
 ## Documentation deliverables
 
-OxideNet should eventually include:
+OxideNet v1.2 includes:
 
 ```text
 docs/oxidenet/PRD.md
-docs/oxidenet/POLICY.md
+docs/oxidenet/policy.md
 docs/oxidenet/SETUP_MEMBER.md
 docs/oxidenet/HUB_ADMIN.md
-docs/oxidenet/ADDRESSING.md
-docs/oxidenet/AREAS.md
+docs/oxidenet/addressing.md
+docs/oxidenet/areas.md
 docs/oxidenet/CONFIG_PACKAGE.md
-docs/oxidenet/TROUBLESHOOTING.md
+docs/oxidenet/troubleshooting.md
 ```
 
 ## Final product vision

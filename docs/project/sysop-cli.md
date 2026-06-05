@@ -498,11 +498,11 @@ OXIDE_DOOR_INTERACTIVE=1 ./scripts/test-oxide-door-dosemu2.sh
 
 ## File Areas and Transfers
 
-File-area administration remains local CLI driven, while callers can use the
-configured `files` menu action for live ZMODEM or XMODEM-CRC uploads and
-downloads when `[file_transfers].enabled = true`. Sysops can create areas,
-import files, safely remove entries, approve uploaded files, and inspect
-transfer history.
+File-area administration is available from both the local sysop TUI and CLI.
+The TUI Files screen shows areas, entries, and transfer history, and can
+enable/disable areas or approve/unapprove entries with confirmation and audit
+logging. Callers can use the configured `files` menu action for live ZMODEM or
+XMODEM-CRC uploads and downloads when `[file_transfers].enabled = true`.
 
 Area management:
 
@@ -537,6 +537,8 @@ Operational notes:
   requires `--reason`; it does not delete the stored file bytes.
 - `--json` returns stable top-level objects for list and mutation responses.
 - File-area mutations, imports, and removals write audit events.
+- The TUI Files screen reuses the same DecentDB repository state and preserves
+  read-only mode by blocking area and entry mutations.
 
 ## Database operations
 

@@ -1394,23 +1394,27 @@ Manual smoke scripts should cover:
 
 ## Implementation Order
 
+Implementation status: complete for v1.2 P4 as of 2026-06-05. The ordered
+checklist below is retained as the historical implementation sequence and as a
+maintenance map for future protocol work.
+
 Agents should implement in this order:
 
-1. Add `oxidebbs-transfer` crate with no server integration.
-2. Implement CRC helpers and byte-transport test harness.
-3. Implement path sanitizer and metadata structs.
-4. Implement XMODEM-CRC send/receive and loopback tests.
-5. Implement ZMODEM constants, escaping, headers, and CRC tests.
-6. Implement ZMODEM receive state machine.
-7. Implement ZMODEM send state machine.
-8. Add fault-injection loopback tests.
-9. Add server preflight state and DecentDB transfer history.
-10. Add file-area storage and temp-file commit behavior.
-11. Add telnet `BinaryTransferGuard`.
-12. Add caller menu actions.
-13. Add serial loopback coverage after serial transport exists.
-14. Add optional external interop tests.
-15. Update caller docs and config examples.
+1. [x] Add `oxidebbs-transfer` crate with no server integration.
+2. [x] Implement CRC helpers and byte-transport test harness.
+3. [x] Implement path sanitizer and metadata structs.
+4. [x] Implement XMODEM-CRC send/receive and loopback tests.
+5. [x] Implement ZMODEM constants, escaping, headers, and CRC tests.
+6. [x] Implement ZMODEM receive state machine.
+7. [x] Implement ZMODEM send state machine.
+8. [x] Add fault-injection loopback tests.
+9. [x] Add server preflight state and DecentDB transfer history.
+10. [x] Add file-area storage and temp-file commit behavior.
+11. [x] Add telnet binary-transfer IAC escaping.
+12. [x] Add caller menu actions.
+13. [x] Add serial loopback coverage after serial transport exists.
+14. [ ] Add optional external interop tests.
+15. [x] Update caller docs and config examples.
 
 Do not start with caller menus. The protocol engines and fault-injection tests
 must exist first.
