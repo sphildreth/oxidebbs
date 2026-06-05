@@ -281,6 +281,8 @@ impl ScreenConfig {
 #[derive(Debug, Clone, Deserialize)]
 pub struct MenuConfig {
     pub screen: String,
+    #[serde(default)]
+    pub help_screen: Option<String>,
     #[serde(default = "default_menu_prompt")]
     pub prompt: String,
     #[serde(default)]
@@ -781,6 +783,13 @@ impl OxideConfig {
                     menu.screen
                 )));
             }
+            if let Some(help_screen) = &menu.help_screen
+                && !self.screens.contains_key(help_screen)
+            {
+                return Err(ConfigError::Validation(format!(
+                    "menus.{name}.help_screen references missing screen {help_screen:?}"
+                )));
+            }
             if menu.items.is_empty() {
                 return Err(ConfigError::Validation(format!(
                     "menus.{name} must define at least one item"
@@ -799,6 +808,12 @@ impl OxideConfig {
                 if key_chars.next().is_some() || !key.is_ascii() {
                     return Err(ConfigError::Validation(format!(
                         "menus.{name} item key {:?} must be exactly one ASCII character",
+                        item.key
+                    )));
+                }
+                if key == '?' {
+                    return Err(ConfigError::Validation(format!(
+                        "menus.{name} item key {:?} is reserved for contextual help",
                         item.key
                     )));
                 }
@@ -1029,6 +1044,7 @@ impl OxideConfig {
             screen: ScreenAsset {
                 asset: menu.screen.clone(),
             },
+            help_screen: menu.help_screen.clone().map(|screen| ScreenAsset { asset: screen }),
             entries,
             pre_menu_screens: self
                 .flow

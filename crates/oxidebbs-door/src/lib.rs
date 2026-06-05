@@ -203,16 +203,19 @@ pub fn render_door_sys(caller: &DoorCaller, node_number: u16, baud_rate: u32) ->
 }
 
 pub fn render_dorinfo1_def(board_name: &str, sysop_name: &str, caller: &DoorCaller) -> String {
+    let (sysop_first_name, sysop_last_name) = split_name(sysop_name);
     let (first_name, last_name) = split_name(&caller.real_name);
     [
         board_name.to_string(),
-        sysop_name.to_string(),
+        sysop_first_name,
+        sysop_last_name,
         "COM1".to_string(),
         "38400 BAUD,N,8,1".to_string(),
         "0".to_string(),
         first_name,
         last_name,
         caller.location.clone(),
+        "1".to_string(),
         caller.security_level.to_string(),
         caller.minutes_remaining.to_string(),
     ]
@@ -287,6 +290,7 @@ pub fn render_callinfo_bbs(caller: &DoorCaller, node_number: u16, baud_rate: u32
 pub fn prepare_door_run(request: &DoorRunRequest) -> Result<DoorRunPlan, DoorError> {
     fs::create_dir_all(&request.runtime_dir)?;
     let drop_file_path = request.runtime_dir.join(&request.door.drop_file);
+    let plan = dosemu2_plan(request, drop_file_path.clone())?;
     let drop_contents = match request.door.drop_file.to_ascii_uppercase().as_str() {
         "DORINFO1.DEF" => {
             render_dorinfo1_def(&request.board_name, &request.sysop_name, &request.caller)
@@ -314,7 +318,7 @@ pub fn prepare_door_run(request: &DoorRunRequest) -> Result<DoorRunPlan, DoorErr
         format!("node={}\r\n", request.node_number),
     )?;
 
-    dosemu2_plan(request, drop_file_path)
+    Ok(plan)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -361,6 +365,7 @@ pub fn dosemu2_plan(
     let door_working_dir = absolute_host_path(Path::new(&request.door.working_dir))?;
     let runtime_dir = absolute_host_path(&request.runtime_dir)?;
     let command = resolve_dosemu2_command(&door_working_dir, &request.door.command)?;
+    stage_dosemu2_working_dir(&door_working_dir, &runtime_dir)?;
     let runtime_command = stage_dosemu2_command(&runtime_dir, &command)?;
     let mut dos_command = runtime_command;
     if !command.args.is_empty() {
@@ -382,6 +387,83 @@ pub fn dosemu2_plan(
         drop_file_path,
         timeout: Duration::from_secs(u64::from(request.door.time_limit_minutes) * 60),
     })
+}
+
+fn stage_dosemu2_working_dir(source_dir: &Path, runtime_dir: &Path) -> Result<(), DoorError> {
+    fs::create_dir_all(runtime_dir)?;
+    if normalize_path(source_dir.to_path_buf()) == normalize_path(runtime_dir.to_path_buf()) {
+        return Ok(());
+    }
+
+    for entry in fs::read_dir(source_dir)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() {
+            continue;
+        }
+        stage_dosemu2_support_entry(
+            &entry.path(),
+            &runtime_dir.join(entry.file_name()),
+            &file_type,
+        )?;
+    }
+
+    Ok(())
+}
+
+fn stage_dosemu2_support_entry(
+    source_path: &Path,
+    target_path: &Path,
+    file_type: &fs::FileType,
+) -> Result<(), DoorError> {
+    if file_type.is_dir() {
+        fs::create_dir_all(target_path)?;
+        for entry in fs::read_dir(source_path)? {
+            let entry = entry?;
+            let child_file_type = entry.file_type()?;
+            if child_file_type.is_symlink() {
+                continue;
+            }
+            stage_dosemu2_support_entry(
+                &entry.path(),
+                &target_path.join(entry.file_name()),
+                &child_file_type,
+            )?;
+        }
+        return Ok(());
+    }
+
+    if file_type.is_file() {
+        stage_dosemu2_file(source_path, target_path)?;
+    }
+
+    Ok(())
+}
+
+fn stage_dosemu2_file(source_path: &Path, target_path: &Path) -> Result<(), DoorError> {
+    if let Some(parent) = target_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    if target_path.exists() {
+        if fs::symlink_metadata(target_path)?.is_dir() {
+            fs::remove_dir_all(target_path)?;
+        } else {
+            fs::remove_file(target_path)?;
+        }
+    }
+    if let Err(link_error) = fs::hard_link(source_path, target_path) {
+        fs::copy(source_path, target_path).map_err(|copy_error| {
+            DoorError::Io(std::io::Error::new(
+                copy_error.kind(),
+                format!(
+                    "failed to stage door support file {} into runtime {}: hard link failed: {link_error}; copy failed: {copy_error}",
+                    source_path.display(),
+                    target_path.display()
+                ),
+            ))
+        })?;
+    }
+    Ok(())
 }
 
 fn stage_dosemu2_command(
@@ -1286,12 +1368,14 @@ command = "LORD.EXE"
             concat!(
                 "Oxide\r\n",
                 "Sysop\r\n",
+                "\r\n",
                 "COM1\r\n",
                 "38400 BAUD,N,8,1\r\n",
                 "0\r\n",
                 "Alice\r\n",
                 "Sysop\r\n",
                 "Localhost\r\n",
+                "1\r\n",
                 "50\r\n",
                 "30\r\n"
             )
@@ -1510,7 +1594,7 @@ command = "LORD.EXE"
         DryRunDoorRunner.run(&request).expect("dry run");
 
         let drop_file = fs::read_to_string(runtime_dir.join("DORINFO1.DEF")).expect("drop file");
-        assert!(drop_file.starts_with("Test Board\r\nTest Sysop\r\n"));
+        assert!(drop_file.starts_with("Test Board\r\nTest\r\nSysop\r\n"));
         assert!(drop_file.contains("Alice\r\nSysop\r\n"));
 
         cleanup_node_runtime_dir(&base).expect("cleanup");

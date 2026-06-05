@@ -9,6 +9,8 @@ pub struct Menu {
     pub title: String,
     pub description: Option<String>,
     pub screen: ScreenAsset,
+    #[serde(default)]
+    pub help_screen: Option<ScreenAsset>,
     pub entries: Vec<MenuEntry>,
     #[serde(default)]
     pub pre_menu_screens: Vec<ScreenAsset>,
@@ -106,6 +108,7 @@ mod tests {
             screen: ScreenAsset {
                 asset: "screens/menus/main/main.ans".to_string(),
             },
+            help_screen: None,
             pre_menu_screens: vec![
                 ScreenAsset {
                     asset: "ansi/welcome.ans".to_string(),
@@ -168,6 +171,7 @@ mod tests {
             screen: ScreenAsset {
                 asset: "screens/menus/main/main.ans".to_string(),
             },
+            help_screen: None,
             entries: vec![
                 MenuEntry {
                     key: "D".to_string(),
@@ -223,6 +227,7 @@ mod tests {
             screen: ScreenAsset {
                 asset: "screens/menus/main/main.ans".to_string(),
             },
+            help_screen: None,
             pre_menu_screens: vec![],
             entries: vec![
                 MenuEntry {

@@ -286,7 +286,9 @@ boundary.
 Generated drop files use the active board configuration for board and sysop
 identity. `DORINFO1.DEF` maps the caller's user-profile real name into its
 first-name and last-name fields because that format has no separate alias field.
-`DOOR.SYS` includes both alias and real name.
+It uses the legacy 12-line layout with sysop first/last names, caller first/last
+names, ANSI flag, security level, and minutes remaining. `DOOR.SYS` includes
+both alias and real name.
 
 The live caller door bridge is DOSEMU2-specific. Door runner values must resolve
 to a DOSEMU2-compatible binary such as `dosemu`; DOSBox/DOSBox-Staging is not a
@@ -599,3 +601,25 @@ Required test categories:
 - Door runner dry-run tests
 - DecentDB repository integration tests
 - Session disconnect cleanup tests
+
+## 17. Caller menu help
+
+In any configured BBS menu, `?` is reserved for contextual help. If the menu
+defines `help_screen`, the runtime displays that screen. Otherwise, it generates
+a command list from the live menu entries, filtering commands the caller cannot
+access by security level.
+
+`R` redisplays the current menu screen only when the active menu does not define
+its own `R` command. Configured menu commands take precedence over the global
+redisplay fallback.
+
+Caller screen payloads support byte-level OxideBBS display-code expansion
+without decoding ANSI/CP437 art as Unicode. Display files and prompts may use
+`@CODE@` values, including `@NODE@`, `@NODES@`, `@BBS@`, `@SYSOP@`,
+`@USER@`, and `@SECURITY@`, with optional width formatting such as
+`@NODE:03@`.
+
+`@@` emits a literal at-sign. Unknown or malformed display-code sequences are
+left unchanged. Legacy bundled node markers such as `001 / 004`, `NNN / TTT`,
+and `NODE 001` remain supported as compatibility shims, but new bundled and
+sysop-authored art should use display codes.

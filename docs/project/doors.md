@@ -21,6 +21,30 @@ Current capabilities:
   service methods. CLI output, TUI detail display, audit details, and JSON
   exports show provider credential refs only as `[redacted]`.
 
+## DORINFO1.DEF Layout
+
+OxideBBS writes `DORINFO1.DEF` using the legacy 12-line shape expected by
+line-number-driven DOS doors:
+
+```text
+1  board name
+2  sysop first name
+3  sysop last name
+4  COM port
+5  baud string
+6  reserved/zero
+7  caller first name
+8  caller last name
+9  caller location
+10 ANSI/graphics flag
+11 caller security level
+12 caller minutes remaining
+```
+
+For DOSEMU2 live doors, prefer disabling RTS/CTS hardware handshaking in the
+door's own config when it offers those options. OxideBBS bridges a PTY-backed
+virtual COM port, not a physical modem with hardware flow-control lines.
+
 Remote provider definitions use the existing door fields:
 
 - `runner = "remote:bbslink"` or `runner = "remote:doorparty"`

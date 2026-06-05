@@ -140,10 +140,14 @@ pause = false
 
 [menus.main]
 screen = "main_menu"
+# Optional: if present, ? displays this screen instead of generated command help.
+# help_screen = "main_help"
 prompt = "Command? "
 
 [menus.login]
 screen = "login"
+# Optional: if present, ? displays this screen instead of generated command help.
+# help_screen = "login_help"
 prompt = "Login? "
 
 [[menus.login.items]]

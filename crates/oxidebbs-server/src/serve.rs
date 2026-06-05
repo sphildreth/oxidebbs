@@ -92,6 +92,16 @@ const TERMINAL_CAPABILITY_NEGOTIATION_TIMEOUT: Duration = Duration::from_millis(
 #[cfg(unix)]
 const STALE_NODE_SWEEP_INTERVAL: Duration = Duration::from_secs(30);
 
+#[derive(Debug, Clone)]
+struct ScreenRenderContext {
+    node_number: u16,
+    node_count: u16,
+    board_name: String,
+    sysop_name: String,
+    caller_alias: Option<String>,
+    security_level: Option<i32>,
+}
+
 fn server_start_audit_details(config: &OxideConfig) -> String {
     let binkp_listener = config
         .network
@@ -760,14 +770,30 @@ async fn handle_caller_transport<T: Transport>(
     }
 
     runtime.mark_node_login(node_number_u16);
+    let mut screen_context = ScreenRenderContext {
+        node_number: node_number_u16,
+        node_count: config.nodes.count,
+        board_name: config.board.name.clone(),
+        sysop_name: config.board.sysop_name.clone(),
+        caller_alias: None,
+        security_level: None,
+    };
     send_terminal_asset(
         &mut transport,
         &config.terminal.welcome_screen,
         &config,
         capabilities,
+        &screen_context,
     )
     .await?;
-    send_login_flow(&mut transport, &config, &login_menu, &mut capabilities).await?;
+    send_login_flow(
+        &mut transport,
+        &config,
+        &login_menu,
+        &mut capabilities,
+        &screen_context,
+    )
+    .await?;
 
     let mut in_main_menu = false;
     let mut disconnect_reason = "caller_disconnected".to_string();
@@ -838,6 +864,37 @@ async fn handle_caller_transport<T: Transport>(
                     "caller selected menu key"
                 );
 
+                let user_security = if in_main_menu {
+                    authenticated_user.as_ref().map(|user| user.security_level)
+                } else {
+                    None
+                };
+                if key == "?" {
+                    send_menu_help(
+                        &mut transport,
+                        &config,
+                        &current_menu,
+                        &mut capabilities,
+                        user_security,
+                        &screen_context,
+                    )
+                    .await?;
+                    send_menu_prompt(&mut transport, &current_menu, &screen_context).await?;
+                    continue;
+                }
+                if key == "R" && current_menu.route_entry("R").is_none() {
+                    send_screen(
+                        &mut transport,
+                        &config,
+                        &current_menu.screen.asset,
+                        &mut capabilities,
+                        &screen_context,
+                    )
+                    .await?;
+                    send_menu_prompt(&mut transport, &current_menu, &screen_context).await?;
+                    continue;
+                }
+
                 if !in_main_menu {
                     let route = current_menu.route(&key);
                     if route.is_some()
@@ -845,7 +902,7 @@ async fn handle_caller_transport<T: Transport>(
                         && entry.min_security_level > 0
                     {
                         send_text(&mut transport, ACCESS_DENIED_MESSAGE).await?;
-                        send_menu_prompt(&mut transport, &current_menu).await?;
+                        send_menu_prompt(&mut transport, &current_menu, &screen_context).await?;
                         continue;
                     }
                     match route {
@@ -872,12 +929,15 @@ async fn handle_caller_transport<T: Transport>(
                                             Some(user.id.clone()),
                                             Some(user.alias.clone()),
                                         );
+                                        screen_context.caller_alias = Some(user.alias.clone());
+                                        screen_context.security_level = Some(user.security_level);
                                     }
                                     current_menu = Arc::clone(&main_menu);
                                     show_post_login_screens(
                                         &mut transport,
                                         &config,
                                         &mut capabilities,
+                                        &screen_context,
                                     )
                                     .await?;
                                     send_main_menu(
@@ -885,13 +945,14 @@ async fn handle_caller_transport<T: Transport>(
                                         &config,
                                         &main_menu,
                                         &mut capabilities,
+                                        &screen_context,
                                     )
                                     .await?;
                                     runtime.mark_node_main_menu(node_number_u16);
                                     in_main_menu = true;
                                 }
                                 AuthFlowResult::Retry => {
-                                    send_menu_prompt(&mut transport, &current_menu).await?;
+                                    send_menu_prompt(&mut transport, &current_menu, &screen_context).await?;
                                 }
                                 AuthFlowResult::Exit => break,
                             }
@@ -919,12 +980,15 @@ async fn handle_caller_transport<T: Transport>(
                                             Some(user.id.clone()),
                                             Some(user.alias.clone()),
                                         );
+                                        screen_context.caller_alias = Some(user.alias.clone());
+                                        screen_context.security_level = Some(user.security_level);
                                     }
                                     current_menu = Arc::clone(&main_menu);
                                     show_post_login_screens(
                                         &mut transport,
                                         &config,
                                         &mut capabilities,
+                                        &screen_context,
                                     )
                                     .await?;
                                     send_main_menu(
@@ -932,13 +996,14 @@ async fn handle_caller_transport<T: Transport>(
                                         &config,
                                         &main_menu,
                                         &mut capabilities,
+                                        &screen_context,
                                     )
                                     .await?;
                                     runtime.mark_node_main_menu(node_number_u16);
                                     in_main_menu = true;
                                 }
                                 AuthFlowResult::Retry => {
-                                    send_menu_prompt(&mut transport, &current_menu).await?;
+                                    send_menu_prompt(&mut transport, &current_menu, &screen_context).await?;
                                 }
                                 AuthFlowResult::Exit => break,
                             }
@@ -946,27 +1011,28 @@ async fn handle_caller_transport<T: Transport>(
                         Some(MenuAction::Logoff) => {
                             debug!(node = %node_number, "caller selected login-menu logoff");
                             disconnect_reason = "caller_logoff".to_string();
-                            send_logoff_screen(&mut transport, &config, capabilities).await;
+                            send_logoff_screen(&mut transport, &config, capabilities, &screen_context)
+                                .await;
                             break;
                         }
                         Some(MenuAction::Submenu { menu_id }) => {
                             debug!(node = %node_number, submenu = %menu_id, "caller selected submenu");
                             if let Some(submenu) = resolve_submenu(&menus, &menu_id) {
                                 current_menu = Arc::clone(&submenu);
-                                send_menu_prompt(&mut transport, &current_menu).await?;
+                                send_menu_prompt(&mut transport, &current_menu, &screen_context).await?;
                             } else {
                                 send_text(
                                     &mut transport,
                                     "Configured submenu menu is missing.\r\n",
                                 )
                                 .await?;
-                                send_menu_prompt(&mut transport, &current_menu).await?;
+                                send_menu_prompt(&mut transport, &current_menu, &screen_context).await?;
                             }
                         }
                         _ => {
                             send_text(&mut transport, "Select Login, New User, or Goodbye.\r\n")
                                 .await?;
-                            send_menu_prompt(&mut transport, &current_menu).await?;
+                            send_menu_prompt(&mut transport, &current_menu, &screen_context).await?;
                         }
                     }
                 } else {
@@ -983,7 +1049,7 @@ async fn handle_caller_transport<T: Transport>(
                             "caller denied by menu item min_security_level"
                         );
                         send_text(&mut transport, ACCESS_DENIED_MESSAGE).await?;
-                        send_menu_prompt(&mut transport, &current_menu).await?;
+                        send_menu_prompt(&mut transport, &current_menu, &screen_context).await?;
                         continue;
                     }
                     match current_menu.route(&key) {
@@ -1007,7 +1073,7 @@ async fn handle_caller_transport<T: Transport>(
                             {
                                 MenuFlowResult::Continue => {
                                     runtime.mark_node_main_menu(node_number_u16);
-                                    send_menu_prompt(&mut transport, &current_menu).await?;
+                                    send_menu_prompt(&mut transport, &current_menu, &screen_context).await?;
                                 }
                                 MenuFlowResult::Exit => break,
                             }
@@ -1032,7 +1098,7 @@ async fn handle_caller_transport<T: Transport>(
                             {
                                 MenuFlowResult::Continue => {
                                     runtime.mark_node_main_menu(node_number_u16);
-                                    send_menu_prompt(&mut transport, &current_menu).await?;
+                                    send_menu_prompt(&mut transport, &current_menu, &screen_context).await?;
                                 }
                                 MenuFlowResult::Exit => {
                                     break;
@@ -1056,7 +1122,7 @@ async fn handle_caller_transport<T: Transport>(
                             {
                                 MenuFlowResult::Continue => {
                                     runtime.mark_node_main_menu(node_number_u16);
-                                    send_menu_prompt(&mut transport, &current_menu).await?;
+                                    send_menu_prompt(&mut transport, &current_menu, &screen_context).await?;
                                 }
                                 MenuFlowResult::Exit => break,
                             }
@@ -1065,39 +1131,46 @@ async fn handle_caller_transport<T: Transport>(
                             debug!(node = %node_number, "authenticated caller selected new-user action");
                             send_text(&mut transport, "Already signed in. Return to menu.\r\n")
                                 .await?;
-                            send_menu_prompt(&mut transport, &current_menu).await?;
+                            send_menu_prompt(&mut transport, &current_menu, &screen_context).await?;
                         }
                         Some(MenuAction::Logoff) => {
                             debug!(node = %node_number, "caller selected main-menu logoff");
                             disconnect_reason = "caller_logoff".to_string();
-                            send_logoff_screen(&mut transport, &config, capabilities).await;
+                            send_logoff_screen(&mut transport, &config, capabilities, &screen_context)
+                                .await;
                             break;
                         }
                         Some(MenuAction::ShowScreen { screen }) => {
                             debug!(node = %node_number, screen = %screen.asset, "caller selected show-screen action");
-                            send_screen(&mut transport, &config, &screen.asset, &mut capabilities)
-                                .await?;
-                            send_menu_prompt(&mut transport, &current_menu).await?;
+                            send_screen(
+                                &mut transport,
+                                &config,
+                                &screen.asset,
+                                &mut capabilities,
+                                &screen_context,
+                            )
+                            .await?;
+                            send_menu_prompt(&mut transport, &current_menu, &screen_context).await?;
                         }
                         Some(MenuAction::Submenu { menu_id }) => {
                             debug!(node = %node_number, submenu = %menu_id, "caller selected submenu");
                             if let Some(submenu) = resolve_submenu(&menus, &menu_id) {
                                 current_menu = Arc::clone(&submenu);
-                                send_menu_prompt(&mut transport, &current_menu).await?;
+                                send_menu_prompt(&mut transport, &current_menu, &screen_context).await?;
                             } else {
                                 send_text(
                                     &mut transport,
                                     "Configured submenu menu is missing.\r\n",
                                 )
                                 .await?;
-                                send_menu_prompt(&mut transport, &current_menu).await?;
+                                send_menu_prompt(&mut transport, &current_menu, &screen_context).await?;
                             }
                         }
                         Some(MenuAction::Login) => {
                             debug!(node = %node_number, "authenticated caller selected login action");
                             send_text(&mut transport, "Already signed in. Return to menu.\r\n")
                                 .await?;
-                            send_menu_prompt(&mut transport, &current_menu).await?;
+                            send_menu_prompt(&mut transport, &current_menu, &screen_context).await?;
                         }
                         Some(MenuAction::Noop) => {
                             debug!(node = %node_number, "caller selected noop action");
@@ -1110,7 +1183,7 @@ async fn handle_caller_transport<T: Transport>(
                                 "caller selected unknown menu key"
                             );
                             send_text(&mut transport, "Unknown option.\r\n").await?;
-                            send_menu_prompt(&mut transport, &current_menu).await?;
+                            send_menu_prompt(&mut transport, &current_menu, &screen_context).await?;
                         }
                     }
                 }
@@ -3659,9 +3732,17 @@ async fn send_login_flow<T: Transport>(
     config: &OxideConfig,
     login_menu: &Menu,
     capabilities: &mut TerminalCapabilities,
+    context: &ScreenRenderContext,
 ) -> ServeResult<()> {
-    send_screen(transport, config, &config.flow.login_screen, capabilities).await?;
-    send_menu_prompt(transport, login_menu).await
+    send_screen(
+        transport,
+        config,
+        &config.flow.login_screen,
+        capabilities,
+        context,
+    )
+    .await?;
+    send_menu_prompt(transport, login_menu, context).await
 }
 
 async fn send_main_menu<T: Transport>(
@@ -3669,17 +3750,23 @@ async fn send_main_menu<T: Transport>(
     config: &OxideConfig,
     menu: &Menu,
     capabilities: &mut TerminalCapabilities,
+    context: &ScreenRenderContext,
 ) -> ServeResult<()> {
-    send_screen(transport, config, &menu.screen.asset, capabilities).await?;
-    send_menu_prompt(transport, menu).await
+    send_screen(transport, config, &menu.screen.asset, capabilities, context).await?;
+    send_menu_prompt(transport, menu, context).await
 }
 
-async fn send_menu_prompt<T: Transport>(transport: &mut T, menu: &Menu) -> ServeResult<()> {
+async fn send_menu_prompt<T: Transport>(
+    transport: &mut T,
+    menu: &Menu,
+    context: &ScreenRenderContext,
+) -> ServeResult<()> {
     let prompt = menu
         .description
         .clone()
         .unwrap_or_else(|| "Command? ".to_string());
-    send_text(transport, &prompt).await?;
+    let payload = expand_screen_runtime_tokens(encode_text(&prompt), context);
+    transport.write_all(&payload).await?;
     Ok(())
 }
 
@@ -3687,9 +3774,10 @@ async fn show_post_login_screens<T: Transport>(
     transport: &mut T,
     config: &OxideConfig,
     capabilities: &mut TerminalCapabilities,
+    context: &ScreenRenderContext,
 ) -> ServeResult<()> {
     for screen in &config.flow.post_login_screens {
-        send_screen(transport, config, screen, capabilities).await?;
+        send_screen(transport, config, screen, capabilities, context).await?;
     }
     send_text(transport, MAIN_MENU_POST_LOGIN).await
 }
@@ -3699,6 +3787,7 @@ async fn send_terminal_asset<T: Transport>(
     asset_name: &str,
     config: &OxideConfig,
     capabilities: TerminalCapabilities,
+    context: &ScreenRenderContext,
 ) -> ServeResult<()> {
     let payload =
         load_terminal_asset_payload(config, asset_name, capabilities).unwrap_or_else(|error| {
@@ -3710,6 +3799,7 @@ async fn send_terminal_asset<T: Transport>(
             );
             fallback_screen_payload(asset_name, &error)
         });
+    let payload = expand_screen_runtime_tokens(payload, context);
     transport.write_all(&payload).await?;
     Ok(())
 }
@@ -3718,6 +3808,7 @@ async fn send_logoff_screen<T: Transport>(
     transport: &mut T,
     config: &OxideConfig,
     capabilities: TerminalCapabilities,
+    context: &ScreenRenderContext,
 ) {
     let asset_name = &config.terminal.logoff_screen;
     let payload =
@@ -3729,6 +3820,7 @@ async fn send_logoff_screen<T: Transport>(
             );
             normalize_caller_line_endings(&encode_text("Goodbye.\r\n"))
         });
+    let payload = expand_screen_runtime_tokens(payload, context);
     let _ = transport.write_all(&payload).await;
 }
 
@@ -3827,11 +3919,13 @@ async fn send_screen<T: Transport>(
     config: &OxideConfig,
     screen_key: &str,
     capabilities: &mut TerminalCapabilities,
+    context: &ScreenRenderContext,
 ) -> ServeResult<()> {
     let payload = load_screen_payload(config, screen_key, *capabilities).unwrap_or_else(|error| {
         report_configured_asset_load_failure("screen", screen_key, *capabilities, &error);
         fallback_screen_payload(screen_key, &error)
     });
+    let payload = expand_screen_runtime_tokens(payload, context);
     transport.write_all(&payload).await?;
     Ok(())
 }
@@ -3887,6 +3981,206 @@ fn fallback_screen_payload(screen_key: &str, details: &str) -> Vec<u8> {
     let _ = write!(&mut message, "{details}");
     message.push_str(PROMPT_TERMINATOR);
     normalize_caller_line_endings(&encode_text(&message))
+}
+
+fn expand_screen_runtime_tokens(payload: Vec<u8>, context: &ScreenRenderContext) -> Vec<u8> {
+    let payload = expand_oxide_display_codes(&payload, context);
+    expand_legacy_screen_tokens(&payload, context)
+}
+
+fn expand_oxide_display_codes(payload: &[u8], context: &ScreenRenderContext) -> Vec<u8> {
+    const MAX_DISPLAY_CODE_LENGTH: usize = 48;
+
+    let mut output = Vec::with_capacity(payload.len());
+    let mut cursor = 0;
+    while cursor < payload.len() {
+        if payload[cursor] != b'@' {
+            output.push(payload[cursor]);
+            cursor += 1;
+            continue;
+        }
+
+        if payload.get(cursor + 1) == Some(&b'@') {
+            output.push(b'@');
+            cursor += 2;
+            continue;
+        }
+
+        let Some(relative_end) = payload[cursor + 1..]
+            .iter()
+            .take(MAX_DISPLAY_CODE_LENGTH + 1)
+            .position(|byte| *byte == b'@')
+        else {
+            output.push(payload[cursor]);
+            cursor += 1;
+            continue;
+        };
+        let end = cursor + 1 + relative_end;
+        let display_code = &payload[cursor + 1..end];
+
+        if display_code.len() <= MAX_DISPLAY_CODE_LENGTH
+            && let Some(expanded) = expand_display_code(display_code, context)
+        {
+            output.extend_from_slice(&expanded);
+            cursor = end + 1;
+            continue;
+        }
+
+        output.push(payload[cursor]);
+        cursor += 1;
+    }
+
+    output
+}
+
+fn expand_display_code(
+    display_code: &[u8],
+    context: &ScreenRenderContext,
+) -> Option<Vec<u8>> {
+    if display_code.is_empty()
+        || !display_code.iter().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(*byte, b'_' | b':' | b'-')
+        })
+    {
+        return None;
+    }
+
+    let display_code = std::str::from_utf8(display_code).ok()?;
+    let (name, format) = display_code.split_once(':').unwrap_or((display_code, ""));
+    let value = display_code_value(&name.to_ascii_uppercase(), context)?;
+    format_display_code_value(encode_text(&value), format)
+}
+
+fn display_code_value(name: &str, context: &ScreenRenderContext) -> Option<String> {
+    match name {
+        "NODE" | "ND" => Some(context.node_number.to_string()),
+        "NODES" | "NT" => Some(context.node_count.to_string()),
+        "BBS" | "BN" => Some(context.board_name.clone()),
+        "SYSOP" | "SN" => Some(context.sysop_name.clone()),
+        "USER" | "ALIAS" | "UH" => Some(
+            context
+                .caller_alias
+                .clone()
+                .unwrap_or_else(|| "Guest".to_string()),
+        ),
+        "SECURITY" | "SEC" | "SL" => Some(context.security_level.unwrap_or_default().to_string()),
+        _ => None,
+    }
+}
+
+fn format_display_code_value(mut value: Vec<u8>, format: &str) -> Option<Vec<u8>> {
+    if format.is_empty() {
+        return Some(value);
+    }
+
+    let mut format = format;
+    let left_align = if let Some(stripped) = format.strip_prefix('-') {
+        format = stripped;
+        true
+    } else {
+        false
+    };
+    let zero_pad = if !left_align && format.len() > 1 {
+        if let Some(stripped) = format.strip_prefix('0') {
+            format = stripped;
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+    if format.is_empty() || !format.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+
+    let width = format.parse::<usize>().ok()?;
+    if width > 200 {
+        return None;
+    }
+    if value.len() > width {
+        value.truncate(width);
+    }
+    if value.len() < width {
+        let pad_byte = if zero_pad { b'0' } else { b' ' };
+        let mut padding = vec![pad_byte; width - value.len()];
+        if left_align {
+            value.append(&mut padding);
+        } else {
+            padding.extend_from_slice(&value);
+            value = padding;
+        }
+    }
+    Some(value)
+}
+
+fn expand_legacy_screen_tokens(payload: &[u8], context: &ScreenRenderContext) -> Vec<u8> {
+    let node_number = context.node_number.min(999);
+    let node_count = context.node_count.min(999);
+    let node_status = format!("{node_number:03} / {node_count:03}");
+    let node_badge = format!("NODE {node_number:03}");
+    let node_of_total = format!("Node: {} of {}", context.node_number, context.node_count);
+
+    let payload = replace_bytes_all(payload, b"NNN / TTT", node_status.as_bytes());
+    let payload = replace_bytes_all(&payload, b"001 / 004", node_status.as_bytes());
+    let payload = replace_bytes_all(&payload, b"NODE 001", node_badge.as_bytes());
+    let payload = replace_bytes_all(&payload, b"Node: 1 of 4", node_of_total.as_bytes());
+    replace_bytes_all(&payload, b"Node: N of T", node_of_total.as_bytes())
+}
+
+fn replace_bytes_all(payload: &[u8], needle: &[u8], replacement: &[u8]) -> Vec<u8> {
+    if needle.is_empty() {
+        return payload.to_vec();
+    }
+
+    let mut next = Vec::with_capacity(payload.len());
+    let mut cursor = 0;
+    while cursor < payload.len() {
+        if payload[cursor..].starts_with(needle) {
+            next.extend_from_slice(replacement);
+            cursor += needle.len();
+        } else {
+            next.push(payload[cursor]);
+            cursor += 1;
+        }
+    }
+    next
+}
+
+#[cfg(test)]
+mod display_code_tests {
+    use super::*;
+
+    fn display_context() -> ScreenRenderContext {
+        ScreenRenderContext {
+            node_number: 2,
+            node_count: 8,
+            board_name: "Blackboard".to_string(),
+            sysop_name: "CmdrTallen".to_string(),
+            caller_alias: Some("Cmdr".to_string()),
+            security_level: Some(10),
+        }
+    }
+
+    #[test]
+    fn expands_display_codes_with_width_formatting() {
+        let output = expand_screen_runtime_tokens(
+            b"Node @NODE:03@/@NT:03@ User @USER:-8@ Sec @SEC:03@".to_vec(),
+            &display_context(),
+        );
+
+        assert_eq!(output, b"Node 002/008 User Cmdr     Sec 010");
+    }
+
+    #[test]
+    fn preserves_literal_at_and_unknown_tokens() {
+        let output = expand_screen_runtime_tokens(
+            b"Email sysop@example.com @@ @NOPE@ @BBS@".to_vec(),
+            &display_context(),
+        );
+
+        assert_eq!(output, b"Email sysop@example.com @ @NOPE@ Blackboard");
+    }
 }
 
 fn normalize_caller_line_endings(bytes: &[u8]) -> Vec<u8> {
@@ -4181,6 +4475,57 @@ impl InputSession {
             raw: true,
             ..Self::default()
         }
+    }
+}
+
+async fn send_menu_help<T: Transport>(
+    transport: &mut T,
+    config: &crate::config::OxideConfig,
+    menu: &Menu,
+    capabilities: &mut oxidebbs_term::TerminalCapabilities,
+    user_security_level: Option<i32>,
+    context: &ScreenRenderContext,
+) -> ServeResult<()> {
+    if let Some(help_screen) = &menu.help_screen {
+        send_screen(transport, config, &help_screen.asset, capabilities, context).await?;
+        return Ok(());
+    }
+
+    let mut help = String::new();
+    let title = if menu.title.trim().is_empty() {
+        menu.id.as_str()
+    } else {
+        menu.title.as_str()
+    };
+    help.push_str("\r\n");
+    help.push_str(&title.to_ascii_uppercase());
+    help.push_str(" HELP\r\n\r\n");
+
+    for entry in menu
+        .entries
+        .iter()
+        .filter(|entry| entry.key.trim() != "?")
+        .filter(|entry| menu_entry_visible_to_security_level(entry, user_security_level))
+    {
+        help.push_str(&format!("[{}] {}\r\n", entry.key, entry.label));
+    }
+
+    help.push_str("[?] Help\r\n");
+    if menu.route_entry("R").is_none() {
+        help.push_str("[R] Redisplay screen\r\n");
+    }
+    help.push_str("\r\n");
+
+    send_text(transport, &help).await
+}
+
+fn menu_entry_visible_to_security_level(
+    entry: &oxidebbs_core::menu::MenuEntry,
+    user_security_level: Option<i32>,
+) -> bool {
+    match user_security_level {
+        Some(level) => level >= entry.min_security_level,
+        None => entry.min_security_level <= 0,
     }
 }
 
@@ -4906,6 +5251,7 @@ mod tests {
             screen: oxidebbs_core::menu::ScreenAsset {
                 asset: "submenu".to_string(),
             },
+            help_screen: None,
             entries: Vec::new(),
             pre_menu_screens: Vec::new(),
         });
@@ -5175,7 +5521,20 @@ mod tests {
         drop(client);
         let mut transport = TcpTransport::new(stream);
 
-        send_logoff_screen(&mut transport, &config, TerminalCapabilities::plain_text()).await;
+        send_logoff_screen(
+            &mut transport,
+            &config,
+            TerminalCapabilities::plain_text(),
+            &ScreenRenderContext {
+                node_number: 1,
+                node_count: 1,
+                board_name: "Test".to_string(),
+                sysop_name: "Sysop".to_string(),
+                caller_alias: None,
+                security_level: None,
+            },
+        )
+        .await;
 
         let _ = std::fs::remove_dir_all(base_dir);
     }
@@ -6544,7 +6903,20 @@ mod tests {
         let (stream, _) = listener.accept().await.expect("accept");
         let mut transport = TcpTransport::new(stream);
 
-        send_logoff_screen(&mut transport, &config, capabilities).await;
+        send_logoff_screen(
+            &mut transport,
+            &config,
+            capabilities,
+            &ScreenRenderContext {
+                node_number: 1,
+                node_count: 1,
+                board_name: "Test".to_string(),
+                sysop_name: "Sysop".to_string(),
+                caller_alias: None,
+                security_level: None,
+            },
+        )
+        .await;
         drop(transport);
 
         client_task.await.expect("client task")

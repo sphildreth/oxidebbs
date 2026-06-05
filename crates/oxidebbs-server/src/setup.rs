@@ -358,6 +358,8 @@ struct GeneratedScreenConfig {
 #[derive(Serialize)]
 struct GeneratedMenuConfig {
     screen: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    help_screen: Option<String>,
     prompt: String,
     items: Vec<GeneratedMenuItemConfig>,
 }
@@ -451,6 +453,7 @@ pub fn build_setup_toml(answers: &SetupAnswers) -> io::Result<String> {
         "login".to_string(),
         GeneratedMenuConfig {
             screen: "login".to_string(),
+            help_screen: None,
             prompt: "Login? ".to_string(),
             items: vec![
                 GeneratedMenuItemConfig {
@@ -475,6 +478,7 @@ pub fn build_setup_toml(answers: &SetupAnswers) -> io::Result<String> {
         "main".to_string(),
         GeneratedMenuConfig {
             screen: "main_menu".to_string(),
+            help_screen: None,
             prompt: "Command? ".to_string(),
             items: vec![
                 GeneratedMenuItemConfig {

@@ -38,6 +38,57 @@ able to navigate without ANSI art or 80-column assumptions. Login, main menu,
 message list, message reader, file list, help text, and logoff paths should
 have a 40-column-safe rendering path or a plain fallback.
 
+## Display Codes
+
+Caller display files and prompts may include OxideBBS display codes. These are
+expanded while the BBS streams the file to the caller, after the correct ANSI,
+ASCII, or text asset variant is selected.
+
+Display-code expansion is byte-oriented. ANSI escape sequences and CP437 art are
+not decoded as Unicode before being sent to the caller.
+
+Syntax:
+
+```text
+@CODE@
+@CODE:WIDTH@
+@CODE:0WIDTH@
+@CODE:-WIDTH@
+@@
+```
+
+Formatting:
+
+- `@CODE@` renders the value as-is.
+- `@CODE:3@` left-pads the value with spaces to at least 3 bytes.
+- `@CODE:03@` left-pads the value with zeroes to at least 3 bytes.
+- `@CODE:-20@` right-pads the value with spaces to at least 20 bytes.
+- Values longer than the requested width are truncated to fit fixed-width art.
+- `@@` renders a literal `@`.
+
+Supported codes:
+
+| Code | Aliases | Value |
+| --- | --- | --- |
+| `@NODE@` | `@ND@` | Current caller node number |
+| `@NODES@` | `@NT@` | Configured node count |
+| `@BBS@` | `@BN@` | Board name |
+| `@SYSOP@` | `@SN@` | Sysop name |
+| `@USER@` | `@ALIAS@`, `@UH@` | Caller alias, or `Guest` before login |
+| `@SECURITY@` | `@SEC@`, `@SL@` | Caller security level, or `0` before login |
+
+Examples:
+
+```text
+Node: @NODE:03@ / @NODES:03@
+User: @USER:-20@  Sec: @SECURITY:03@
+BBS : @BBS@
+```
+
+Unknown or malformed `@...@` sequences are left unchanged. Existing bundled art
+that still contains legacy `001 / 004`, `NNN / TTT`, or `NODE 001` node markers
+is rewritten at runtime for compatibility, but new art should use display codes.
+
 ## Config Shape
 
 ```toml
