@@ -1516,6 +1516,9 @@ mod tests {
         migrate_7_to_8(&db).expect("apply migration 7->8");
         assert_eq!(schema::schema_version(&db).expect("schema after 7->8"), 8);
 
+        migrate_8_to_9(&db).expect("apply migration 8->9");
+        assert_eq!(schema::schema_version(&db).expect("schema after 8->9"), 9);
+
         assert_eq!(
             schema::schema_version(&db).expect("schema version"),
             SCHEMA_VERSION

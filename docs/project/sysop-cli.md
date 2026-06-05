@@ -498,9 +498,11 @@ OXIDE_DOOR_INTERACTIVE=1 ./scripts/test-oxide-door-dosemu2.sh
 
 ## File Areas and Transfers
 
-File-area administration is local CLI only in this release. Caller-facing file
-menus and live transfer workflows are still deferred, but sysops can create
-areas, import files, safely remove entries, and inspect transfer history.
+File-area administration remains local CLI driven, while callers can use the
+configured `files` menu action for live ZMODEM or XMODEM-CRC uploads and
+downloads when `[file_transfers].enabled = true`. Sysops can create areas,
+import files, safely remove entries, approve uploaded files, and inspect
+transfer history.
 
 Area management:
 

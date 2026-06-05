@@ -172,6 +172,11 @@ label = "Messages"
 action = "messages"
 
 [[menus.main.items]]
+key = "F"
+label = "Files"
+action = "files"
+
+[[menus.main.items]]
 key = "G"
 label = "Goodbye"
 action = "logoff"
@@ -288,7 +293,15 @@ enabled = false
 name = "modem"
 path = "/dev/ttyUSB0"
 baud_rate = 115200
+data_bits = 8
+parity = "none"
+stop_bits = 1
 flow_control = "rtscts"
+init_strings = ["ATZ"]
+answer_string = "ATA"
+require_carrier_detect = false
+drop_dtr_on_hangup = true
+read_timeout_ms = 100
 
 [file_transfers]
 enabled = false

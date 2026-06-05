@@ -2625,6 +2625,9 @@ async fn run_file_download<T: Transport>(
             }
         }
     };
+    if protocol == TransferProtocol::Zmodem && transfer_result.is_ok() {
+        drain_zmodem_finish_sequence(transport, input).await?;
+    }
     let ended_at = current_timestamp(db)?;
     let duration_ms = elapsed_millis(started);
 
@@ -2804,6 +2807,9 @@ async fn run_file_upload<T: Transport>(
             }
         }
     };
+    if protocol == TransferProtocol::Zmodem && transfer_result.is_ok() {
+        drain_zmodem_finish_sequence(transport, input).await?;
+    }
     let ended_at = current_timestamp(db)?;
     let duration_ms = elapsed_millis(started);
 
@@ -4022,6 +4028,40 @@ async fn next_event<T: Transport>(
             flush_pending_replies(transport, input).await?;
             return Ok(front);
         }
+    }
+}
+
+async fn drain_zmodem_finish_sequence<T: Transport>(
+    transport: &mut T,
+    input: &mut InputSession,
+) -> ServeResult<()> {
+    let mut bytes = Vec::with_capacity(2);
+    for _ in 0..2 {
+        match timeout(Duration::from_millis(100), transport.read_byte()).await {
+            Ok(Ok(Some(byte))) => bytes.push(byte),
+            Ok(Ok(None)) => {
+                input.pending_inputs.push_back(CallerInput::Disconnected);
+                break;
+            }
+            Ok(Err(error)) => return Err(error.into()),
+            Err(_) => break,
+        }
+    }
+
+    if bytes == b"OO" {
+        return Ok(());
+    }
+
+    for byte in bytes {
+        queue_input_byte(input, byte);
+    }
+    Ok(())
+}
+
+fn queue_input_byte(input: &mut InputSession, byte: u8) {
+    let mut reply = Vec::new();
+    if let Some(event) = parse_next_event(input, &mut reply, byte) {
+        input.pending_inputs.push_back(CallerInput::Event(event));
     }
 }
 
@@ -5307,6 +5347,7 @@ mod tests {
         let (base_dir, config, db, user, area) = file_flow_fixture("zmodem-download");
         let entry = insert_approved_file(&db, &area, b"download\xffpayload");
         let (mut transport, handle) = LoopbackTransport::new();
+        let (flow_done_tx, flow_done_rx) = oneshot::channel();
 
         let client_task = tokio::spawn(async move {
             let mut handle = handle;
@@ -5324,31 +5365,39 @@ mod tests {
             let received = oxidebbs_transfer::zmodem::receive_zmodem_file(&mut client, Some(4096))
                 .await
                 .expect("receive zmodem download");
-            client.write_all(b"R\r\r").await.expect("leave file menu");
+            let mut handle = client.handle;
+            loopback_read_until(&mut handle, "Files: D)ownload").await;
+            handle.write_bytes(b"R\r").expect("leave file area");
+            loopback_read_until(&mut handle, "Area number").await;
+            handle.write_bytes(b"\r").expect("leave file menu");
+            let _ = flow_done_rx.await;
             received
         });
 
         let mut input = InputSession::raw();
         let mut disconnect_reason = "test".to_string();
-        let flow = timeout(
-            Duration::from_secs(5),
-            run_files_flow(
-                Some(&user),
-                &mut transport,
-                &mut input,
-                &db,
-                &config,
-                false,
-                Duration::from_secs(1),
-                &mut disconnect_reason,
-                1,
-            ),
-        );
+        let flow = async {
+            let result = timeout(
+                Duration::from_secs(5),
+                run_files_flow(
+                    Some(&user),
+                    &mut transport,
+                    &mut input,
+                    &db,
+                    &config,
+                    false,
+                    Duration::from_secs(1),
+                    &mut disconnect_reason,
+                    1,
+                ),
+            )
+            .await;
+            let _ = flow_done_tx.send(());
+            result
+        };
         let (flow_result, client_result) = tokio::join!(flow, client_task);
-        let received = client_task.await.expect("client task");
-        flow_result
-            .expect("file flow timeout")
-            .expect("file flow");
+        let received = client_result.expect("client task");
+        flow_result.expect("file flow timeout").expect("file flow");
 
         assert_eq!(received.filename, entry.display_name);
         assert_eq!(received.payload, b"download\xffpayload");
@@ -5371,6 +5420,7 @@ mod tests {
     async fn file_flow_zmodem_upload_persists_pending_entry_and_history() {
         let (base_dir, config, db, user, area) = file_flow_fixture("zmodem-upload");
         let (mut transport, handle) = LoopbackTransport::new();
+        let (flow_done_tx, flow_done_rx) = oneshot::channel();
 
         let client_task = tokio::spawn(async move {
             let mut handle = handle;
@@ -5390,30 +5440,38 @@ mod tests {
             )
             .await
             .expect("send upload");
-            client.write_all(b"R\r\r").await.expect("leave file menu");
+            let mut handle = client.handle;
+            loopback_read_until(&mut handle, "Files: D)ownload").await;
+            handle.write_bytes(b"R\r").expect("leave file area");
+            loopback_read_until(&mut handle, "Area number").await;
+            handle.write_bytes(b"\r").expect("leave file menu");
+            let _ = flow_done_rx.await;
         });
 
         let mut input = InputSession::raw();
         let mut disconnect_reason = "test".to_string();
-        let flow = timeout(
-            Duration::from_secs(5),
-            run_files_flow(
-                Some(&user),
-                &mut transport,
-                &mut input,
-                &db,
-                &config,
-                false,
-                Duration::from_secs(1),
-                &mut disconnect_reason,
-                1,
-            ),
-        );
+        let flow = async {
+            let result = timeout(
+                Duration::from_secs(5),
+                run_files_flow(
+                    Some(&user),
+                    &mut transport,
+                    &mut input,
+                    &db,
+                    &config,
+                    false,
+                    Duration::from_secs(1),
+                    &mut disconnect_reason,
+                    1,
+                ),
+            )
+            .await;
+            let _ = flow_done_tx.send(());
+            result
+        };
         let (flow_result, client_result) = tokio::join!(flow, client_task);
         client_result.expect("client task");
-        flow_result
-            .expect("file flow timeout")
-            .expect("file flow");
+        flow_result.expect("file flow timeout").expect("file flow");
 
         let entries = oxidebbs_db::list_file_entries(db.db()).expect("list file entries");
         let upload = entries

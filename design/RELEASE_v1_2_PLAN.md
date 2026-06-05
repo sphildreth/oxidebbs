@@ -30,7 +30,7 @@ Status values:
 | P1 | Release hygiene and stale-future sweep | Complete | All docs and examples name v1.2 scope accurately before coding starts. |
 | P2 | Schema, config, and DbWriter foundation | Complete | Schema migration, shared config, DbWriter code, schema docs, release notes, and acceptance tests are current for the P2 foundation scope. |
 | P3 | Caller authorization and flow polish | Complete | Runtime menu security, caller sysop submenu, logoff rendering, starter docs/assets, release notes, and acceptance tests are current. |
-| P4 | Serial/modem transport and file transfers | Partial | Config, file-area schema, repository APIs, caller-session transport-generic helpers, XMODEM-CRC fallback with caller download flow, ZMODEM frame primitives (CRC-32, escaping, headers, metadata), ByteTransport-Transport bridge for protocol integration, path sanitization utilities, physical serial/modem transport with real serialport crate, Files menu action, and caller file-area workflows exist; full ZMODEM send/receive state machines are not implemented. |
+| P4 | Serial/modem transport and file transfers | Complete | Disabled-by-default serial and file-transfer config, real `serialport` physical serial transport, multi-device serial startup, raw serial caller sessions, ZMODEM send/receive state machines, XMODEM-CRC fallback, caller file-area upload/download workflows, transfer history persistence, path sanitization, telnet IAC escaping, and serial/file-transfer loopback acceptance tests exist. |
 | P5 | Door ecosystem expansion | Complete | Mutable door CLI, DecentDB door sync, exclusive local-door run enforcement, all current drop-file writers/tests, BBSLink/DoorParty dry-run and live connectors with fake-server tests, provider secret redaction primitives, provider credential secret-reference storage (door_provider_credentials table with migration 6→7), and credential redaction across CLI/TUI/logs/backups/exports exist. |
 | P6 | Database maintenance operations | Complete | Audit purge, db verify, export, import, and output-file `db compact --output <path> [--overwrite]` exist; active database replacement remains an explicit offline operator step. |
 | P7 | Sysop CLI completion | Complete | Deferred user, message, ANSI, config, door, file-transfer, network state, toss, scan, plaintext BinkP poll, local AreaFix subscription execution, subscription metadata, write-audit CLI coverage, inbound AreaFix netmail processing, reply netmail generation with outbound packet creation, rescan queueing with targeted per-area per-link rescan, and nodediff CRC validation wired to CLI exist. |
@@ -159,14 +159,14 @@ declared complete.
 
 Coverage audit update 2026-06-04:
 
-- Partial: P4, P8, P13, P15, and P18 remain not release-complete. P7, P11,
+- Partial: P8, P13, P15, and P18 remain not release-complete. P7, P11,
   P12, and P14 have been revalidated and completed for the FTN operations slice.
 - Complete: P2 schema/config/DbWriter foundation and P3 caller authorization
   and flow polish are implemented, documented, and covered by targeted
   acceptance tests.
-- Partial: P4 file transfer and serial/modem coverage is mostly schema/config
-  and crate scaffolding. Physical serial transport and ZMODEM/XMODEM-CRC engines
-  are incomplete.
+- Complete: P4 serial/modem transport and caller file transfers are implemented,
+  documented, and covered by targeted protocol, serial, caller-flow, and
+  persistence tests.
 - Complete: P5 door administration, drop-file coverage, remote-provider dry-run
   and live connector adapters, provider fake-server tests, credential
   secret-reference storage, and CLI/TUI/audit/export redaction coverage are
@@ -426,23 +426,28 @@ Validation:
 
 Status: Complete
 
-Audit update 2026-06-04:
+Audit update 2026-06-05:
 
-- Done: disabled-by-default `[serial]` config, disabled-by-default
-  `[file_transfers]` config, file-area DecentDB tables, file repository APIs, and
-  the `oxidebbs-transfer` crate scaffolding exist.
-- Done: caller-session helpers are now generic over the byte-oriented
-  `Transport` trait, with a loopback login-flow regression test. TCP/telnet
-  remains the only runtime listener, but the login/menu helper path no longer
-  requires `TcpTransport` directly.
-- Not done: `SerialTransport` is an in-memory channel transport used by tests,
-  not a physical serial/modem device implementation that opens configured TTYs.
-- Done: CRC-16/XMODEM, XMODEM-CRC send/receive fallback, ZMODEM binary/hex
-  header framing primitives, and transfer protocol tests exist.
-- Not done: full ZMODEM send/receive state machines are not implemented.
-- Not done: caller file-area menus/actions, security-gated transfers, transfer
-  protocol handshakes, retries, cancel handling, path sanitization, and telnet
-  IAC escaping coverage are not implemented.
+- Done: disabled-by-default `[serial]` config opens no device files unless
+  explicitly enabled, supports multiple configured devices, and maps each device
+  to a raw caller session over the shared byte-oriented `Transport` boundary.
+- Done: `SerialTransport` opens physical TTY devices through the `serialport`
+  crate, applies baud/data/parity/stop/flow-control settings, init strings, and
+  answer strings, and reports unsupported carrier-detect line state at startup
+  when required by config.
+- Done: sessions persist `transport = 'serial'` through schema version 9 and
+  serial loopback coverage completes login, menu input, and logoff.
+- Done: `oxidebbs-transfer` implements XMODEM-CRC send/receive and owned ZMODEM
+  send/receive state machines with metadata, CRC-32 data subpackets, retry via
+  `ZRPOS`, cancel handling, batch loopback coverage, and telnet IAC escaping in
+  the protocol adapter.
+- Done: caller file-area workflows list enabled areas, gate read/download/upload
+  by security level, support ZMODEM and XMODEM-CRC upload/download, sanitize
+  upload names, enforce upload limits, store uploads pending sysop review, and
+  persist transfer history with direction/protocol/bytes/duration/outcome.
+- Done: tests cover ZMODEM send/receive, cancel, retry, batch transfer,
+  XMODEM-CRC transfer, telnet IAC escaping, serial loopback transfers, serial
+  login/menu/logoff, and DecentDB serial session persistence.
 
 Objective: Add the deferred caller transports and file-transfer subsystem.
 

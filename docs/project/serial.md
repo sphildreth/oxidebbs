@@ -1,24 +1,18 @@
 # Serial And Modem Transport
 
-Telnet remains the only release-ready caller transport today. Serial/modem
-transport is tracked by the v1.2 release plan and is disabled by default.
+Telnet remains enabled by default. Serial/modem transport is available for v1.2
+and is disabled until `[serial].enabled = true`.
 
-Current foundation:
+When enabled, each `[[serial.devices]]` entry opens a physical TTY with the
+configured baud rate, parity, stop bits, flow control, init strings, and optional
+answer string. The caller session then uses the same login, menu, door, message,
+and file-area flow as telnet callers, but without telnet negotiation or IAC
+escaping.
 
-- A `[serial]` configuration section can model operator intent without opening
-  device files by default.
-- The transport boundary keeps caller sessions independent of whether bytes come
-  from telnet or another byte stream.
-- Tests can use in-memory or loopback-style transports for serial-adjacent
-  behavior.
+`require_carrier_detect = true` makes startup fail if the adapter or platform
+cannot report carrier state. `drop_dtr_on_hangup = true` drops DTR during
+hangup when the platform supports it.
 
-Not release-ready yet:
-
-- Opening and serving configured physical TTY devices.
-- Modem line-state handling and platform-specific operator errors.
-- Multi-device serial listener orchestration.
-- Hardware or pseudo-terminal smoke coverage that completes login, menu input,
-  and logoff through a real serial path.
-
-Operators should continue to expose callers through telnet unless they are
-working on the P4 implementation and validation path.
+Keep serial disabled on systems that do not have stable device paths or modem
+line-state support. Hardware smoke testing should verify login, menu input,
+file transfer, and logoff through the exact TTY device the sysop plans to use.

@@ -25,6 +25,7 @@ The starter main menu is configured by `[menus.main]`.
 | --- | --- | --- | --- |
 | `D` | Doors | `doors` | Active |
 | `M` | Messages | `messages` | Active |
+| `F` | Files | `files` | Active when file transfers and file areas are configured |
 | `S` | Sysop | `submenu` -> `sysop` | Active for level `255` callers |
 | `G` | Goodbye | `logoff` | Active |
 
@@ -80,6 +81,28 @@ Inside a message area, callers use these prompt commands:
 
 Message subjects and bodies must be CP437-compatible before they are stored.
 
+## File Menu
+
+The `files` action opens file-area selection for authenticated callers when
+`[file_transfers].enabled = true`.
+
+| Input | Behavior | Status |
+| --- | --- | --- |
+| Area number | Enters the enabled file area | Active |
+| Blank line | Returns to the main menu | Active |
+
+Inside a file area, callers use these prompt commands:
+
+| Key | Label | Behavior | Status |
+| --- | --- | --- | --- |
+| `D` | Download | Prompts for a file number and protocol, then sends the file | Active |
+| `U` | Upload | Prompts for a protocol and receives a pending upload | Active |
+| `R` | Return | Returns to area selection | Active |
+| Blank line | Return | Returns to area selection | Active |
+
+Supported caller transfer protocols are ZMODEM (`Z`) and XMODEM-CRC (`X`).
+Uploads are stored pending sysop review.
+
 ## Supported Menu Actions
 
 Menu items map single ASCII keys to safe internal actions. Keys route
@@ -91,6 +114,7 @@ case-insensitively.
 | `new_user` | Runs new-user registration before login | Active |
 | `doors` | Opens the door selector | Active |
 | `messages` | Opens message area selection | Active |
+| `files` | Opens file area selection | Active |
 | `logoff` | Disconnects with a goodbye message | Active |
 | `show_screen` | Displays a configured screen and returns to the current menu | Active |
 | `submenu` | Moves into the configured target menu | Active |
@@ -112,5 +136,5 @@ When adding a future caller command:
 ## Source Of Truth
 
 The active default menu keys live in `config/oxidebbs.example.toml`. The runtime
-routes configured menu keys through the menu router and handles door/message
-prompt commands in the telnet session flow.
+routes configured menu keys through the menu router and handles door, message,
+and file prompt commands in the caller session flow.

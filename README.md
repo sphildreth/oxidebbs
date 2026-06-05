@@ -286,21 +286,20 @@ update the relevant design docs and ADRs.
 
 ## Current Boundaries
 
-- Telnet is the supported caller transport today. Serial/modem config and test
-  scaffolding exist for v1.2 work, but physical serial/modem serving is not yet
-  release-ready.
+- Telnet remains enabled by default. Serial/modem caller transport is available
+  through disabled-by-default `[serial]` devices and opens physical TTYs only
+  when explicitly enabled.
 - DecentDB is the only system database.
 - Remote caller UI is ANSI/CP437 byte-oriented, not Unicode-first.
 - Ratatui is used only for the local sysop console, not caller screens.
-- Physical modem/serial support, full caller file-area transfer support, remote
-  admin hardening, and other remaining deferred features are tracked in the v1.2
+- Remote admin hardening and other remaining deferred features are tracked in the v1.2
   release plan and are not all complete yet.
   See [`design/RELEASE_v1_2_PLAN.md`](design/RELEASE_v1_2_PLAN.md) for the
   full deferred-scope implementation map.
-- Caller file-transfer design uses ZMODEM as the primary protocol with
-  XMODEM-CRC as the fallback protocol. Repository, CLI, XMODEM-CRC, and ZMODEM
-  framing foundations exist, but caller file-area workflows are still in
-  progress.
+- Caller file areas support ZMODEM send/receive as the primary protocol and
+  XMODEM-CRC send/receive as the fallback protocol. Transfer history is stored
+  in DecentDB, uploads are sanitized and pending sysop review by default, and
+  telnet IAC escaping is handled outside protocol framing.
 - Public telnet exposure is an operator decision. Telnet sends credentials and
   caller traffic in plaintext; the generated config binds to `127.0.0.1:2323`
   by default.

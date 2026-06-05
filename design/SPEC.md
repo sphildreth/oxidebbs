@@ -93,21 +93,26 @@ pub trait Transport {
 
 Implementations:
 
-- `TelnetTransport` for v1
-- `SerialTransport` implemented
+- `TcpTransport` for telnet callers
+- `SerialTransport` for enabled serial/modem devices
 - `LoopbackTransport` for tests
 
-The `serve` runtime binds the configured telnet address, opens DecentDB before
-accepting callers, verifies the schema marker and core DecentDB tables, assigns
-node slots up to the configured node and connection limits, records
-session/audit lifecycle rows, and closes sessions on caller disconnect, logoff,
-or idle timeout. Startup must fail before listening if required database reads or
-required startup audit writes fail.
+The `serve` runtime binds the configured telnet address, opens enabled serial
+devices, opens DecentDB before accepting callers, verifies the schema marker and
+core DecentDB tables, assigns node slots up to the configured node and
+connection limits, records session/audit lifecycle rows, and closes sessions on
+caller disconnect, logoff, or idle timeout. Startup must fail before listening
+if required database reads, required startup audit writes, or configured serial
+line-state requirements fail.
 
 The telnet transport reads from the socket into an internal 4096-byte buffer and
 serves caller input one byte at a time to the parser. Telnet negotiation replies
 are batched and flushed before caller-visible output, before blocking for more
 input when replies are pending, and before hangup.
+
+Serial caller sessions skip telnet negotiation and parse input as raw caller
+bytes. File-transfer payloads use telnet IAC escaping only on telnet transports;
+serial transfers use the raw serial byte stream.
 
 ## 5. ANSI/CP437 design
 

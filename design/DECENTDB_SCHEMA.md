@@ -581,7 +581,7 @@ disconnect_reason TEXT
 Constraints:
 
 - node numbers are positive
-- v1 transport is `telnet`
+- transport is `telnet` or `serial`
 - remote ports are `0..65535` when present
 
 Indexes:

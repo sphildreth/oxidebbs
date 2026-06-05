@@ -18,7 +18,7 @@ re-opening scope decisions.
 | P1 | Release hygiene and stale-future sweep | Complete |
 | P2 | Schema, config, and DbWriter foundation | Complete |
 | P3 | Caller authorization and flow polish | Complete |
-| P4 | Serial/modem transport and file transfers | Partial |
+| P4 | Serial/modem transport and file transfers | Complete |
 | P5 | Door ecosystem expansion | Partial |
 | P6 | Database maintenance operations | Complete |
 | P7 | Sysop CLI completion | Complete |
