@@ -125,6 +125,23 @@ oxidebbs-server nodes show 1
 oxidebbs-server nodes watch
 ```
 
+When `[admin_web]` is enabled, monitoring systems can use the loopback HTTP
+health route. It runs doctor checks and returns `200` with `healthy = true` when
+there are no doctor failures, or `503` with `healthy = false` when doctor
+reports failures:
+
+```bash
+curl -fsS http://127.0.0.1:8080/health
+curl -fsS http://127.0.0.1:8080/healthz
+curl -fsS http://127.0.0.1:8080/healtz
+```
+
+Admin web requests are written to the configured text or JSON logs as activity
+lines. Each line includes method, path without query string, response status,
+elapsed milliseconds, remote address when available, and authenticated user ID
+when a logged-in session is present. Request bodies, query strings, cookies,
+CSRF tokens, replay headers, and other header values are intentionally omitted.
+
 Useful local-only status checks:
 
 ```bash

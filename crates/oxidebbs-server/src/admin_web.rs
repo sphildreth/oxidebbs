@@ -5,9 +5,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use argon2::{Algorithm, Argon2, Params, PasswordHash, PasswordVerifier, Version};
-use axum::extract::{Path as AxumPath, State};
+use axum::extract::{ConnectInfo, Path as AxumPath, Request, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
-use axum::response::{IntoResponse, Response};
+use axum::middleware::{self, Next};
+use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Form, Json, Router};
 use rand_core::OsRng;
@@ -26,6 +27,7 @@ use oxidebbs_db::{
     list_network_poll_logs, list_network_profiles, list_oxidenet_applications, list_oxidenet_nodes,
     list_users, summarize_network_packets,
 };
+use oxidebbs_sysop::services::database_service::{DatabaseAdminService, DoctorStatus};
 
 use crate::admin_status::{AdminStatusPayload, build_admin_status_payload};
 use crate::config::{Argon2Config, OxideConfig};
@@ -39,6 +41,28 @@ const REPLAY_TIMESTAMP_HEADER_NAME: &str = "x-oxidebbs-timestamp";
 const LOGIN_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(60);
 const MUTATION_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(60);
 const DUMMY_PASSWORD_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$b3hpZGViYnMtZHVtbXktYXV0aC1zYWx0$CNvsc4yCQyC6gccREXpHZ6l9604svk9VP98AyAVSMtY";
+const ADMIN_ROOT_HTML: &str = r#"<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OxideBBS Admin</title>
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+    body { margin: 2rem; max-width: 52rem; line-height: 1.5; }
+    code { background: rgba(127, 127, 127, 0.16); padding: 0.1rem 0.25rem; }
+  </style>
+</head>
+<body>
+  <h1>OxideBBS Admin</h1>
+  <p>The admin HTTP listener is running.</p>
+  <p><a href="/health">Health check JSON</a> runs doctor checks and returns HTTP 200 when healthy.</p>
+  <p><a href="/status">Public status JSON</a> is available when <code>public_status_enabled = true</code>.</p>
+  <p>Authenticated read-only JSON endpoints start with <code>/api/</code> and use <code>/csrf-token</code> plus <code>POST /login</code>.</p>
+  <p>This listener speaks HTTP directly. Use a local TLS reverse proxy for HTTPS.</p>
+</body>
+</html>
+"#;
 
 #[derive(Clone)]
 struct AdminWebState {
@@ -284,6 +308,13 @@ struct CsrfTokenResponse {
 }
 
 #[derive(Serialize)]
+struct HealthCheckFailure {
+    name: String,
+    detail: String,
+    remediation: Option<String>,
+}
+
+#[derive(Serialize)]
 struct MessageResponse {
     success: bool,
     message: String,
@@ -320,9 +351,12 @@ pub(crate) async fn start_admin_web(
 
     info!(bind = %listener.local_addr()?, "admin web listener started");
     Ok(tokio::spawn(async move {
-        axum::serve(listener, app)
-            .await
-            .map_err(ServeError::Network)
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .map_err(ServeError::Network)
     }))
 }
 
@@ -339,7 +373,12 @@ impl AdminWebState {
 }
 
 fn admin_router(state: AdminWebState) -> Router {
+    let activity_log_state = state.clone();
     Router::new()
+        .route("/", get(root_handler))
+        .route("/health", get(health_handler))
+        .route("/healthz", get(health_handler))
+        .route("/healtz", get(health_handler))
         .route("/status", get(status_handler))
         .route("/csrf-token", get(csrf_token_handler))
         .route("/login", post(login_handler))
@@ -358,7 +397,109 @@ fn admin_router(state: AdminWebState) -> Router {
             "/api/nodes/{node_number}/disconnect",
             post(api_node_disconnect_handler),
         )
+        .fallback(not_found_handler)
         .with_state(state)
+        .layer(middleware::from_fn_with_state(
+            activity_log_state,
+            log_admin_request,
+        ))
+}
+
+async fn root_handler() -> Html<&'static str> {
+    Html(ADMIN_ROOT_HTML)
+}
+
+async fn not_found_handler() -> StatusCode {
+    StatusCode::NOT_FOUND
+}
+
+async fn log_admin_request(
+    State(state): State<AdminWebState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let started_at = Instant::now();
+    let method = request.method().clone();
+    let path = request.uri().path().to_string();
+    let remote_addr = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ConnectInfo(addr)| addr.to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+    let user_id = activity_user_id_from_headers(&state, request.headers()).await;
+    let response = next.run(request).await;
+    let status = response.status();
+    let elapsed_ms = u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
+    let user_id = user_id.as_deref().unwrap_or("unauthenticated");
+
+    if status.is_server_error() {
+        warn!(
+            method = %method,
+            path = %path,
+            status = status.as_u16(),
+            elapsed_ms,
+            remote_addr = %remote_addr,
+            user_id = %user_id,
+            "admin web request completed"
+        );
+    } else {
+        info!(
+            method = %method,
+            path = %path,
+            status = status.as_u16(),
+            elapsed_ms,
+            remote_addr = %remote_addr,
+            user_id = %user_id,
+            "admin web request completed"
+        );
+    }
+
+    response
+}
+
+async fn health_handler(
+    State(state): State<AdminWebState>,
+    headers: HeaderMap,
+) -> Result<Response, StatusCode> {
+    ensure_origin_allowed(&state, &headers)?;
+
+    let report = DatabaseAdminService::run_doctor(
+        Some(&state.db),
+        Some(&state.config.database.path),
+        state.config.nodes.count,
+    );
+    let failed = report.failed_count();
+    let healthy = failed == 0;
+    let status = if healthy {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+    let failed_checks = report
+        .checks
+        .iter()
+        .filter(|check| check.status == DoctorStatus::Fail)
+        .map(|check| HealthCheckFailure {
+            name: check.name.clone(),
+            detail: check.detail.clone(),
+            remediation: check.remediation.clone(),
+        })
+        .collect::<Vec<_>>();
+
+    Ok(json_response(
+        status,
+        &json!({
+            "healthy": healthy,
+            "doctor": {
+                "checked_at": report.checked_at,
+                "passed": report.passed_count(),
+                "warnings": report.warning_count(),
+                "failed": failed,
+                "total": report.checks.len(),
+                "failed_checks": failed_checks,
+            }
+        }),
+    ))
 }
 
 async fn status_handler(
@@ -1129,6 +1270,35 @@ fn header_str<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     headers.get(name)?.to_str().ok()
 }
 
+async fn activity_user_id_from_headers(
+    state: &AdminWebState,
+    headers: &HeaderMap,
+) -> Option<String> {
+    let session_id = session_cookie(headers)?;
+    let now = Instant::now();
+    let timeout = session_timeout(&state.config);
+    let sessions = state.sessions.read().await;
+    let session = sessions.sessions.get(&session_id)?;
+    activity_user_id_from_session(session, now, timeout)
+}
+
+fn activity_user_id_from_session(
+    session: &SessionData,
+    now: Instant,
+    timeout: Duration,
+) -> Option<String> {
+    if !session.authenticated {
+        return None;
+    }
+    if now
+        .checked_duration_since(session.last_seen_at)
+        .is_none_or(|age| age > timeout)
+    {
+        return None;
+    }
+    session.user_id.clone()
+}
+
 fn session_timeout(config: &OxideConfig) -> Duration {
     Duration::from_secs(config.admin_web.session_timeout_seconds)
 }
@@ -1266,6 +1436,9 @@ mod tests {
             r#"
 [board]
 name = "Admin Test"
+
+[database]
+path = ":memory:"
 
 [admin_web]
 enabled = true
@@ -1410,6 +1583,107 @@ allowed_origins = ["https://admin.example.test"]
         assert_eq!(response.status(), StatusCode::OK);
         let body = json_body(response).await;
         assert!(body["csrf_token"].as_str().is_some());
+    }
+
+    #[tokio::test]
+    async fn root_page_identifies_admin_routes() {
+        let response = root_handler().await.into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read root body");
+        let body = String::from_utf8(bytes.to_vec()).expect("root html");
+        assert!(body.contains("OxideBBS Admin"));
+        assert!(body.contains("/health"));
+        assert!(body.contains("/status"));
+        assert!(body.contains("/csrf-token"));
+        assert!(body.contains("POST /login"));
+        assert!(body.contains("HTTP directly"));
+    }
+
+    #[tokio::test]
+    async fn health_passes_when_doctor_has_no_failures() {
+        let state = test_state();
+        seed_user(&state, "Sysop", "secret", true);
+
+        let response = health_handler(State(state), HeaderMap::new())
+            .await
+            .expect("health response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = json_body(response).await;
+        assert_eq!(body["healthy"], true);
+        assert_eq!(body["doctor"]["failed"], 0);
+    }
+
+    #[tokio::test]
+    async fn health_fails_when_doctor_reports_failures() {
+        let state = test_state();
+
+        let response = health_handler(State(state), HeaderMap::new())
+            .await
+            .expect("health response");
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = json_body(response).await;
+        assert_eq!(body["healthy"], false);
+        assert!(
+            body["doctor"]["failed"]
+                .as_u64()
+                .is_some_and(|count| count > 0)
+        );
+        assert!(
+            body["doctor"]["failed_checks"]
+                .as_array()
+                .is_some_and(|checks| {
+                    checks
+                        .iter()
+                        .any(|check| check["name"].as_str() == Some("Sysop accounts"))
+                })
+        );
+    }
+
+    #[tokio::test]
+    async fn activity_user_id_tracks_authenticated_unexpired_sessions_only() {
+        let state = test_state();
+        let sysop_id = seed_user(&state, "Sysop", "secret", true);
+
+        let (pre_auth_cookie, _) = csrf_session(&state).await;
+        let mut pre_auth_headers = HeaderMap::new();
+        pre_auth_headers.insert(
+            header::COOKIE,
+            HeaderValue::from_str(&pre_auth_cookie).expect("pre-auth cookie header"),
+        );
+        assert_eq!(
+            activity_user_id_from_headers(&state, &pre_auth_headers).await,
+            None
+        );
+
+        let (cookie_pair, _) = login_session(&state, "Sysop", "secret").await;
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::COOKIE,
+            HeaderValue::from_str(&cookie_pair).expect("cookie header"),
+        );
+        assert_eq!(
+            activity_user_id_from_headers(&state, &headers).await,
+            Some(sysop_id)
+        );
+
+        let session_id = cookie_pair
+            .split_once('=')
+            .expect("session cookie pair")
+            .1
+            .to_string();
+        {
+            let mut sessions = state.sessions.write().await;
+            let session = sessions
+                .sessions
+                .get_mut(&session_id)
+                .expect("stored session");
+            session.last_seen_at =
+                Instant::now() - session_timeout(&state.config) - Duration::from_secs(1);
+        }
+
+        assert_eq!(activity_user_id_from_headers(&state, &headers).await, None);
     }
 
     #[tokio::test]

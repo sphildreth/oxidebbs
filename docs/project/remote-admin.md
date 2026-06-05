@@ -8,6 +8,23 @@ The public HTTP surface is intentionally narrow: `GET /status` is available only
 when both `enabled = true` and `public_status_enabled = true`. The payload omits
 database paths, caller addresses, secrets, and audit rows.
 
+`GET /` returns a small static landing page that confirms the listener is
+running and points operators to the available JSON routes. The admin listener
+speaks HTTP directly; use a local TLS reverse proxy when browser access requires
+HTTPS.
+
+`GET /health` runs the same doctor checks used by the local sysop tooling and
+returns JSON with `healthy = true` plus HTTP `200 OK` when doctor has no failed
+checks. It returns `healthy = false` plus HTTP `503 Service Unavailable` when
+doctor reports failures. `/healthz` and `/healtz` are aliases for monitoring
+systems that expect those spellings.
+
+Every admin web request is emitted through the configured OxideBBS logger as an
+activity line with HTTP method, path without query string, response status,
+elapsed milliseconds, remote address when available, and authenticated user ID
+when the session is already logged in. Request bodies, query strings, cookies,
+CSRF tokens, replay headers, and other header values are not logged.
+
 Authenticated read endpoints are available after a sysop login:
 
 - `GET /csrf-token` creates or refreshes a pre-auth session and CSRF token.

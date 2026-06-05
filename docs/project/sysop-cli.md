@@ -388,10 +388,12 @@ of best-effort audit writes that failed while the server was running.
 
 The `[admin_web]` configuration surface is disabled by default and validated.
 When explicitly enabled, it can serve a loopback public `/status` endpoint and
-sysop-authenticated read-only JSON admin views. Remote mutation attempts require
-CSRF and nonce/timestamp replay checks, are audited, and remain blocked by
-`admin_web.read_only`; the mutating admin/control surface remains local CLI plus
-Unix control socket.
+sysop-authenticated read-only JSON admin views. `GET /` returns a small static
+route index. `GET /health`, `/healthz`, and `/healtz` run doctor-backed
+monitoring checks and return HTTP `200` only when doctor has no failed checks.
+Remote mutation attempts require CSRF and nonce/timestamp replay checks, are
+audited, and remain blocked by `admin_web.read_only`; the mutating admin/control
+surface remains local CLI plus Unix control socket.
 
 ## Messages
 
