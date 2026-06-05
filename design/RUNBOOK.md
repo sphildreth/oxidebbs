@@ -136,11 +136,21 @@ curl -fsS http://127.0.0.1:8080/healthz
 curl -fsS http://127.0.0.1:8080/healtz
 ```
 
-Admin web requests are written to the configured text or JSON logs as activity
-lines. Each line includes method, path without query string, response status,
-elapsed milliseconds, remote address when available, and authenticated user ID
-when a logged-in session is present. Request bodies, query strings, cookies,
-CSRF tokens, replay headers, and other header values are intentionally omitted.
+OxideBBS does not serve HTTPS/TLS on `[admin_web]`. Keep the listener bound to
+loopback and terminate HTTPS in a local reverse proxy such as Caddy:
+
+```caddyfile
+monitor.example.com {
+    reverse_proxy 127.0.0.1:8080
+}
+```
+
+Monitoring web requests are written to the configured text or JSON logs as
+activity lines. Each line includes method, path without query string, response
+status, elapsed milliseconds, remote address when available, and authenticated
+user ID when a logged-in session is present. Request bodies, query strings,
+cookies, CSRF tokens, replay headers, and other header values are intentionally
+omitted.
 
 Useful local-only status checks:
 

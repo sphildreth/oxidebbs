@@ -83,13 +83,13 @@ terminal profile; this is not a C64-native server port.
 - 🔌 **Local Control Socket** - Same-UID Unix control channel for live status,
   node list/show, disconnects, direct node messages, broadcasts, and stale-node
   recovery.
-- 🩺 **Remote Status And Health Surface** - Opt-in loopback admin web listener
-  with a human-readable root page, `/status`, doctor-backed `/health`,
+- 🩺 **Remote Monitoring And Health Surface** - Opt-in loopback monitoring web
+  listener with a human-readable root page, `/status`, doctor-backed `/health`,
   `/healthz`, `/healtz`, sysop-authenticated read-only JSON APIs, CSRF/replay
   protections, origin checks, rate limits, and read-only mutation blocking.
 - 📝 **Operational Logs And Audit Trail** - Configurable text or JSON logs,
-  rotation, admin web activity lines, audit retention, startup/shutdown events,
-  door events, auth events, and sysop action records.
+  rotation, monitoring web activity lines, audit retention, startup/shutdown
+  events, door events, auth events, and sysop action records.
 - 🐳 **Docker Deployment** - Cross-platform Docker Compose path for Windows,
   macOS, and Linux hosts with OxideBBS, DOSEMU2, assets, config, and the test
   door inside a Linux runtime image.
@@ -190,8 +190,8 @@ without that file falls back to `config/oxidebbs.example.toml`.
 ## Sysop Operations
 
 OxideBBS is local-admin-first. Mutating sysop operations live in the CLI, the
-local sysop TUI, and the same-UID local control socket. The optional admin web
-listener is intended for loopback status, health checks, and authenticated
+local sysop TUI, and the same-UID local control socket. The optional monitoring
+web listener is intended for loopback status, health checks, and authenticated
 read-only JSON views.
 
 ```bash
@@ -220,7 +220,8 @@ embedded serve runtime for the TUI session. Selectable themes include
 
 When `[admin_web]` is enabled, the loopback listener exposes a landing page and
 monitoring-friendly health checks. `/status` is public only when
-`public_status_enabled = true`.
+`public_status_enabled = true`. OxideBBS serves this listener as plain HTTP
+only; use a local reverse proxy such as Caddy for HTTPS/TLS termination.
 
 ```bash
 curl http://127.0.0.1:8080/
@@ -276,7 +277,7 @@ Useful docs:
 - [Deployment and Operations](docs/project/deployment.md)
 - [Docker Deployment](docs/project/docker.md)
 - [Sysop CLI](docs/project/sysop-cli.md)
-- [Remote Admin And Health](docs/project/remote-admin.md)
+- [Remote Monitoring And Health](docs/project/remote-admin.md)
 - [Caller Commands](docs/project/caller-commands.md)
 - [Serial And Modem Transport](docs/project/serial.md)
 - [File Transfers](docs/project/file-transfers.md)

@@ -51,7 +51,7 @@ export default defineConfig({
           { text: 'User Security Levels', link: '/project/security-levels' },
           { text: 'Sysop CLI', link: '/project/sysop-cli' },
           { text: 'Sysop TUI Themes', link: '/project/sysop-tui-themes' },
-          { text: 'Remote Admin', link: '/project/remote-admin' },
+          { text: 'Remote Monitoring', link: '/project/remote-admin' },
           { text: 'Versioning', link: '/project/versioning' },
           { text: 'Deployment', link: '/project/deployment' }
         ]

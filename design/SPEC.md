@@ -477,6 +477,10 @@ message id, and outcome fields when applicable.
 All mutating sysop control is local in v1.2. `[admin_web]` configuration exists
 and is disabled by default. When explicitly enabled, it may expose a loopback
 public `/status` endpoint plus sysop-authenticated read-only JSON API views.
+The `[admin_web]` listener is plain HTTP only; OxideBBS does not implement
+native HTTPS/TLS for this surface. HTTPS deployments must terminate TLS in a
+local reverse proxy such as Caddy, nginx, or Traefik and forward plain HTTP to
+the loopback listener.
 Remote mutation attempts are guarded by session authentication, CSRF, replay
 nonce/timestamp checks, rate limits, origin checks, and audit logging, but are
 blocked by read-only mode.

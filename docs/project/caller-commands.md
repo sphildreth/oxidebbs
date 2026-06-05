@@ -44,8 +44,8 @@ through the gated main-menu `S` item.
 | `G` | Goodbye | `logoff` | Active |
 
 The caller sysop submenu is intentionally non-mutating. It can show safe
-sysop-oriented information, but remote admin changes remain outside the caller
-menu surface.
+sysop-oriented information, but remote mutations remain outside the caller menu
+surface.
 
 ## Door Menu
 

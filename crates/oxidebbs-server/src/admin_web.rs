@@ -46,7 +46,7 @@ const ADMIN_ROOT_HTML: &str = r#"<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>OxideBBS Admin</title>
+  <title>OxideBBS Monitoring</title>
   <style>
     :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
     body { margin: 2rem; max-width: 52rem; line-height: 1.5; }
@@ -54,8 +54,8 @@ const ADMIN_ROOT_HTML: &str = r#"<!doctype html>
   </style>
 </head>
 <body>
-  <h1>OxideBBS Admin</h1>
-  <p>The admin HTTP listener is running.</p>
+  <h1>OxideBBS Monitoring</h1>
+  <p>The monitoring HTTP listener is running.</p>
   <p><a href="/health">Health check JSON</a> runs doctor checks and returns HTTP 200 when healthy.</p>
   <p><a href="/status">Public status JSON</a> is available when <code>public_status_enabled = true</code>.</p>
   <p>Authenticated read-only JSON endpoints start with <code>/api/</code> and use <code>/csrf-token</code> plus <code>POST /login</code>.</p>
@@ -349,7 +349,7 @@ pub(crate) async fn start_admin_web(
     let listener = TcpListener::bind(bind).await?;
     let app = admin_router(AdminWebState::new(config, db, runtime));
 
-    info!(bind = %listener.local_addr()?, "admin web listener started");
+    info!(bind = %listener.local_addr()?, "monitoring web listener started");
     Ok(tokio::spawn(async move {
         axum::serve(
             listener,
@@ -440,7 +440,7 @@ async fn log_admin_request(
             elapsed_ms,
             remote_addr = %remote_addr,
             user_id = %user_id,
-            "admin web request completed"
+            "monitoring web request completed"
         );
     } else {
         info!(
@@ -450,7 +450,7 @@ async fn log_admin_request(
             elapsed_ms,
             remote_addr = %remote_addr,
             user_id = %user_id,
-            "admin web request completed"
+            "monitoring web request completed"
         );
     }
 
@@ -563,7 +563,7 @@ async fn login_handler(
                 "admin_web_csrf_rejected",
                 None,
                 None,
-                "admin web login rejected by CSRF validation",
+                "monitoring web login rejected by CSRF validation",
             );
             return Err(session_error_status(error));
         }
@@ -581,7 +581,10 @@ async fn login_handler(
             "admin_web_login_rate_limited",
             None,
             None,
-            format!("admin web login rate limited for alias {}", login.username),
+            format!(
+                "monitoring web login rate limited for alias {}",
+                login.username
+            ),
         );
         return Ok(json_response(
             StatusCode::TOO_MANY_REQUESTS,
@@ -600,7 +603,7 @@ async fn login_handler(
             "admin_web_login_failure",
             None,
             None,
-            format!("admin web login failed for alias {}", login.username),
+            format!("monitoring web login failed for alias {}", login.username),
         );
         return Ok(json_response(
             StatusCode::UNAUTHORIZED,
@@ -624,9 +627,9 @@ async fn login_handler(
         "admin_web_login_success",
         Some(user.id.as_str()),
         None,
-        format!("admin web login successful for {}", user.alias),
+        format!("monitoring web login successful for {}", user.alias),
     );
-    info!(alias = %user.alias, "admin web login accepted");
+    info!(alias = %user.alias, "monitoring web login accepted");
 
     let mut response = json_response(
         StatusCode::OK,
@@ -657,7 +660,7 @@ async fn logout_handler(
             "admin_web_csrf_rejected",
             Some(authenticated.user_id.as_str()),
             None,
-            "admin web logout rejected by CSRF validation",
+            "monitoring web logout rejected by CSRF validation",
         );
         return Err(status);
     }
@@ -672,7 +675,7 @@ async fn logout_handler(
         "admin_web_logout",
         Some(authenticated.user_id.as_str()),
         None,
-        "admin web logout",
+        "monitoring web logout",
     );
 
     let mut response = json_response(
@@ -1063,7 +1066,7 @@ async fn api_node_disconnect_handler(
             "admin_web_csrf_rejected",
             Some(authenticated.user_id.as_str()),
             Some(i64::from(node_number)),
-            "admin web mutation rejected by CSRF validation",
+            "monitoring web mutation rejected by CSRF validation",
         );
         return Err(status);
     }
@@ -1073,7 +1076,7 @@ async fn api_node_disconnect_handler(
             "admin_web_replay_rejected",
             Some(authenticated.user_id.as_str()),
             Some(i64::from(node_number)),
-            "admin web mutation rejected by replay validation",
+            "monitoring web mutation rejected by replay validation",
         );
         return Err(status);
     }
@@ -1090,7 +1093,7 @@ async fn api_node_disconnect_handler(
             "admin_web_mutation_rate_limited",
             Some(authenticated.user_id.as_str()),
             Some(i64::from(node_number)),
-            "admin web mutation rate limited",
+            "monitoring web mutation rate limited",
         );
         return Ok(json_response(
             StatusCode::TOO_MANY_REQUESTS,
@@ -1106,7 +1109,7 @@ async fn api_node_disconnect_handler(
         "admin_web_read_only_mutation_blocked",
         Some(authenticated.user_id.as_str()),
         Some(i64::from(node_number)),
-        "admin web node disconnect blocked by read-only mode",
+        "monitoring web node disconnect blocked by read-only mode",
     );
 
     let status = if state.config.admin_web.read_only {
@@ -1382,7 +1385,7 @@ fn audit_admin_event(
             details: details.into(),
         },
     ) {
-        warn!(%error, %event_type, "failed to insert admin web audit event");
+        warn!(%error, %event_type, "failed to insert monitoring web audit event");
         state.runtime.record_audit_write_failure();
     }
 }
@@ -1593,7 +1596,7 @@ allowed_origins = ["https://admin.example.test"]
             .await
             .expect("read root body");
         let body = String::from_utf8(bytes.to_vec()).expect("root html");
-        assert!(body.contains("OxideBBS Admin"));
+        assert!(body.contains("OxideBBS Monitoring"));
         assert!(body.contains("/health"));
         assert!(body.contains("/status"));
         assert!(body.contains("/csrf-token"));

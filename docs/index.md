@@ -5,6 +5,9 @@ hero:
   name: OxideBBS
   text: A modern BBS server implementation
   tagline: Telnet and serial callers, ANSI/CP437 screens, DecentDB persistence, FTN/OxideNet networking, file transfers, and isolated DOS doors.
+  image:
+    src: /logo.png
+    alt: OxideBBS logo
   actions:
     - theme: brand
       text: Get Started

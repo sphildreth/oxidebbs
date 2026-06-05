@@ -92,15 +92,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   counts.
 - Public docs pages for doors, serial/modem transport, caller file-transfer
   status, and OxideNet status, with navigation entries.
-- Disabled-by-default `[admin_web]` configuration model with validation for
-  loopback-only enabled binds, public-status opt-in, origin allowlists,
-  reverse-proxy TLS policy, read-only mode, CSRF/replay timing, and rate-limit
-  settings.
-- Remote admin authentication with Argon2 password verification, cookie-backed
-  in-memory sysop sessions, CSRF token runtime validation, origin checks, login
-  rate limiting, authenticated read-only API views, logout session deletion, and
-  guarded mutation routes that validate nonce/timestamp replay headers before
-  read-only mode blocks the mutation.
+- Disabled-by-default `[admin_web]` monitoring configuration model with
+  validation for loopback-only enabled binds, public-status opt-in, origin
+  allowlists, reverse-proxy TLS policy, read-only mode, CSRF/replay timing, and
+  rate-limit settings.
+- Remote monitoring authentication with Argon2 password verification,
+  cookie-backed in-memory sysop sessions, CSRF token runtime validation, origin
+  checks, login rate limiting, authenticated read-only API views, logout session
+  deletion, and guarded mutation routes that validate nonce/timestamp replay
+  headers before read-only mode blocks the mutation.
 - Reusable read-only admin status JSON payload helper shared by the existing
   `status --json` command and the opt-in loopback `/status` route.
 - C64/C64 Ultimate caller compatibility requirement with a named `c64`
@@ -179,10 +179,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - TLS-required and TLS-opportunistic non-dry-run `net poll` use native BinkP
   TLS session support. Opportunistic links fall back to plaintext only when
   legacy compatibility is explicitly enabled.
-- Remote admin remains disabled by default, but `[admin_web]` can now start an
-  opt-in loopback public `/status` endpoint plus sysop-authenticated read-only
-  API views. Remote mutations remain blocked by read-only mode after auth, CSRF,
-  replay, rate-limit, origin, and audit checks.
+- Remote monitoring remains disabled by default, but `[admin_web]` can now start
+  an opt-in loopback public `/status` endpoint plus sysop-authenticated
+  read-only API views. Remote mutations remain blocked by read-only mode after
+  auth, CSRF, replay, rate-limit, origin, and audit checks.
 
 ## [1.1.0] - 2026-06-03
 

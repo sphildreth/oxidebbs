@@ -29,9 +29,11 @@ The remote surface must provide:
 - explicit read-only mode
 - clear separation between public status, authenticated status, and mutations
 
-The first implementation may use reverse-proxy TLS termination, but docs must
-state that credentials and session cookies must not be sent over plaintext
-networks.
+The first implementation uses plain HTTP from OxideBBS and relies on
+reverse-proxy TLS termination for HTTPS deployments. OxideBBS does not implement
+native HTTPS/TLS for `[admin_web]`; docs must state that credentials and session
+cookies must not be sent over plaintext networks outside the local proxy
+boundary.
 
 ## Consequences
 
