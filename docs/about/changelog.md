@@ -94,8 +94,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   status, and OxideNet status, with navigation entries.
 - Disabled-by-default `[admin_web]` monitoring configuration model with
   validation for loopback-only enabled binds, public-status opt-in, origin
-  allowlists, reverse-proxy TLS policy, read-only mode, CSRF/replay timing, and
-  rate-limit settings.
+  allowlists, reverse-proxy TLS policy with no native HTTPS listener, read-only
+  mode, CSRF/replay timing, and rate-limit settings.
 - Remote monitoring authentication with Argon2 password verification,
   cookie-backed in-memory sysop sessions, CSRF token runtime validation, origin
   checks, login rate limiting, authenticated read-only API views, logout session

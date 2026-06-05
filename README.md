@@ -83,7 +83,7 @@ terminal profile; this is not a C64-native server port.
 - 🔌 **Local Control Socket** - Same-UID Unix control channel for live status,
   node list/show, disconnects, direct node messages, broadcasts, and stale-node
   recovery.
-- 🩺 **Remote Monitoring And Health Surface** - Opt-in loopback monitoring web
+- 🩺 **Remote Monitoring And Health Surface** - Opt-in plain-HTTP loopback monitoring web
   listener with a human-readable root page, `/status`, doctor-backed `/health`,
   `/healthz`, `/healtz`, sysop-authenticated read-only JSON APIs, CSRF/replay
   protections, origin checks, rate limits, and read-only mutation blocking.
@@ -221,7 +221,9 @@ embedded serve runtime for the TUI session. Selectable themes include
 When `[admin_web]` is enabled, the loopback listener exposes a landing page and
 monitoring-friendly health checks. `/status` is public only when
 `public_status_enabled = true`. OxideBBS serves this listener as plain HTTP
-only; use a local reverse proxy such as Caddy for HTTPS/TLS termination.
+only; use a local reverse proxy such as Caddy for HTTPS/TLS termination. Do
+not connect directly with `https://127.0.0.1:8080`; terminate HTTPS at the
+proxy and forward plain HTTP to OxideBBS.
 
 ```bash
 curl http://127.0.0.1:8080/

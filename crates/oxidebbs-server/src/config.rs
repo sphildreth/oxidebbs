@@ -740,7 +740,7 @@ impl OxideConfig {
             }
             if !ip_is_loopback(bind.ip()) {
                 return Err(ConfigError::Validation(
-                    "admin_web.bind must remain loopback-only until native remote-admin TLS is implemented".into(),
+                    "admin_web.bind must remain loopback-only; terminate HTTPS/TLS in a local reverse proxy".into(),
                 ));
             }
         }

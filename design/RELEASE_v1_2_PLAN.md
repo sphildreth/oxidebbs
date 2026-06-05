@@ -1627,8 +1627,9 @@ Implementation tasks:
   - audit logging is implemented
   - rate limiting is implemented
 - Keep local Unix socket unchanged.
-- Document TLS expectations. If TLS is terminated by a reverse proxy, examples
-  must show safe headers and bind-to-localhost deployment.
+- Document TLS expectations. `[admin_web]` speaks plain HTTP only; HTTPS must
+  be terminated by a loopback reverse proxy, and examples must show safe
+  headers and bind-to-localhost deployment.
 
 Acceptance criteria:
 
