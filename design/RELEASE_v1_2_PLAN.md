@@ -237,7 +237,7 @@ Completed deliverables:
   state.
 - Chose DecentDB as mutable runtime source of truth for door definitions after
   setup import.
-- Chose provider boundaries for DOS, native, and remote doors.
+- Chose provider boundaries for local DOS doors and remote door services.
 
 No code is changed in P0.
 
@@ -1762,7 +1762,7 @@ Completed implementation tasks:
 - Updated `design/ROADMAP.md` with v1.2 completion and post-v1.2 work that is
   genuinely outside this release.
 - Updated `design/PRD.md` so shipped former v2 candidates appear in v1.2 scope
-  and the Rust-native door API remains a separate post-v1.2 candidate.
+  and remaining post-v1.2 compatibility work is tracked separately.
 - Updated `README.md` boundaries.
 - Verified config examples through the Rust gate.
 - Verified docs navigation includes FTN, OxideNet, file transfer, serial, door,

@@ -112,7 +112,6 @@ v1.2 tasks; see the phase status map above for current completion state.
   operations stats, BinkP transport, OxideNet, and operational CLI.
 - [x] OxideNet implementation beyond the current foundation/design work.
 - [x] Remote web admin or status dashboard with a full security model.
-- [ ] Native door API.
 - [x] Remote door-provider integrations with credential-reference storage and
   redacted CLI/TUI/audit/export paths.
 - [x] Codeberg mirror automation.

@@ -819,12 +819,11 @@ Future acceptance criteria:
 - Separate ADR.
 - Docs explaining local vs remote admin boundaries.
 
-### Native door API and remote door providers
+### Remote door providers and door compatibility
 
 Current behavior:
 
 - Door execution is currently DOS-door/DOSEMU2-centered.
-- `design/STACK.md` lists a future native door API.
 - `design/DOOR_GAME_RESOURCES.md` mentions BBSLink/DoorParty-style remote door
   providers as future integration targets.
 
@@ -836,8 +835,7 @@ Decision for v1.1.0:
 
 Future acceptance criteria:
 
-- Clear boundary between local DOS doors, native local doors, and remote door
-  providers.
+- Clear boundary between local DOS doors and remote door providers.
 - Security model for remote providers.
 - Terminal byte compatibility documented.
 - Config model updated.
@@ -943,8 +941,8 @@ Treat `v1.1.0` as a release centered on:
 - and bug fixes discovered after `v1.0.0`.
 
 Do not expand `v1.1.0` into real FTN, OxideNet, physical serial, file transfer,
-native door APIs, or remote web admin. Those are large enough to deserve their
-own milestones and review passes.
+or remote web admin. Those are large enough to deserve their own milestones and
+review passes.
 
 The local release hygiene is complete. The remaining work is publication:
 

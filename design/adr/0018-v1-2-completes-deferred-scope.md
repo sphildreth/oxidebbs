@@ -7,8 +7,8 @@ Accepted
 ## Context
 
 The v1.1.0 release plan and task tracker intentionally deferred caller-flow,
-door, database, transport, file-transfer, FTN, OxideNet, remote-admin, native
-door, and repository automation work.
+door, database, transport, file-transfer, FTN, OxideNet, remote-admin, and
+repository automation work.
 
 The v1.2 release is now defined as the version that includes every feature that
 existing documentation describes as deferred, future, later, reserved, or a
