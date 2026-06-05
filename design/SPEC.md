@@ -49,6 +49,15 @@ Door Runner
 DOS Runtime
 ```
 
+Local DOS doors run from per-node runtime directories. OxideBBS stages the
+configured door directory into the runtime directory, writes the requested drop
+file there, launches the door, then syncs door-owned output files back to the
+configured door directory before cleaning the runtime directory. Generated
+drop/runtime files such as `DOOR.SYS`, `DORINFO1.DEF`, `OXNODE.TXT`,
+`OXDOSEMU2.CONF`, and `OXCOM1.PTY` are excluded from sync-back. Persistent DOS
+disk images are a future compatibility option and should require exclusive-door
+semantics when mutable state is shared.
+
 ## 3. Core concepts
 
 ### Board

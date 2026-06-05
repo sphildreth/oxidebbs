@@ -5,6 +5,7 @@ const
   DropDorInfo = 'DORINFO1.DEF';
   DropDoorSys = 'DOOR.SYS';
   NodeFile = 'OXNODE.TXT';
+  StateFile = 'OXIDECHK.DAT';
   ReportFile = 'OXIDECHK.RPT';
   Com1Base = $3F8;
   Com1Data = Com1Base;
@@ -23,7 +24,7 @@ const
 
 type
   DropLine = string[120];
-  DropLines = array[1..10] of DropLine;
+  DropLines = array[1..12] of DropLine;
   FileBuffer = array[1..256] of Byte;
 
 var
@@ -36,6 +37,10 @@ var
   SecurityLevel: string;
   MinutesRemaining: string;
   NodeNumber: string;
+  StateLoaded: Boolean;
+  StatePreviousRuns: Integer;
+  StateRuns: Integer;
+  StateWriteStatus: string;
   Choice: char;
 
 function UpperAscii(const Value: Char): Char;
@@ -54,6 +59,14 @@ begin
     ValueOrUnknown := Unknown
   else
     ValueOrUnknown := Value;
+end;
+
+function IntToString(Value: Integer): string;
+var
+  TextValue: string;
+begin
+  Str(Value, TextValue);
+  IntToString := TextValue;
 end;
 
 procedure SerialInit;
@@ -111,6 +124,10 @@ begin
   SecurityLevel := Unknown;
   MinutesRemaining := Unknown;
   NodeNumber := Unknown;
+  StateLoaded := false;
+  StatePreviousRuns := 0;
+  StateRuns := 0;
+  StateWriteStatus := 'not written';
 end;
 
 function ReadLines(Name: string; var Lines: DropLines): boolean;
@@ -125,7 +142,7 @@ var
   LastWasCr: Boolean;
 begin
   ReadLines := false;
-  for I := 1 to 10 do
+  for I := 1 to 12 do
     Lines[I] := '';
 
   Assign(F, Name);
@@ -152,7 +169,7 @@ begin
       begin
         if not ((Ch = #10) and LastWasCr) then
         begin
-          if LineNumber < 10 then
+          if LineNumber < 12 then
             LineNumber := LineNumber + 1;
         end;
         LastWasCr := Ch = #13;
@@ -187,12 +204,12 @@ procedure ParseDorInfo(var Lines: DropLines);
 begin
   ActiveDropFile := DropDorInfo;
   BoardName := ValueOrUnknown(Lines[1]);
-  SysopName := ValueOrUnknown(Lines[2]);
-  CallerName := ValueOrUnknown(Lines[6] + ' ' + Lines[7]);
+  SysopName := ValueOrUnknown(Lines[2] + ' ' + Lines[3]);
+  CallerName := ValueOrUnknown(Lines[7] + ' ' + Lines[8]);
   CallerAlias := CallerName;
-  CallerLocation := ValueOrUnknown(Lines[8]);
-  SecurityLevel := ValueOrUnknown(Lines[9]);
-  MinutesRemaining := ValueOrUnknown(Lines[10]);
+  CallerLocation := ValueOrUnknown(Lines[9]);
+  SecurityLevel := ValueOrUnknown(Lines[11]);
+  MinutesRemaining := ValueOrUnknown(Lines[12]);
 end;
 
 procedure ParseDoorSys(var Lines: DropLines);
@@ -248,6 +265,69 @@ begin
   SerialWriteLine('');
 end;
 
+procedure LoadPersistentState;
+var
+  Lines: DropLines;
+  Value: Integer;
+  Code: Integer;
+begin
+  StateLoaded := false;
+  StatePreviousRuns := 0;
+  if not ReadLines(StateFile, Lines) then
+    Exit;
+
+  StateLoaded := true;
+  if Copy(Lines[2], 1, 5) = 'runs=' then
+  begin
+    Val(Copy(Lines[2], 6, Length(Lines[2]) - 5), Value, Code);
+    if Code = 0 then
+      StatePreviousRuns := Value;
+  end;
+end;
+
+procedure WritePersistentState;
+var
+  F: Text;
+begin
+  Assign(F, StateFile);
+  {$I-}
+  Rewrite(F);
+  {$I+}
+  if IOResult <> 0 then
+  begin
+    StateWriteStatus := 'write failed';
+    Exit;
+  end;
+
+  WriteLn(F, 'Oxide Door Check Persistence');
+  WriteLn(F, 'runs=', StateRuns);
+  WriteLn(F, 'last_node=', NodeNumber);
+  WriteLn(F, 'last_caller=', CallerName);
+  WriteLn(F, 'last_drop_file=', ActiveDropFile);
+  Close(F);
+  StateWriteStatus := 'written';
+end;
+
+procedure UpdatePersistentState;
+begin
+  LoadPersistentState;
+  StateRuns := StatePreviousRuns + 1;
+  WritePersistentState;
+end;
+
+procedure PrintPersistence;
+begin
+  SerialWriteLine('');
+  SerialWriteLine('Persistence file: ' + StateFile);
+  if StateLoaded then
+    SerialWriteLine('Previous runs: ' + IntToString(StatePreviousRuns))
+  else
+    SerialWriteLine('Previous runs: none');
+  SerialWriteLine('Current runs: ' + IntToString(StateRuns));
+  SerialWriteLine('Write status: ' + StateWriteStatus);
+  SerialWriteLine('');
+end;
+
 procedure WriteReport;
 var
   F: Text;
@@ -266,6 +346,10 @@ begin
   WriteLn(F, 'drop_file=', ActiveDropFile);
   WriteLn(F, 'node=', NodeNumber);
   WriteLn(F, 'caller=', CallerName);
+  WriteLn(F, 'state_file=', StateFile);
+  WriteLn(F, 'state_previous_runs=', StatePreviousRuns);
+  WriteLn(F, 'state_runs=', StateRuns);
+  WriteLn(F, 'state_write_status=', StateWriteStatus);
   WriteLn(F, 'result=report');
   Close(F);
   SerialWriteLine('Report file written');
@@ -273,7 +357,7 @@ end;
 
 procedure Prompt;
 begin
-  SerialWriteString('[I]nfo  [R]eport  [Q]uit: ');
+  SerialWriteString('[I]nfo  [P]ersist  [R]eport  [Q]uit: ');
 end;
 
 begin
@@ -288,6 +372,8 @@ begin
   end;
 
   PrintSummary;
+  UpdatePersistentState;
+  PrintPersistence;
 
   repeat
     Prompt;
@@ -299,6 +385,7 @@ begin
     SerialWriteChar(#10);
     case Choice of
       'I': PrintSummary;
+      'P': PrintPersistence;
       'R': WriteReport;
       'Q':
         begin

@@ -6,7 +6,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 #[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::thread;
@@ -184,6 +184,21 @@ pub fn cleanup_node_runtime_dir(path: impl AsRef<Path>) -> Result<(), DoorError>
         fs::remove_dir_all(path)?;
     }
     Ok(())
+}
+
+pub fn sync_door_runtime_outputs(
+    runtime_dir: impl AsRef<Path>,
+    working_dir: impl AsRef<Path>,
+    drop_file: &str,
+) -> Result<(), DoorError> {
+    let runtime_dir = absolute_host_path(runtime_dir.as_ref())?;
+    let working_dir = absolute_host_path(working_dir.as_ref())?;
+    if runtime_dir == working_dir || !runtime_dir.exists() {
+        return Ok(());
+    }
+
+    fs::create_dir_all(&working_dir)?;
+    sync_runtime_output_dir(&runtime_dir, &runtime_dir, &working_dir, drop_file)
 }
 
 pub fn render_door_sys(caller: &DoorCaller, node_number: u16, baud_rate: u32) -> String {
@@ -464,6 +479,171 @@ fn stage_dosemu2_file(source_path: &Path, target_path: &Path) -> Result<(), Door
         })?;
     }
     Ok(())
+}
+
+const GENERATED_RUNTIME_FILES: &[&str] = &[
+    "CALLINFO.BBS",
+    "CHAIN.TXT",
+    "DOOR.SYS",
+    "DOORFILE.SR",
+    "DORINFO1.DEF",
+    "OXCOM1.PTY",
+    "OXDOSEMU2.CONF",
+    "OXNODE.TXT",
+    "PCBOARD.SYS",
+];
+
+fn sync_runtime_output_dir(
+    runtime_root: &Path,
+    source_dir: &Path,
+    working_root: &Path,
+    drop_file: &str,
+) -> Result<(), DoorError> {
+    for entry in fs::read_dir(source_dir)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() {
+            continue;
+        }
+
+        let source_path = entry.path();
+        let relative_path = source_path.strip_prefix(runtime_root).map_err(|error| {
+            DoorError::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!(
+                "failed to compute runtime output path for {} relative to {}: {error}",
+                source_path.display(),
+                runtime_root.display()
+                ),
+            ))
+        })?;
+        if is_generated_runtime_output(relative_path, drop_file) {
+            continue;
+        }
+
+        sync_runtime_output_entry(
+            runtime_root,
+            &source_path,
+            &working_root.join(entry.file_name()),
+            &file_type,
+            drop_file,
+        )?;
+    }
+    Ok(())
+}
+
+fn sync_runtime_output_entry(
+    runtime_root: &Path,
+    source_path: &Path,
+    target_path: &Path,
+    file_type: &fs::FileType,
+    drop_file: &str,
+) -> Result<(), DoorError> {
+    if file_type.is_dir() {
+        if target_path.exists() && !target_path.is_dir() {
+            fs::remove_file(target_path)?;
+        }
+        fs::create_dir_all(target_path)?;
+        return sync_runtime_output_dir(runtime_root, source_path, target_path, drop_file);
+    }
+
+    if !file_type.is_file() {
+        return Ok(());
+    }
+
+    if paths_refer_to_same_file(source_path, target_path)? {
+        return Ok(());
+    }
+    if target_path.is_file() && files_have_same_contents(source_path, target_path)? {
+        return Ok(());
+    }
+
+    if let Some(parent) = target_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    if target_path.exists() {
+        if fs::symlink_metadata(target_path)?.is_dir() {
+            fs::remove_dir_all(target_path)?;
+        } else {
+            fs::remove_file(target_path)?;
+        }
+    }
+    fs::copy(source_path, target_path).map_err(|error| {
+        DoorError::Io(std::io::Error::new(
+            error.kind(),
+            format!(
+                "failed to sync door runtime output {} back to {}: {error}",
+                source_path.display(),
+                target_path.display()
+            ),
+        ))
+    })?;
+    Ok(())
+}
+
+fn is_generated_runtime_output(relative_path: &Path, drop_file: &str) -> bool {
+    if relative_path.components().count() != 1 {
+        return false;
+    }
+    let Some(name) = relative_path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    is_generated_runtime_file_name(name, drop_file)
+}
+
+fn is_generated_runtime_file_name(name: &str, drop_file: &str) -> bool {
+    let name = name.to_ascii_uppercase();
+    if GENERATED_RUNTIME_FILES.contains(&name.as_str()) {
+        return true;
+    }
+    let drop_file = Path::new(drop_file)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(drop_file)
+        .to_ascii_uppercase();
+    name == drop_file
+}
+
+fn paths_refer_to_same_file(left: &Path, right: &Path) -> Result<bool, DoorError> {
+    if !left.exists() || !right.exists() {
+        return Ok(false);
+    }
+    #[cfg(unix)]
+    {
+        let left = fs::metadata(left)?;
+        let right = fs::metadata(right)?;
+        Ok(left.dev() == right.dev() && left.ino() == right.ino())
+    }
+    #[cfg(not(unix))]
+    {
+        Ok(false)
+    }
+}
+
+fn files_have_same_contents(left: &Path, right: &Path) -> Result<bool, DoorError> {
+    let left_metadata = fs::metadata(left)?;
+    let right_metadata = fs::metadata(right)?;
+    if left_metadata.len() != right_metadata.len() {
+        return Ok(false);
+    }
+
+    let mut left_file = fs::File::open(left)?;
+    let mut right_file = fs::File::open(right)?;
+    let mut left_buffer = [0_u8; 8192];
+    let mut right_buffer = [0_u8; 8192];
+    loop {
+        let left_count = left_file.read(&mut left_buffer)?;
+        let right_count = right_file.read(&mut right_buffer)?;
+        if left_count != right_count {
+            return Ok(false);
+        }
+        if left_count == 0 {
+            return Ok(true);
+        }
+        if left_buffer[..left_count] != right_buffer[..right_count] {
+            return Ok(false);
+        }
+    }
 }
 
 fn stage_dosemu2_command(
@@ -1254,6 +1434,40 @@ mod tests {
     fn write_command_fixture(working_dir: &Path, command_name: &str) {
         fs::create_dir_all(working_dir).expect("create working dir");
         fs::write(working_dir.join(command_name), b"fixture command").expect("write command");
+    }
+
+    #[test]
+    fn syncs_runtime_outputs_back_without_generated_drop_files() {
+        let base = temp_path("sync-outputs");
+        let _ = fs::remove_dir_all(&base);
+        let runtime = base.join("runtime");
+        let working = base.join("working");
+        fs::create_dir_all(runtime.join("data")).expect("create runtime");
+        fs::create_dir_all(&working).expect("create working");
+        fs::write(working.join("KEEP.DAT"), b"old score").expect("write old data");
+        fs::write(runtime.join("KEEP.DAT"), b"new score").expect("write changed data");
+        fs::write(runtime.join("SCORE.DAT"), b"scoreboard").expect("write new data");
+        fs::write(runtime.join("DORINFO1.DEF"), b"drop").expect("write drop file");
+        fs::write(runtime.join("OXNODE.TXT"), b"node").expect("write runtime file");
+        fs::write(runtime.join("data").join("HOF.DAT"), b"hall").expect("write nested data");
+
+        sync_door_runtime_outputs(&runtime, &working, "DORINFO1.DEF").expect("sync outputs");
+
+        assert_eq!(
+            fs::read(working.join("KEEP.DAT")).expect("read changed data"),
+            b"new score".to_vec()
+        );
+        assert_eq!(
+            fs::read(working.join("SCORE.DAT")).expect("read new data"),
+            b"scoreboard".to_vec()
+        );
+        assert_eq!(
+            fs::read(working.join("data").join("HOF.DAT")).expect("read nested data"),
+            b"hall".to_vec()
+        );
+        assert!(!working.join("DORINFO1.DEF").exists());
+        assert!(!working.join("OXNODE.TXT").exists());
+        let _ = fs::remove_dir_all(&base);
     }
 
     fn spawn_fake_provider_server(response: &'static [u8]) -> (String, JoinHandle<Vec<u8>>) {

@@ -15,6 +15,8 @@ Current capabilities:
 - Live caller door validation accepts the same supported drop-file formats.
 - Doors marked `exclusive = true` cannot be launched a second time while an
   unfinished run for that same door exists in DecentDB.
+- Live local DOS doors stage into a per-node runtime directory and sync
+  door-owned output files back to the configured door directory before cleanup.
 - Remote door-provider abstractions, BBSLink-style dry runs, DoorParty-style dry
   runs, TCP/telnet live connectors, and localhost fake-server tests exist.
 - Provider credential references are stored in DecentDB through CLI and sysop
@@ -44,6 +46,31 @@ line-number-driven DOS doors:
 For DOSEMU2 live doors, prefer disabling RTS/CTS hardware handshaking in the
 door's own config when it offers those options. OxideBBS bridges a PTY-backed
 virtual COM port, not a physical modem with hardware flow-control lines.
+
+## Local Door Persistence
+
+Local DOS doors are launched from a per-node runtime directory so generated
+drop files, DOSEMU2 bridge files, and temporary node state do not pollute the
+configured door directory. Before the runtime directory is cleaned, OxideBBS
+syncs door-owned files back to the configured door directory. This preserves
+scoreboards, hall-of-fame files, saved games, and other door-created data.
+
+The sync excludes generated root-level runtime files:
+
+- `DOOR.SYS`
+- `DORINFO1.DEF`
+- `CHAIN.TXT`
+- `DOORFILE.SR`
+- `PCBOARD.SYS`
+- `CALLINFO.BBS`
+- `OXNODE.TXT`
+- `OXDOSEMU2.CONF`
+- `OXCOM1.PTY`
+
+Disk-image-backed door installs are intentionally deferred. Prefer normal host
+directories for doors that store loose `.DAT`, `.CFG`, `.RNX`, `.SCR`, or save
+files. If a future door requires a persistent DOS disk image, configure it as
+exclusive unless the image is mounted per-node and does not share mutable state.
 
 Remote provider definitions use the existing door fields:
 

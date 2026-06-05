@@ -37,6 +37,7 @@ use oxidebbs_door::DoorRunner;
 use oxidebbs_door::{
     DoorCaller, DoorRunPlan, DoorRunRequest, cleanup_node_runtime_dir, node_runtime_dir,
     prepare_door_run, prepare_node_runtime_dir, runner_supports_dosemu2_cli,
+    sync_door_runtime_outputs,
 };
 use oxidebbs_telnet::Transport;
 use oxidebbs_term::encode_cp437;
@@ -592,7 +593,29 @@ impl<'a> DoorService<'a> {
             );
         }
 
-        let finish_note = door_finish_note(&bridge, &runner_logs);
+        let mut finish_note = door_finish_note(&bridge, &runner_logs);
+        match sync_door_runtime_outputs(
+            &request.runtime_dir,
+            &request.door.working_dir,
+            &request.door.drop_file,
+        ) {
+            Ok(()) => {
+                finish_note.push_str("; runtime_outputs_synced=true");
+            }
+            Err(error) => {
+                let sync_error = format!("runtime output sync failed: {error}");
+                warn!(
+                    door = %door.key,
+                    run_id = %run_id,
+                    node = %node_number,
+                    runtime_dir = %request.runtime_dir.display(),
+                    working_dir = %request.door.working_dir,
+                    "{sync_error}"
+                );
+                finish_note.push_str("; runtime_outputs_synced=false; ");
+                finish_note.push_str(&sync_error);
+            }
+        }
         self.finish_run(
             &run_id,
             door,

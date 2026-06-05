@@ -148,6 +148,9 @@ plan above. Implementation agents should use `design/RELEASE_v1_2_PLAN.md`.
 
 ## Recently Completed
 
+- [x] Local DOS door runtime output sync-back preserves door-created score,
+  ranking, hall-of-fame, save, and data files while excluding generated drop
+  files and DOSEMU2 bridge files.
 - [x] `v1.0.0` initial release shipped.
 - [x] Local sysop TUI implemented.
 - [x] File logging and log rotation implemented.
