@@ -952,7 +952,12 @@ async fn handle_caller_transport<T: Transport>(
                                     in_main_menu = true;
                                 }
                                 AuthFlowResult::Retry => {
-                                    send_menu_prompt(&mut transport, &current_menu, &screen_context).await?;
+                                    send_menu_prompt(
+                                        &mut transport,
+                                        &current_menu,
+                                        &screen_context,
+                                    )
+                                    .await?;
                                 }
                                 AuthFlowResult::Exit => break,
                             }
@@ -1003,7 +1008,12 @@ async fn handle_caller_transport<T: Transport>(
                                     in_main_menu = true;
                                 }
                                 AuthFlowResult::Retry => {
-                                    send_menu_prompt(&mut transport, &current_menu, &screen_context).await?;
+                                    send_menu_prompt(
+                                        &mut transport,
+                                        &current_menu,
+                                        &screen_context,
+                                    )
+                                    .await?;
                                 }
                                 AuthFlowResult::Exit => break,
                             }
@@ -1011,28 +1021,36 @@ async fn handle_caller_transport<T: Transport>(
                         Some(MenuAction::Logoff) => {
                             debug!(node = %node_number, "caller selected login-menu logoff");
                             disconnect_reason = "caller_logoff".to_string();
-                            send_logoff_screen(&mut transport, &config, capabilities, &screen_context)
-                                .await;
+                            send_logoff_screen(
+                                &mut transport,
+                                &config,
+                                capabilities,
+                                &screen_context,
+                            )
+                            .await;
                             break;
                         }
                         Some(MenuAction::Submenu { menu_id }) => {
                             debug!(node = %node_number, submenu = %menu_id, "caller selected submenu");
                             if let Some(submenu) = resolve_submenu(&menus, &menu_id) {
                                 current_menu = Arc::clone(&submenu);
-                                send_menu_prompt(&mut transport, &current_menu, &screen_context).await?;
+                                send_menu_prompt(&mut transport, &current_menu, &screen_context)
+                                    .await?;
                             } else {
                                 send_text(
                                     &mut transport,
                                     "Configured submenu menu is missing.\r\n",
                                 )
                                 .await?;
-                                send_menu_prompt(&mut transport, &current_menu, &screen_context).await?;
+                                send_menu_prompt(&mut transport, &current_menu, &screen_context)
+                                    .await?;
                             }
                         }
                         _ => {
                             send_text(&mut transport, "Select Login, New User, or Goodbye.\r\n")
                                 .await?;
-                            send_menu_prompt(&mut transport, &current_menu, &screen_context).await?;
+                            send_menu_prompt(&mut transport, &current_menu, &screen_context)
+                                .await?;
                         }
                     }
                 } else {
@@ -1073,7 +1091,12 @@ async fn handle_caller_transport<T: Transport>(
                             {
                                 MenuFlowResult::Continue => {
                                     runtime.mark_node_main_menu(node_number_u16);
-                                    send_menu_prompt(&mut transport, &current_menu, &screen_context).await?;
+                                    send_menu_prompt(
+                                        &mut transport,
+                                        &current_menu,
+                                        &screen_context,
+                                    )
+                                    .await?;
                                 }
                                 MenuFlowResult::Exit => break,
                             }
@@ -1098,7 +1121,12 @@ async fn handle_caller_transport<T: Transport>(
                             {
                                 MenuFlowResult::Continue => {
                                     runtime.mark_node_main_menu(node_number_u16);
-                                    send_menu_prompt(&mut transport, &current_menu, &screen_context).await?;
+                                    send_menu_prompt(
+                                        &mut transport,
+                                        &current_menu,
+                                        &screen_context,
+                                    )
+                                    .await?;
                                 }
                                 MenuFlowResult::Exit => {
                                     break;
@@ -1122,7 +1150,12 @@ async fn handle_caller_transport<T: Transport>(
                             {
                                 MenuFlowResult::Continue => {
                                     runtime.mark_node_main_menu(node_number_u16);
-                                    send_menu_prompt(&mut transport, &current_menu, &screen_context).await?;
+                                    send_menu_prompt(
+                                        &mut transport,
+                                        &current_menu,
+                                        &screen_context,
+                                    )
+                                    .await?;
                                 }
                                 MenuFlowResult::Exit => break,
                             }
@@ -1131,13 +1164,19 @@ async fn handle_caller_transport<T: Transport>(
                             debug!(node = %node_number, "authenticated caller selected new-user action");
                             send_text(&mut transport, "Already signed in. Return to menu.\r\n")
                                 .await?;
-                            send_menu_prompt(&mut transport, &current_menu, &screen_context).await?;
+                            send_menu_prompt(&mut transport, &current_menu, &screen_context)
+                                .await?;
                         }
                         Some(MenuAction::Logoff) => {
                             debug!(node = %node_number, "caller selected main-menu logoff");
                             disconnect_reason = "caller_logoff".to_string();
-                            send_logoff_screen(&mut transport, &config, capabilities, &screen_context)
-                                .await;
+                            send_logoff_screen(
+                                &mut transport,
+                                &config,
+                                capabilities,
+                                &screen_context,
+                            )
+                            .await;
                             break;
                         }
                         Some(MenuAction::ShowScreen { screen }) => {
@@ -1150,27 +1189,31 @@ async fn handle_caller_transport<T: Transport>(
                                 &screen_context,
                             )
                             .await?;
-                            send_menu_prompt(&mut transport, &current_menu, &screen_context).await?;
+                            send_menu_prompt(&mut transport, &current_menu, &screen_context)
+                                .await?;
                         }
                         Some(MenuAction::Submenu { menu_id }) => {
                             debug!(node = %node_number, submenu = %menu_id, "caller selected submenu");
                             if let Some(submenu) = resolve_submenu(&menus, &menu_id) {
                                 current_menu = Arc::clone(&submenu);
-                                send_menu_prompt(&mut transport, &current_menu, &screen_context).await?;
+                                send_menu_prompt(&mut transport, &current_menu, &screen_context)
+                                    .await?;
                             } else {
                                 send_text(
                                     &mut transport,
                                     "Configured submenu menu is missing.\r\n",
                                 )
                                 .await?;
-                                send_menu_prompt(&mut transport, &current_menu, &screen_context).await?;
+                                send_menu_prompt(&mut transport, &current_menu, &screen_context)
+                                    .await?;
                             }
                         }
                         Some(MenuAction::Login) => {
                             debug!(node = %node_number, "authenticated caller selected login action");
                             send_text(&mut transport, "Already signed in. Return to menu.\r\n")
                                 .await?;
-                            send_menu_prompt(&mut transport, &current_menu, &screen_context).await?;
+                            send_menu_prompt(&mut transport, &current_menu, &screen_context)
+                                .await?;
                         }
                         Some(MenuAction::Noop) => {
                             debug!(node = %node_number, "caller selected noop action");
@@ -1183,7 +1226,8 @@ async fn handle_caller_transport<T: Transport>(
                                 "caller selected unknown menu key"
                             );
                             send_text(&mut transport, "Unknown option.\r\n").await?;
-                            send_menu_prompt(&mut transport, &current_menu, &screen_context).await?;
+                            send_menu_prompt(&mut transport, &current_menu, &screen_context)
+                                .await?;
                         }
                     }
                 }
@@ -4040,14 +4084,11 @@ fn expand_oxide_display_codes(payload: &[u8], context: &ScreenRenderContext) -> 
     output
 }
 
-fn expand_display_code(
-    display_code: &[u8],
-    context: &ScreenRenderContext,
-) -> Option<Vec<u8>> {
+fn expand_display_code(display_code: &[u8], context: &ScreenRenderContext) -> Option<Vec<u8>> {
     if display_code.is_empty()
-        || !display_code.iter().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(*byte, b'_' | b':' | b'-')
-        })
+        || !display_code
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'_' | b':' | b'-'))
     {
         return None;
     }

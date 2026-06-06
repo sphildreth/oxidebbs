@@ -1044,7 +1044,10 @@ impl OxideConfig {
             screen: ScreenAsset {
                 asset: menu.screen.clone(),
             },
-            help_screen: menu.help_screen.clone().map(|screen| ScreenAsset { asset: screen }),
+            help_screen: menu
+                .help_screen
+                .clone()
+                .map(|screen| ScreenAsset { asset: screen }),
             entries,
             pre_menu_screens: self
                 .flow

@@ -376,7 +376,10 @@ mod tests {
     #[tokio::test]
     async fn receiver_rejects_bad_crc() {
         let block = [0_u8; BLOCK_SIZE];
-        let frame = build_block_frame(1, &block, 0xFFFF);
+        let mut frame = build_block_frame(1, &block, SendMode::Crc);
+        if let Some(crc_low) = frame.last_mut() {
+            *crc_low ^= 0xFF;
+        }
         let reads = frame
             .into_iter()
             .map(TransferRead::Byte)

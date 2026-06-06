@@ -508,14 +508,11 @@ fn sync_runtime_output_dir(
 
         let source_path = entry.path();
         let relative_path = source_path.strip_prefix(runtime_root).map_err(|error| {
-            DoorError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!(
+            DoorError::Io(std::io::Error::other(format!(
                 "failed to compute runtime output path for {} relative to {}: {error}",
                 source_path.display(),
                 runtime_root.display()
-                ),
-            ))
+            )))
         })?;
         if is_generated_runtime_output(relative_path, drop_file) {
             continue;
@@ -1862,13 +1859,15 @@ command = "LORD.EXE"
                 "DORINFO1.DEF",
                 concat!(
                     "Test Board\r\n",
-                    "Test Sysop\r\n",
+                    "Test\r\n",
+                    "Sysop\r\n",
                     "COM1\r\n",
                     "38400 BAUD,N,8,1\r\n",
                     "0\r\n",
                     "Alice\r\n",
                     "Sysop\r\n",
                     "Localhost\r\n",
+                    "1\r\n",
                     "50\r\n",
                     "30\r\n"
                 ),

@@ -14,9 +14,7 @@ use oxidebbs_term::TerminalCapabilities;
 use tracing::warn;
 
 use crate::config::OxideConfig;
-use crate::serve::{
-    CallerPeer, CallerResources, handle_raw_caller_transport_with_capabilities,
-};
+use crate::serve::{CallerPeer, CallerResources, handle_raw_caller_transport_with_capabilities};
 
 const BUSY_MESSAGE: &str = "System busy. Try again later.";
 
