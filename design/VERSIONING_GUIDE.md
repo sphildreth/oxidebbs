@@ -39,19 +39,22 @@ The first compatibility-stable public release line begins at `v1.0.0`.
 
 ## 2. Source of truth
 
-The Rust crate versions in `crates/*/Cargo.toml` are the current OxideBBS
-release version source of truth. Keep all workspace crate versions aligned
-unless a crate is intentionally split onto its own release line in a future ADR.
+The root `VERSION` file is the current OxideBBS release version source of truth.
+Keep all workspace crate versions aligned with it unless a crate is
+intentionally split onto its own release line in a future ADR.
 
 When the OxideBBS release version changes:
 
-1. update all OxideBBS crate versions
-2. update release-facing documentation
-3. refresh lockfiles only when dependency metadata changes
-4. re-scan for stale old-version strings
+1. update `VERSION`
+2. update all OxideBBS crate versions
+3. update release-facing documentation
+4. refresh lockfiles only when dependency metadata changes
+5. re-scan for stale old-version strings
 
-If a root `VERSION` file or bump script is added later, update this guide in the
-same change and make that tool the canonical release workflow.
+Use `scripts/bump-version.sh <version>` for routine version bumps. The script
+updates `VERSION`, workspace crate manifests, docs package metadata, generated
+lockfile metadata, the release workflow manual-dispatch default, and verifies
+that the changelog still has an `Unreleased` placeholder.
 
 ### Rust workspace
 
@@ -63,6 +66,8 @@ same change and make that tool the canonical release workflow.
 - `crates/oxidebbs-door/Cargo.toml`
 - `crates/oxidebbs-sysop/Cargo.toml`
 - `Cargo.lock`
+- `VERSION`
+- `scripts/bump-version.sh`
 
 The server binary makes `Cargo.lock` release-facing metadata. Commit lockfile
 changes that result from legitimate dependency or package metadata updates.
@@ -148,10 +153,11 @@ package version, refresh and commit the lockfile.
 
 1. Decide the next version according to SemVer, using the highest-impact rule
    above.
-2. Update OxideBBS crate versions in `crates/*/Cargo.toml`.
+2. Run `scripts/bump-version.sh <version>`.
 3. Update release notes in `docs/about/changelog.md`.
 4. Update user-facing docs and examples that changed with the release.
-5. Refresh `Cargo.lock` if package metadata or dependencies changed.
+5. Refresh `Cargo.lock` if package metadata or dependencies changed outside the
+   bump script.
 6. Refresh `package-lock.json` if documentation package metadata or dependencies
    changed.
 7. Re-scan the repository for stale release-version strings.
@@ -224,7 +230,15 @@ When publishing, use Git tags with a leading `v`:
 Release automation should convert those tags into package versions without the
 leading `v` only where a downstream package format requires it.
 
-GitHub release artifacts are built from the release tag by default and are named
-with the leading `v` tag plus the target triple, such as
-`oxidebbs-v1.0.0-x86_64-unknown-linux-gnu.tar.gz`. Each uploaded archive should
-include a matching `.sha256` checksum file.
+GitHub release artifacts are built from the release tag by default. The workflow
+builds with Rust target triples but names packages with friendlier platform
+suffixes, such as `oxidebbs-v1.2.0-linux-x86_64-gnu.tar.gz`. Each uploaded
+archive should include a matching `.sha256` checksum file.
+
+Manual release workflow dispatch defaults to `dry_run = true`. A dry run checks
+out the requested release ref, builds and smokes the Linux, macOS, and Windows
+archives, verifies each generated checksum file, builds the VitePress docs, and
+builds/smokes the Docker image without requiring an existing GitHub release or
+uploading artifacts. Published GitHub release events run the same archive,
+checksum, docs, and Docker validation paths, then upload archives and checksum
+files to the release.

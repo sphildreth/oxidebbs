@@ -122,7 +122,7 @@ Normal Rust builds and normal Rust tests do not require DOSEMU2:
 Dry-run door validation also does not require DOSEMU2:
 
 ```bash
-cargo run -p oxidebbs-server -- --config config/oxidebbs.example.toml \
+oxidebbs-server --config config/oxidebbs.example.toml \
   doors test oxide-check --user sysop --dry-run
 ```
 

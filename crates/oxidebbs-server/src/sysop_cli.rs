@@ -24,10 +24,11 @@ use crate::config::{
 use crate::serve;
 
 use crate::commands::{
-    AnsiCommand, AuditCommand, ConfigCommand, DbCommand, DoorsCommand, LogsCommand,
-    MessagesCommand, NodesCommand, ServeArgs, SetupArgs, UsersCommand, run_ansi, run_audit,
-    run_check, run_config, run_config_set, run_db, run_doors, run_logs, run_messages, run_nodes,
-    run_serve, run_setup_command, run_status, run_sysop_tui, run_users,
+    AnsiCommand, AuditCommand, ConfigCommand, DbCommand, DoorsCommand, FilesCommand, LogsCommand,
+    MessagesCommand, NetCommand, NodesCommand, ServeArgs, SetupArgs, UsersCommand, run_ansi,
+    run_audit, run_check, run_config, run_config_set, run_db, run_doors, run_files, run_logs,
+    run_messages, run_net, run_nodes, run_serve, run_setup_command, run_status, run_sysop_tui,
+    run_users,
 };
 
 pub(crate) type CliResult<T> = Result<T, CliError>;
@@ -129,6 +130,12 @@ enum Command {
         command: DoorsCommand,
     },
 
+    /// Manage caller file areas, files, and transfer history
+    Files {
+        #[command(subcommand)]
+        command: FilesCommand,
+    },
+
     /// Read local log files
     Logs {
         #[command(subcommand)]
@@ -139,6 +146,12 @@ enum Command {
     Messages {
         #[command(subcommand)]
         command: MessagesCommand,
+    },
+
+    /// FTN network operations (mail toss, scan, poll, nodelist, areas, links)
+    Net {
+        #[command(subcommand)]
+        command: NetCommand,
     },
 
     /// Inspect and control node/session state
@@ -199,10 +212,15 @@ pub async fn run() -> CliResult<()> {
             return run_setup_command(args, cli.data, cli.json);
         }
         Command::Config {
-            command: ConfigCommand::Set { key, value },
+            command:
+                ConfigCommand::Set {
+                    key,
+                    value,
+                    dry_run,
+                },
         } => {
             init_console_logging(cli.verbose)?;
-            return run_config_set(&config_path, &key, &value, cli.json);
+            return run_config_set(&config_path, &key, &value, cli.json, dry_run);
         }
         _ => {}
     }
@@ -228,11 +246,13 @@ pub async fn run() -> CliResult<()> {
         Command::Nodes { command } => run_nodes(command, &ctx),
         Command::Messages { command } => run_messages(command, &ctx),
         Command::Doors { command } => run_doors(command, &ctx),
+        Command::Files { command } => run_files(command, &ctx),
         Command::Ansi { command } => run_ansi(command, &ctx),
         Command::Db { command } => run_db(command, &ctx),
         Command::Logs { command } => run_logs(command, &ctx),
         Command::Audit { command } => run_audit(command, &ctx),
         Command::Config { command } => run_config(command, &ctx),
+        Command::Net { command } => run_net(command, &ctx),
         Command::Sysop {
             readonly,
             no_confirm_quit,
@@ -841,6 +861,9 @@ pub(crate) fn message_json(message: &oxidebbs_db::MessageRecord) -> JsonValue {
         "id": message.id,
         "area_id": message.area_id,
         "author_user_id": message.author_user_id,
+        "author_kind": message.author_kind,
+        "author_display_name": message.author_display_name,
+        "author_network_address": message.author_network_address,
         "to_user_id": message.to_user_id,
         "subject": message.subject,
         "body": message.body,
@@ -944,6 +967,9 @@ pub(crate) fn print_message(message: &oxidebbs_db::MessageRecord) {
     println!("id: {}", message.id);
     println!("area: {}", message.area_id);
     println!("author: {}", message.author_user_id);
+    println!("author kind: {}", message.author_kind);
+    println!("author display: {}", message.author_display_name);
+    println!("author network: {:?}", message.author_network_address);
     println!("to: {:?}", message.to_user_id);
     println!("created: {}", message.created_at);
     println!("visibility: {}", message.visibility);
@@ -1008,8 +1034,8 @@ mod tests {
         assert_eq!(
             names,
             vec![
-                "ansi", "audit", "check", "config", "db", "doors", "logs", "messages", "nodes",
-                "serve", "setup", "status", "sysop", "users",
+                "ansi", "audit", "check", "config", "db", "doors", "files", "logs", "messages",
+                "net", "nodes", "serve", "setup", "status", "sysop", "users",
             ]
         );
     }

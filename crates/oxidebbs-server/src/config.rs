@@ -1,12 +1,17 @@
 #![allow(dead_code)]
 
 use std::collections::{HashMap, HashSet};
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use thiserror::Error;
 
 use oxidebbs_core::menu::{Menu, MenuAction, MenuEntry, ScreenAsset};
+pub use oxidebbs_term::TerminalCapabilities;
+use oxidebbs_term::{
+    BackspaceMode, LineEndingMode, OutputPacing, TerminalCharset, TerminalProfile,
+};
 
 pub const DEFAULT_DATABASE_FILE_NAME: &str = "oxidebbs.ddb";
 
@@ -58,7 +63,17 @@ pub struct OxideConfig {
     #[serde(default)]
     pub doors: DoorsConfig,
     #[serde(default)]
+    pub network: NetworkConfig,
+    #[serde(default)]
     pub ftn: FtnConfig,
+    #[serde(default)]
+    pub serial: SerialConfig,
+    #[serde(default)]
+    pub file_transfers: FileTransfersConfig,
+    #[serde(default)]
+    pub admin_web: AdminWebConfig,
+    #[serde(default)]
+    pub web_terminal: WebTerminalConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -174,12 +189,40 @@ pub struct SysopConfig {
 pub struct TerminalConfig {
     #[serde(default = "default_encoding")]
     pub default_encoding: String,
+    #[serde(default = "default_terminal_profile")]
+    pub default_profile: String,
+    #[serde(default = "default_true")]
+    pub manual_profile_selection: bool,
     #[serde(default = "default_true")]
     pub clear_screen_on_connect: bool,
     #[serde(default = "default_welcome_screen")]
     pub welcome_screen: String,
     #[serde(default = "default_logoff_screen")]
     pub logoff_screen: String,
+    #[serde(default = "default_terminal_profiles")]
+    pub profiles: HashMap<String, TerminalProfileConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TerminalProfileConfig {
+    #[serde(default = "default_terminal_profile_name")]
+    pub name: String,
+    #[serde(default = "default_terminal_profile_width")]
+    pub width: u16,
+    #[serde(default = "default_terminal_profile_height")]
+    pub height: u16,
+    #[serde(default)]
+    pub supports_ansi: bool,
+    #[serde(default)]
+    pub supports_color: bool,
+    #[serde(default = "default_ascii_charset")]
+    pub charset: String,
+    #[serde(default = "default_crlf_line_endings")]
+    pub line_endings: String,
+    #[serde(default = "default_backspace_mode")]
+    pub backspace_mode: String,
+    #[serde(default)]
+    pub output_pacing_bytes_per_second: Option<u32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -198,7 +241,9 @@ pub struct FlowConfig {
 pub struct ScreenConfig {
     pub ansi: Option<String>,
     pub ansi_40: Option<String>,
+    pub ascii_40: Option<String>,
     pub ascii: Option<String>,
+    pub text_40: Option<String>,
     pub text: Option<String>,
     #[serde(default)]
     pub pause: bool,
@@ -220,42 +265,24 @@ impl ScreenConfig {
             }
         }
 
+        if capabilities.width <= 40 {
+            if let Some(asset) = self.ascii_40.as_deref() {
+                return Some(asset);
+            }
+            if let Some(asset) = self.text_40.as_deref() {
+                return Some(asset);
+            }
+        }
+
         self.ascii.as_deref().or(self.text.as_deref())
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TerminalCapabilities {
-    pub supports_ansi: bool,
-    pub width: u16,
-}
-
-impl TerminalCapabilities {
-    pub fn ansi_80() -> Self {
-        Self {
-            supports_ansi: true,
-            width: 80,
-        }
-    }
-
-    pub fn ansi_40() -> Self {
-        Self {
-            supports_ansi: true,
-            width: 40,
-        }
-    }
-
-    pub fn plain_text() -> Self {
-        Self {
-            supports_ansi: false,
-            width: 80,
-        }
     }
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct MenuConfig {
     pub screen: String,
+    #[serde(default)]
+    pub help_screen: Option<String>,
     #[serde(default = "default_menu_prompt")]
     pub prompt: String,
     #[serde(default)]
@@ -300,6 +327,93 @@ pub struct DoorDefConfig {
     pub time_limit_minutes: u32,
     #[serde(default = "default_true")]
     pub enabled: bool,
+    #[serde(default)]
+    pub min_security_level: i32,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NetworkConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub profiles: HashMap<String, NetworkProfileConfig>,
+    #[serde(default)]
+    pub links: HashMap<String, NetworkLinkConfig>,
+    #[serde(default)]
+    pub binkp_listener: Option<BinkpListenerConfig>,
+    #[serde(default)]
+    pub retention: Option<NetworkRetentionConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BinkpListenerConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_binkp_bind")]
+    pub bind: String,
+    #[serde(default = "default_binkp_max_connections")]
+    pub max_connections: u32,
+    #[serde(default)]
+    pub tls_cert_path: Option<PathBuf>,
+    #[serde(default)]
+    pub tls_key_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NetworkRetentionConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_retention_archive_days")]
+    pub archive_days: u32,
+    #[serde(default = "default_retention_delete_days")]
+    pub delete_days: u32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NetworkProfileConfig {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_network_adapter")]
+    pub adapter: String,
+    pub local_address: NetworkLocalAddressConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NetworkLocalAddressConfig {
+    pub zone: u16,
+    pub net: u16,
+    pub node: u16,
+    #[serde(default)]
+    pub point: u16,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NetworkLinkConfig {
+    pub network: String,
+    pub address: String,
+    pub host: String,
+    #[serde(default = "default_binkp_port")]
+    pub binkp_port: u16,
+    #[serde(default)]
+    pub password: String,
+    #[serde(default = "default_poll_schedule_minutes")]
+    pub poll_schedule_minutes: u32,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_bundle_compression")]
+    pub compression: String,
+    #[serde(default = "default_transport_security")]
+    pub transport_security: String,
+    #[serde(default)]
+    pub legacy_compatible: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -308,6 +422,82 @@ pub struct FtnConfig {
     pub enabled: bool,
     #[serde(default = "default_network_name")]
     pub reserved_network_name: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct SerialConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub devices: Vec<SerialDeviceConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SerialDeviceConfig {
+    pub name: String,
+    pub path: String,
+    #[serde(default = "default_serial_baud_rate")]
+    pub baud_rate: u32,
+    #[serde(default = "default_serial_data_bits")]
+    pub data_bits: u8,
+    #[serde(default = "default_serial_parity")]
+    pub parity: String,
+    #[serde(default = "default_serial_stop_bits")]
+    pub stop_bits: u8,
+    #[serde(default = "default_serial_flow_control")]
+    pub flow_control: String,
+    #[serde(default)]
+    pub init_strings: Vec<String>,
+    #[serde(default)]
+    pub answer_string: Option<String>,
+    #[serde(default)]
+    pub require_carrier_detect: bool,
+    #[serde(default = "default_true")]
+    pub drop_dtr_on_hangup: bool,
+    #[serde(default = "default_serial_read_timeout_ms")]
+    pub read_timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct FileTransfersConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_file_transfers_max_upload_bytes")]
+    pub max_upload_bytes: i64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WebTerminalConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AdminWebConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub public_status_enabled: bool,
+    #[serde(default = "default_admin_web_bind")]
+    pub bind: String,
+    #[serde(default = "default_true")]
+    pub require_tls: bool,
+    #[serde(default = "default_true")]
+    pub read_only: bool,
+    #[serde(default)]
+    pub allowed_origins: Vec<String>,
+    #[serde(default)]
+    pub behind_reverse_proxy: bool,
+    #[serde(default = "default_admin_web_session_timeout_seconds")]
+    pub session_timeout_seconds: u64,
+    #[serde(default = "default_admin_web_csrf_token_ttl_seconds")]
+    pub csrf_token_ttl_seconds: u64,
+    #[serde(default = "default_admin_web_replay_window_seconds")]
+    pub replay_window_seconds: u64,
+    #[serde(default = "default_admin_web_rate_limit_per_minute")]
+    pub rate_limit_per_minute: u32,
 }
 
 impl OxideConfig {
@@ -414,9 +604,63 @@ impl OxideConfig {
                 )));
             }
         }
+        self.validate_terminal()?;
         self.validate_flow()?;
         self.validate_screens()?;
         self.validate_menus()?;
+        self.validate_network()?;
+        self.validate_serial()?;
+        self.validate_file_transfers()?;
+        self.validate_admin_web()?;
+        Ok(())
+    }
+
+    fn validate_terminal(&self) -> Result<(), ConfigError> {
+        if !self
+            .terminal
+            .profiles
+            .contains_key(&self.terminal.default_profile)
+        {
+            return Err(ConfigError::Validation(format!(
+                "terminal.default_profile references missing profile {:?}",
+                self.terminal.default_profile
+            )));
+        }
+
+        for (key, profile) in &self.terminal.profiles {
+            validate_config_key("terminal.profiles", key)?;
+            if profile.name.trim().is_empty() {
+                return Err(ConfigError::Validation(format!(
+                    "terminal.profiles.{key}.name must not be blank"
+                )));
+            }
+            if profile.width == 0 {
+                return Err(ConfigError::Validation(format!(
+                    "terminal.profiles.{key}.width must be greater than 0"
+                )));
+            }
+            if profile.height == 0 {
+                return Err(ConfigError::Validation(format!(
+                    "terminal.profiles.{key}.height must be greater than 0"
+                )));
+            }
+            validate_terminal_charset(&profile.charset).map_err(ConfigError::Validation)?;
+            validate_terminal_line_endings(&profile.line_endings)
+                .map_err(ConfigError::Validation)?;
+            validate_terminal_backspace_mode(&profile.backspace_mode)
+                .map_err(ConfigError::Validation)?;
+            if profile.supports_color && !profile.supports_ansi {
+                return Err(ConfigError::Validation(format!(
+                    "terminal.profiles.{key}.supports_color requires supports_ansi = true"
+                )));
+            }
+            if profile.output_pacing_bytes_per_second == Some(0) {
+                return Err(ConfigError::Validation(format!(
+                    "terminal.profiles.{key}.output_pacing_bytes_per_second must be greater than 0 when set"
+                )));
+            }
+        }
+
         Ok(())
     }
 
@@ -449,11 +693,78 @@ impl OxideConfig {
         Ok(())
     }
 
+    fn validate_admin_web(&self) -> Result<(), ConfigError> {
+        if self.admin_web.bind.trim().is_empty() {
+            return Err(ConfigError::Validation(
+                "admin_web.bind must not be blank".into(),
+            ));
+        }
+        let bind = self
+            .admin_web
+            .bind
+            .parse::<std::net::SocketAddr>()
+            .map_err(|_| {
+                ConfigError::Validation(format!(
+                    "admin_web.bind must be an IP socket address, got {:?}",
+                    self.admin_web.bind
+                ))
+            })?;
+        if self.admin_web.session_timeout_seconds == 0 {
+            return Err(ConfigError::Validation(
+                "admin_web.session_timeout_seconds must be greater than 0".into(),
+            ));
+        }
+        if self.admin_web.csrf_token_ttl_seconds == 0 {
+            return Err(ConfigError::Validation(
+                "admin_web.csrf_token_ttl_seconds must be greater than 0".into(),
+            ));
+        }
+        if self.admin_web.replay_window_seconds == 0 {
+            return Err(ConfigError::Validation(
+                "admin_web.replay_window_seconds must be greater than 0".into(),
+            ));
+        }
+        if self.admin_web.rate_limit_per_minute == 0 {
+            return Err(ConfigError::Validation(
+                "admin_web.rate_limit_per_minute must be greater than 0".into(),
+            ));
+        }
+        for origin in &self.admin_web.allowed_origins {
+            validate_admin_web_origin(origin)?;
+        }
+        if self.admin_web.enabled {
+            if !self.admin_web.read_only {
+                return Err(ConfigError::Validation(
+                    "admin_web.read_only must remain true until remote admin mutations are implemented".into(),
+                ));
+            }
+            if self.admin_web.behind_reverse_proxy && !ip_is_loopback(bind.ip()) {
+                return Err(ConfigError::Validation(
+                    "admin_web.behind_reverse_proxy requires a loopback admin_web.bind".into(),
+                ));
+            }
+            if self.admin_web.behind_reverse_proxy && !self.admin_web.require_tls {
+                return Err(ConfigError::Validation(
+                    "admin_web.require_tls must be true when admin_web.behind_reverse_proxy = true"
+                        .into(),
+                ));
+            }
+            if !ip_is_lan_or_unspecified(bind.ip()) {
+                return Err(ConfigError::Validation(
+                    "admin_web.bind must be loopback, private LAN, link-local, or unspecified; use a reverse proxy for public WAN access".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
     fn validate_screens(&self) -> Result<(), ConfigError> {
         for (name, screen) in &self.screens {
             if screen.ansi.is_none()
                 && screen.ansi_40.is_none()
+                && screen.ascii_40.is_none()
                 && screen.ascii.is_none()
+                && screen.text_40.is_none()
                 && screen.text.is_none()
             {
                 return Err(ConfigError::Validation(format!(
@@ -470,6 +781,13 @@ impl OxideConfig {
                 return Err(ConfigError::Validation(format!(
                     "menus.{name}.screen references missing screen {:?}",
                     menu.screen
+                )));
+            }
+            if let Some(help_screen) = &menu.help_screen
+                && !self.screens.contains_key(help_screen)
+            {
+                return Err(ConfigError::Validation(format!(
+                    "menus.{name}.help_screen references missing screen {help_screen:?}"
                 )));
             }
             if menu.items.is_empty() {
@@ -490,6 +808,12 @@ impl OxideConfig {
                 if key_chars.next().is_some() || !key.is_ascii() {
                     return Err(ConfigError::Validation(format!(
                         "menus.{name} item key {:?} must be exactly one ASCII character",
+                        item.key
+                    )));
+                }
+                if key == '?' {
+                    return Err(ConfigError::Validation(format!(
+                        "menus.{name} item key {:?} is reserved for contextual help",
                         item.key
                     )));
                 }
@@ -522,6 +846,179 @@ impl OxideConfig {
         Ok(())
     }
 
+    fn validate_network(&self) -> Result<(), ConfigError> {
+        if let Some(listener) = &self.network.binkp_listener {
+            if listener.max_connections == 0 {
+                return Err(ConfigError::Validation(
+                    "network.binkp_listener.max_connections must be greater than 0".to_string(),
+                ));
+            }
+            if listener.tls_cert_path.is_some() != listener.tls_key_path.is_some() {
+                return Err(ConfigError::Validation(
+                    "network.binkp_listener TLS requires both tls_cert_path and tls_key_path"
+                        .to_string(),
+                ));
+            }
+            if listener.enabled
+                && listener.tls_cert_path.is_none()
+                && self.network.links.values().any(|link| {
+                    link.enabled
+                        && link
+                            .transport_security
+                            .trim()
+                            .eq_ignore_ascii_case("tls_required")
+                })
+            {
+                return Err(ConfigError::Validation(
+                    "network.binkp_listener needs tls_cert_path and tls_key_path when enabled links require TLS".to_string(),
+                ));
+            }
+        }
+
+        for (key, profile) in &self.network.profiles {
+            validate_config_key("network.profiles", key)?;
+            validate_network_adapter(&profile.adapter).map_err(ConfigError::Validation)?;
+            if profile.local_address.zone == 0 {
+                return Err(ConfigError::Validation(format!(
+                    "network.profiles.{key}.local_address.zone must be greater than 0"
+                )));
+            }
+            if profile.local_address.net == 0 {
+                return Err(ConfigError::Validation(format!(
+                    "network.profiles.{key}.local_address.net must be greater than 0"
+                )));
+            }
+            if profile.local_address.node == 0 {
+                return Err(ConfigError::Validation(format!(
+                    "network.profiles.{key}.local_address.node must be greater than 0"
+                )));
+            }
+        }
+
+        for (key, link) in &self.network.links {
+            validate_config_key("network.links", key)?;
+            if link.network.trim().is_empty() {
+                return Err(ConfigError::Validation(format!(
+                    "network.links.{key}.network must not be blank"
+                )));
+            }
+            let Some(profile) = self.network.profiles.get(&link.network) else {
+                return Err(ConfigError::Validation(format!(
+                    "network.links.{key}.network references unknown profile {:?}",
+                    link.network
+                )));
+            };
+            if link.address.trim().is_empty() {
+                return Err(ConfigError::Validation(format!(
+                    "network.links.{key}.address must not be blank"
+                )));
+            }
+            if link.host.trim().is_empty() {
+                return Err(ConfigError::Validation(format!(
+                    "network.links.{key}.host must not be blank"
+                )));
+            }
+            if link.binkp_port == 0 {
+                return Err(ConfigError::Validation(format!(
+                    "network.links.{key}.binkp_port must be between 1 and 65535"
+                )));
+            }
+            if link.poll_schedule_minutes == 0 {
+                return Err(ConfigError::Validation(format!(
+                    "network.links.{key}.poll_schedule_minutes must be greater than 0"
+                )));
+            }
+
+            let compression =
+                validate_bundle_compression(&link.compression).map_err(ConfigError::Validation)?;
+            let transport_security = validate_transport_security(&link.transport_security)
+                .map_err(ConfigError::Validation)?;
+            let adapter = profile.adapter.trim().to_ascii_lowercase();
+
+            if transport_security == "plaintext_legacy" && adapter != "legacy-ftn" {
+                return Err(ConfigError::Validation(format!(
+                    "network.links.{key}.transport_security plaintext_legacy is allowed only for legacy-ftn profiles"
+                )));
+            }
+            if transport_security == "tls_opportunistic" && !link.legacy_compatible {
+                return Err(ConfigError::Validation(format!(
+                    "network.links.{key}.transport_security tls_opportunistic requires legacy_compatible = true"
+                )));
+            }
+            if link.legacy_compatible && adapter != "legacy-ftn" {
+                return Err(ConfigError::Validation(format!(
+                    "network.links.{key}.legacy_compatible is allowed only for legacy-ftn profiles"
+                )));
+            }
+            if compression == "arj" && adapter != "legacy-ftn" {
+                return Err(ConfigError::Validation(format!(
+                    "network.links.{key}.compression arj is allowed only for legacy-ftn profiles"
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn validate_serial(&self) -> Result<(), ConfigError> {
+        if self.serial.enabled && self.serial.devices.is_empty() {
+            return Err(ConfigError::Validation(
+                "serial.devices must include at least one device when serial.enabled = true".into(),
+            ));
+        }
+        let mut names = HashSet::new();
+        for device in &self.serial.devices {
+            let name = device.name.trim();
+            if name.is_empty() {
+                return Err(ConfigError::Validation(
+                    "serial device name must not be blank".into(),
+                ));
+            }
+            if !names.insert(name.to_ascii_lowercase()) {
+                return Err(ConfigError::Validation(format!(
+                    "serial device name {name:?} is duplicated"
+                )));
+            }
+            if device.path.trim().is_empty() {
+                return Err(ConfigError::Validation(format!(
+                    "serial.devices.{name}.path must not be blank"
+                )));
+            }
+            if device.baud_rate == 0 {
+                return Err(ConfigError::Validation(format!(
+                    "serial.devices.{name}.baud_rate must be greater than 0"
+                )));
+            }
+            if !matches!(device.data_bits, 5..=8) {
+                return Err(ConfigError::Validation(format!(
+                    "serial.devices.{name}.data_bits must be one of 5, 6, 7, or 8"
+                )));
+            }
+            validate_serial_parity(&device.parity).map_err(ConfigError::Validation)?;
+            if !matches!(device.stop_bits, 1 | 2) {
+                return Err(ConfigError::Validation(format!(
+                    "serial.devices.{name}.stop_bits must be 1 or 2"
+                )));
+            }
+            validate_serial_flow_control(&device.flow_control).map_err(ConfigError::Validation)?;
+            if device.read_timeout_ms == 0 {
+                return Err(ConfigError::Validation(format!(
+                    "serial.devices.{name}.read_timeout_ms must be greater than 0"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_file_transfers(&self) -> Result<(), ConfigError> {
+        if self.file_transfers.max_upload_bytes < 0 {
+            return Err(ConfigError::Validation(
+                "file_transfers.max_upload_bytes must not be negative".into(),
+            ));
+        }
+        Ok(())
+    }
+
     pub fn core_menu(&self, menu_id: &str) -> Result<Menu, ConfigError> {
         let menu = self.menus.get(menu_id).ok_or_else(|| {
             ConfigError::Validation(format!("menu {menu_id:?} is not configured"))
@@ -535,6 +1032,7 @@ impl OxideConfig {
                     key: item.key.clone(),
                     label: item.label.clone(),
                     action: parse_menu_action(&item.action, item.target.as_deref())?,
+                    min_security_level: item.min_security_level,
                 })
             })
             .collect::<Result<Vec<_>, ConfigError>>()?;
@@ -546,6 +1044,10 @@ impl OxideConfig {
             screen: ScreenAsset {
                 asset: menu.screen.clone(),
             },
+            help_screen: menu
+                .help_screen
+                .clone()
+                .map(|screen| ScreenAsset { asset: screen }),
             entries,
             pre_menu_screens: self
                 .flow
@@ -559,6 +1061,44 @@ impl OxideConfig {
             ConfigError::Validation(format!("menu {menu_id:?} failed validation: {error}"))
         })?;
         Ok(core_menu)
+    }
+}
+
+impl TerminalConfig {
+    pub fn default_capabilities(&self) -> Result<TerminalCapabilities, ConfigError> {
+        self.capabilities_for_profile(&self.default_profile)
+    }
+
+    pub fn capabilities_for_profile(
+        &self,
+        profile_key: &str,
+    ) -> Result<TerminalCapabilities, ConfigError> {
+        let profile = self.profiles.get(profile_key).ok_or_else(|| {
+            ConfigError::Validation(format!(
+                "terminal profile {profile_key:?} is not configured"
+            ))
+        })?;
+        profile.to_capabilities(profile_key)
+    }
+}
+
+impl TerminalProfileConfig {
+    fn to_capabilities(&self, profile_key: &str) -> Result<TerminalCapabilities, ConfigError> {
+        Ok(TerminalCapabilities {
+            profile: terminal_profile_kind(profile_key),
+            supports_ansi: self.supports_ansi,
+            supports_color: self.supports_color,
+            width: self.width,
+            height: self.height,
+            charset: terminal_charset(&self.charset).map_err(ConfigError::Validation)?,
+            line_endings: terminal_line_endings(&self.line_endings)
+                .map_err(ConfigError::Validation)?,
+            backspace_mode: terminal_backspace_mode(&self.backspace_mode)
+                .map_err(ConfigError::Validation)?,
+            output_pacing: self
+                .output_pacing_bytes_per_second
+                .map(|bytes_per_second| OutputPacing { bytes_per_second }),
+        })
     }
 }
 
@@ -651,6 +1191,73 @@ fn default_node_count() -> u16 {
 fn default_encoding() -> String {
     "cp437".into()
 }
+fn default_terminal_profile() -> String {
+    "plain".into()
+}
+fn default_terminal_profile_name() -> String {
+    "Plain ASCII".into()
+}
+fn default_terminal_profile_width() -> u16 {
+    80
+}
+fn default_terminal_profile_height() -> u16 {
+    25
+}
+fn default_ascii_charset() -> String {
+    "ascii".into()
+}
+fn default_crlf_line_endings() -> String {
+    "crlf".into()
+}
+fn default_backspace_mode() -> String {
+    "backspace_or_delete".into()
+}
+fn default_terminal_profiles() -> HashMap<String, TerminalProfileConfig> {
+    let mut profiles = HashMap::new();
+    profiles.insert(
+        "ansi80".to_string(),
+        TerminalProfileConfig {
+            name: "ANSI / CP437 80-column".to_string(),
+            width: 80,
+            height: 25,
+            supports_ansi: true,
+            supports_color: true,
+            charset: "cp437".to_string(),
+            line_endings: "crlf".to_string(),
+            backspace_mode: "backspace_or_delete".to_string(),
+            output_pacing_bytes_per_second: None,
+        },
+    );
+    profiles.insert(
+        "plain".to_string(),
+        TerminalProfileConfig {
+            name: "Plain ASCII".to_string(),
+            width: 80,
+            height: 25,
+            supports_ansi: false,
+            supports_color: false,
+            charset: "ascii".to_string(),
+            line_endings: "crlf".to_string(),
+            backspace_mode: "backspace_or_delete".to_string(),
+            output_pacing_bytes_per_second: None,
+        },
+    );
+    profiles.insert(
+        "c64".to_string(),
+        TerminalProfileConfig {
+            name: "C64 / C64 Ultimate 40-column".to_string(),
+            width: 40,
+            height: 25,
+            supports_ansi: false,
+            supports_color: false,
+            charset: "petscii_ascii_fallback".to_string(),
+            line_endings: "crlf".to_string(),
+            backspace_mode: "backspace_or_delete".to_string(),
+            output_pacing_bytes_per_second: Some(1_200),
+        },
+    );
+    profiles
+}
 fn default_welcome_screen() -> String {
     "welcome.ans".into()
 }
@@ -680,6 +1287,279 @@ fn default_door_time_limit() -> u32 {
 }
 fn default_network_name() -> String {
     "OxideNet".into()
+}
+fn default_network_adapter() -> String {
+    "legacy-ftn".into()
+}
+fn default_binkp_port() -> u16 {
+    24_554
+}
+fn default_binkp_bind() -> String {
+    "0.0.0.0:24554".into()
+}
+fn default_binkp_max_connections() -> u32 {
+    10
+}
+fn default_retention_archive_days() -> u32 {
+    30
+}
+fn default_retention_delete_days() -> u32 {
+    90
+}
+fn default_poll_schedule_minutes() -> u32 {
+    60
+}
+fn default_bundle_compression() -> String {
+    "zip".into()
+}
+fn default_transport_security() -> String {
+    "tls_required".into()
+}
+fn default_serial_baud_rate() -> u32 {
+    115_200
+}
+fn default_serial_data_bits() -> u8 {
+    8
+}
+fn default_serial_parity() -> String {
+    "none".into()
+}
+fn default_serial_stop_bits() -> u8 {
+    1
+}
+fn default_serial_flow_control() -> String {
+    "rtscts".into()
+}
+fn default_serial_read_timeout_ms() -> u64 {
+    100
+}
+fn default_file_transfers_max_upload_bytes() -> i64 {
+    1_048_576
+}
+fn default_admin_web_bind() -> String {
+    "127.0.0.1:8080".into()
+}
+fn default_admin_web_session_timeout_seconds() -> u64 {
+    900
+}
+fn default_admin_web_csrf_token_ttl_seconds() -> u64 {
+    900
+}
+fn default_admin_web_replay_window_seconds() -> u64 {
+    300
+}
+fn default_admin_web_rate_limit_per_minute() -> u32 {
+    30
+}
+
+fn ip_is_loopback(ip: IpAddr) -> bool {
+    ip.is_loopback()
+}
+
+fn ip_is_lan_or_unspecified(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => {
+            ip.is_loopback() || ip.is_private() || ip.is_link_local() || ip.is_unspecified()
+        }
+        IpAddr::V6(ip) => {
+            ip.is_loopback()
+                || ip.is_unique_local()
+                || ip.is_unicast_link_local()
+                || ip.is_unspecified()
+        }
+    }
+}
+
+fn validate_admin_web_origin(origin: &str) -> Result<(), ConfigError> {
+    let trimmed = origin.trim();
+    if trimmed.is_empty() || trimmed != origin {
+        return Err(ConfigError::Validation(
+            "admin_web.allowed_origins entries must not be blank or padded".into(),
+        ));
+    }
+    if origin == "*" {
+        return Err(ConfigError::Validation(
+            "admin_web.allowed_origins must not contain wildcard origins".into(),
+        ));
+    }
+    if origin.chars().any(char::is_whitespace) {
+        return Err(ConfigError::Validation(
+            "admin_web.allowed_origins entries must not contain whitespace".into(),
+        ));
+    }
+
+    let (scheme, rest) = if let Some(rest) = origin.strip_prefix("https://") {
+        ("https", rest)
+    } else if let Some(rest) = origin.strip_prefix("http://") {
+        ("http", rest)
+    } else {
+        return Err(ConfigError::Validation(
+            "admin_web.allowed_origins entries must start with https:// or http://".into(),
+        ));
+    };
+
+    if rest.is_empty() || rest.contains('/') || rest.contains('?') || rest.contains('#') {
+        return Err(ConfigError::Validation(
+            "admin_web.allowed_origins entries must be origins without paths".into(),
+        ));
+    }
+    if rest.contains('@') {
+        return Err(ConfigError::Validation(
+            "admin_web.allowed_origins entries must not contain userinfo".into(),
+        ));
+    }
+    if scheme == "http" && !origin_host_is_lan_or_unspecified(rest) {
+        return Err(ConfigError::Validation(
+            "admin_web.allowed_origins http origins must be loopback, private LAN, link-local, or unspecified".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn origin_host_is_lan_or_unspecified(authority: &str) -> bool {
+    let host = if let Some(rest) = authority.strip_prefix('[') {
+        let Some((host, remainder)) = rest.split_once(']') else {
+            return false;
+        };
+        if !remainder.is_empty() && !remainder.starts_with(':') {
+            return false;
+        }
+        host
+    } else {
+        authority.split(':').next().unwrap_or(authority)
+    };
+
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    match host.parse::<IpAddr>() {
+        Ok(ip) => ip_is_lan_or_unspecified(ip),
+        Err(_) => false,
+    }
+}
+
+fn validate_config_key(section: &str, key: &str) -> Result<(), ConfigError> {
+    if key.trim().is_empty() {
+        return Err(ConfigError::Validation(format!(
+            "{section} keys must not be blank"
+        )));
+    }
+    if key.chars().any(char::is_whitespace) {
+        return Err(ConfigError::Validation(format!(
+            "{section}.{key} keys must not contain whitespace"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_network_adapter(adapter: &str) -> Result<&'static str, String> {
+    match adapter.trim().to_ascii_lowercase().as_str() {
+        "legacy-ftn" => Ok("legacy-ftn"),
+        "oxidenet" => Ok("oxidenet"),
+        other => Err(format!(
+            "network profile adapter must be one of legacy-ftn or oxidenet, got {other:?}"
+        )),
+    }
+}
+
+fn validate_bundle_compression(compression: &str) -> Result<&'static str, String> {
+    match compression.trim().to_ascii_lowercase().as_str() {
+        "none" => Ok("none"),
+        "zip" => Ok("zip"),
+        "arj" => Ok("arj"),
+        other => Err(format!(
+            "network link compression must be one of none, zip, or arj, got {other:?}"
+        )),
+    }
+}
+
+fn validate_transport_security(transport_security: &str) -> Result<&'static str, String> {
+    match transport_security.trim().to_ascii_lowercase().as_str() {
+        "tls_required" => Ok("tls_required"),
+        "tls_opportunistic" => Ok("tls_opportunistic"),
+        "plaintext_legacy" => Ok("plaintext_legacy"),
+        other => Err(format!(
+            "network link transport_security must be one of tls_required, tls_opportunistic, or plaintext_legacy, got {other:?}"
+        )),
+    }
+}
+
+fn validate_serial_flow_control(flow_control: &str) -> Result<&'static str, String> {
+    match flow_control.trim().to_ascii_lowercase().as_str() {
+        "none" => Ok("none"),
+        "rtscts" | "rts_cts" | "hardware" => Ok("rtscts"),
+        "xonxoff" | "xon_xoff" | "software" => Ok("xonxoff"),
+        other => Err(format!(
+            "serial flow_control must be one of none, rtscts, or xonxoff, got {other:?}"
+        )),
+    }
+}
+
+fn validate_serial_parity(parity: &str) -> Result<&'static str, String> {
+    match parity.trim().to_ascii_lowercase().as_str() {
+        "none" => Ok("none"),
+        "odd" => Ok("odd"),
+        "even" => Ok("even"),
+        other => Err(format!(
+            "serial parity must be one of none, odd, or even, got {other:?}"
+        )),
+    }
+}
+
+fn terminal_profile_kind(profile_key: &str) -> TerminalProfile {
+    match profile_key.trim().to_ascii_lowercase().as_str() {
+        "ansi80" | "ansi-80" | "ansi_80" => TerminalProfile::Ansi80,
+        "ansi40" | "ansi-40" | "ansi_40" => TerminalProfile::Ansi40,
+        "c64" | "c64-40" | "petscii40" | "petscii-40" => TerminalProfile::C64,
+        _ => TerminalProfile::PlainAscii,
+    }
+}
+
+fn validate_terminal_charset(charset: &str) -> Result<&'static str, String> {
+    match charset.trim().to_ascii_lowercase().as_str() {
+        "cp437" => Ok("cp437"),
+        "ascii" => Ok("ascii"),
+        "petscii_ascii_fallback" | "petscii-ascii-fallback" | "petscii40" => {
+            Ok("petscii_ascii_fallback")
+        }
+        other => Err(format!(
+            "terminal charset must be one of cp437, ascii, or petscii_ascii_fallback, got {other:?}"
+        )),
+    }
+}
+
+fn terminal_charset(charset: &str) -> Result<TerminalCharset, String> {
+    Ok(match validate_terminal_charset(charset)? {
+        "cp437" => TerminalCharset::Cp437,
+        "petscii_ascii_fallback" => TerminalCharset::PetsciiAsciiFallback,
+        _ => TerminalCharset::Ascii,
+    })
+}
+
+fn validate_terminal_line_endings(line_endings: &str) -> Result<&'static str, String> {
+    match line_endings.trim().to_ascii_lowercase().as_str() {
+        "crlf" => Ok("crlf"),
+        other => Err(format!("terminal line_endings must be crlf, got {other:?}")),
+    }
+}
+
+fn terminal_line_endings(line_endings: &str) -> Result<LineEndingMode, String> {
+    validate_terminal_line_endings(line_endings)?;
+    Ok(LineEndingMode::Crlf)
+}
+
+fn validate_terminal_backspace_mode(backspace_mode: &str) -> Result<&'static str, String> {
+    match backspace_mode.trim().to_ascii_lowercase().as_str() {
+        "backspace_or_delete" | "backspace-or-delete" | "both" => Ok("backspace_or_delete"),
+        other => Err(format!(
+            "terminal backspace_mode must be backspace_or_delete, got {other:?}"
+        )),
+    }
+}
+
+fn terminal_backspace_mode(backspace_mode: &str) -> Result<BackspaceMode, String> {
+    validate_terminal_backspace_mode(backspace_mode)?;
+    Ok(BackspaceMode::BackspaceOrDelete)
 }
 
 pub(crate) fn validate_logging_level(level: &str) -> Result<(), String> {
@@ -738,6 +1618,7 @@ fn parse_menu_action(action: &str, target: Option<&str>) -> Result<MenuAction, C
     match action.trim().to_ascii_lowercase().as_str() {
         "doors" => Ok(MenuAction::Doors),
         "messages" => Ok(MenuAction::Messages),
+        "files" => Ok(MenuAction::Files),
         "logoff" => Ok(MenuAction::Logoff),
         "new_user" | "new-user" | "newuser" => Ok(MenuAction::NewUser),
         "login" | "logon" => Ok(MenuAction::Login),
@@ -869,9 +1750,12 @@ impl Default for TerminalConfig {
     fn default() -> Self {
         Self {
             default_encoding: default_encoding(),
+            default_profile: default_terminal_profile(),
+            manual_profile_selection: default_true(),
             clear_screen_on_connect: default_true(),
             welcome_screen: default_welcome_screen(),
             logoff_screen: default_logoff_screen(),
+            profiles: default_terminal_profiles(),
         }
     }
 }
@@ -903,6 +1787,32 @@ impl Default for FtnConfig {
         Self {
             enabled: false,
             reserved_network_name: default_network_name(),
+        }
+    }
+}
+
+impl Default for AdminWebConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            public_status_enabled: false,
+            bind: default_admin_web_bind(),
+            require_tls: default_true(),
+            read_only: default_true(),
+            allowed_origins: Vec::new(),
+            behind_reverse_proxy: false,
+            session_timeout_seconds: default_admin_web_session_timeout_seconds(),
+            csrf_token_ttl_seconds: default_admin_web_csrf_token_ttl_seconds(),
+            replay_window_seconds: default_admin_web_replay_window_seconds(),
+            rate_limit_per_minute: default_admin_web_rate_limit_per_minute(),
+        }
+    }
+}
+
+impl Default for WebTerminalConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_true(),
         }
     }
 }
@@ -1012,7 +1922,30 @@ name = "Minimal"
         assert_eq!(config.database.path, PathBuf::from("./data/oxidebbs.ddb"));
         assert_eq!(config.nodes.count, 4);
         assert_eq!(config.terminal.default_encoding, "cp437");
+        assert_eq!(config.terminal.default_profile, "plain");
+        assert!(config.terminal.manual_profile_selection);
+        assert!(config.terminal.profiles.contains_key("ansi80"));
+        assert!(config.terminal.profiles.contains_key("plain"));
+        assert!(config.terminal.profiles.contains_key("c64"));
+        assert_eq!(
+            config
+                .terminal
+                .capabilities_for_profile("c64")
+                .expect("c64 profile"),
+            TerminalCapabilities::c64()
+        );
+        assert!(!config.network.enabled);
+        assert!(config.network.profiles.is_empty());
+        assert!(config.network.links.is_empty());
         assert!(!config.ftn.enabled);
+        assert!(!config.admin_web.enabled);
+        assert!(config.web_terminal.enabled);
+        assert_eq!(config.admin_web.bind, "127.0.0.1:8080");
+        assert!(!config.admin_web.public_status_enabled);
+        assert!(config.admin_web.require_tls);
+        assert!(config.admin_web.read_only);
+        assert!(config.admin_web.allowed_origins.is_empty());
+        assert!(!config.admin_web.behind_reverse_proxy);
     }
 
     #[test]
@@ -1115,6 +2048,219 @@ strategy = "weekly"
     }
 
     #[test]
+    fn parses_disabled_admin_web_defaults() {
+        let toml = r#"
+[board]
+name = "Admin Web Defaults"
+
+[admin_web]
+enabled = false
+"#;
+        let config: OxideConfig = toml::from_str(toml).expect("parse");
+
+        config
+            .validate_admin_web()
+            .expect("disabled admin web validates");
+        assert!(!config.admin_web.enabled);
+        assert!(!config.admin_web.public_status_enabled);
+        assert!(config.admin_web.allowed_origins.is_empty());
+        assert!(!config.admin_web.behind_reverse_proxy);
+        assert_eq!(config.admin_web.session_timeout_seconds, 900);
+        assert_eq!(config.admin_web.csrf_token_ttl_seconds, 900);
+        assert_eq!(config.admin_web.replay_window_seconds, 300);
+        assert_eq!(config.admin_web.rate_limit_per_minute, 30);
+        assert!(config.web_terminal.enabled);
+    }
+
+    #[test]
+    fn defaults_web_terminal_config_to_enabled() {
+        let toml = r#"
+[board]
+name = "Web terminal default"
+"#;
+        let config: OxideConfig = toml::from_str(toml).expect("parse minimal config");
+        assert!(config.web_terminal.enabled);
+    }
+
+    #[test]
+    fn web_terminal_can_be_disabled() {
+        let mut config: OxideConfig =
+            toml::from_str(include_str!("../../../config/oxidebbs.example.toml"))
+                .expect("load example config");
+        config.web_terminal.enabled = false;
+        assert!(!config.web_terminal.enabled);
+        config
+            .validate()
+            .expect("valid config with web terminal disabled");
+    }
+
+    #[test]
+    fn accepts_admin_web_safe_loopback_origin() {
+        let toml = r#"
+[board]
+name = "Admin Web Origin"
+
+[admin_web]
+enabled = true
+allowed_origins = ["http://localhost:5173", "http://192.168.1.50:8080", "https://admin.example.test"]
+"#;
+        let config: OxideConfig = toml::from_str(toml).expect("parse");
+
+        config.validate_admin_web().expect("safe origins validate");
+    }
+
+    #[test]
+    fn rejects_admin_web_wildcard_origin() {
+        let toml = r#"
+[board]
+name = "Bad Admin Web Origin"
+
+[admin_web]
+enabled = true
+allowed_origins = ["*"]
+"#;
+        let config: OxideConfig = toml::from_str(toml).expect("parse");
+        let error = config
+            .validate_admin_web()
+            .expect_err("wildcard origin rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("admin_web.allowed_origins must not contain wildcard")
+        );
+    }
+
+    #[test]
+    fn rejects_admin_web_http_origin_unless_loopback_or_lan() {
+        let toml = r#"
+[board]
+name = "Bad Admin Web Http Origin"
+
+[admin_web]
+enabled = true
+allowed_origins = ["http://admin.example.test"]
+"#;
+        let config: OxideConfig = toml::from_str(toml).expect("parse");
+        let error = config
+            .validate_admin_web()
+            .expect_err("non-lan http origin rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("admin_web.allowed_origins http origins must be loopback, private LAN")
+        );
+    }
+
+    #[test]
+    fn rejects_admin_web_reverse_proxy_on_non_loopback_bind() {
+        let toml = r#"
+[board]
+name = "Bad Admin Web Reverse Proxy"
+
+[admin_web]
+enabled = true
+bind = "0.0.0.0:8080"
+behind_reverse_proxy = true
+"#;
+        let config: OxideConfig = toml::from_str(toml).expect("parse");
+        let error = config
+            .validate_admin_web()
+            .expect_err("reverse proxy bind rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("admin_web.behind_reverse_proxy requires a loopback")
+        );
+    }
+
+    #[test]
+    fn rejects_admin_web_reverse_proxy_without_tls_requirement() {
+        let toml = r#"
+[board]
+name = "Bad Admin Web Reverse Proxy"
+
+[admin_web]
+enabled = true
+require_tls = false
+behind_reverse_proxy = true
+"#;
+        let config: OxideConfig = toml::from_str(toml).expect("parse");
+        let error = config
+            .validate_admin_web()
+            .expect_err("reverse proxy without TLS requirement rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("admin_web.require_tls must be true when admin_web.behind_reverse_proxy")
+        );
+    }
+
+    #[test]
+    fn accepts_admin_web_lan_bind_for_direct_lan_access() {
+        let toml = r#"
+[board]
+name = "LAN Admin Web"
+
+[admin_web]
+enabled = true
+bind = "0.0.0.0:8080"
+"#;
+        let config: OxideConfig = toml::from_str(toml).expect("parse");
+
+        config
+            .validate_admin_web()
+            .expect("direct LAN/all-interface admin web bind validates");
+    }
+
+    #[test]
+    fn rejects_admin_web_public_bind_without_reverse_proxy() {
+        let toml = r#"
+[board]
+name = "Bad Admin Web"
+
+[admin_web]
+enabled = true
+bind = "8.8.8.8:8080"
+"#;
+        let config: OxideConfig = toml::from_str(toml).expect("parse");
+        let error = config
+            .validate_admin_web()
+            .expect_err("public admin web bind rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("admin_web.bind must be loopback, private LAN")
+        );
+    }
+
+    #[test]
+    fn rejects_admin_web_mutation_mode_until_http_surface_exists() {
+        let toml = r#"
+[board]
+name = "Bad Admin Web"
+
+[admin_web]
+enabled = true
+read_only = false
+"#;
+        let config: OxideConfig = toml::from_str(toml).expect("parse");
+        let error = config
+            .validate_admin_web()
+            .expect_err("mutable remote admin rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("admin_web.read_only must remain true")
+        );
+    }
+
+    #[test]
     fn parses_door_definitions() {
         let toml = r#"
 [board]
@@ -1158,6 +2304,253 @@ time_limit_minutes = 30
     }
 
     #[test]
+    fn parses_multiple_network_profiles_with_independent_addresses() {
+        let toml = r#"
+[board]
+name = "Network BBS"
+
+[network]
+enabled = true
+
+[network.profiles.fidonet]
+name = "FidoNet"
+adapter = "legacy-ftn"
+
+[network.profiles.fidonet.local_address]
+zone = 1
+net = 105
+node = 42
+point = 0
+
+[network.profiles.oxidenet]
+name = "OxideNet"
+adapter = "oxidenet"
+
+[network.profiles.oxidenet.local_address]
+zone = 42
+net = 1
+node = 7
+point = 0
+
+[network.links.fidonet_hub]
+network = "fidonet"
+address = "1:105/0"
+host = "fidonet.example.net"
+transport_security = "plaintext_legacy"
+legacy_compatible = true
+
+[network.links.oxide_hub]
+network = "oxidenet"
+address = "42:1/0"
+host = "hub.oxidebbs.net"
+compression = "none"
+transport_security = "tls_required"
+"#;
+        let config: OxideConfig = toml::from_str(toml).expect("parse network config");
+
+        config.validate_network().expect("validate network config");
+        assert!(config.network.enabled);
+        assert_eq!(config.network.profiles["fidonet"].local_address.zone, 1);
+        assert_eq!(config.network.profiles["oxidenet"].local_address.zone, 42);
+    }
+
+    #[test]
+    fn rejects_network_link_with_unknown_profile_key() {
+        let toml = r#"
+[board]
+name = "Network BBS"
+
+[network.links.unknown_hub]
+network = "missing"
+address = "1:105/0"
+host = "fidonet.example.net"
+"#;
+        let config: OxideConfig = toml::from_str(toml).expect("parse network config");
+        let error = config
+            .validate_network()
+            .expect_err("unknown network profile rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("network.links.unknown_hub.network references unknown profile")
+        );
+    }
+
+    #[test]
+    fn rejects_plaintext_legacy_on_non_legacy_network_profile() {
+        let toml = r#"
+[board]
+name = "Network BBS"
+
+[network.profiles.oxidenet]
+adapter = "oxidenet"
+
+[network.profiles.oxidenet.local_address]
+zone = 42
+net = 1
+node = 7
+
+[network.links.oxide_hub]
+network = "oxidenet"
+address = "42:1/0"
+host = "hub.oxidebbs.net"
+transport_security = "plaintext_legacy"
+"#;
+        let config: OxideConfig = toml::from_str(toml).expect("parse network config");
+        let error = config
+            .validate_network()
+            .expect_err("plaintext legacy rejected on OxideNet");
+
+        assert!(
+            error
+                .to_string()
+                .contains("plaintext_legacy is allowed only for legacy-ftn profiles")
+        );
+    }
+
+    #[test]
+    fn validates_binkp_listener_tls_identity_for_tls_required_links() {
+        let toml = r#"
+[board]
+name = "Network BBS"
+
+[network]
+enabled = true
+
+[network.binkp_listener]
+enabled = true
+bind = "127.0.0.1:24554"
+tls_cert_path = "./certs/binkp.crt"
+tls_key_path = "./certs/binkp.key"
+
+[network.profiles.oxidenet]
+adapter = "oxidenet"
+
+[network.profiles.oxidenet.local_address]
+zone = 42
+net = 1
+node = 7
+
+[network.links.oxide_hub]
+network = "oxidenet"
+address = "42:1/0"
+host = "hub.oxidebbs.net"
+transport_security = "tls_required"
+"#;
+        let config: OxideConfig = toml::from_str(toml).expect("parse network config");
+
+        config.validate_network().expect("validate network config");
+        let listener = config.network.binkp_listener.expect("listener");
+        assert_eq!(
+            listener.tls_cert_path,
+            Some(PathBuf::from("./certs/binkp.crt"))
+        );
+        assert_eq!(
+            listener.tls_key_path,
+            Some(PathBuf::from("./certs/binkp.key"))
+        );
+    }
+
+    #[test]
+    fn rejects_enabled_binkp_listener_without_tls_identity_for_tls_required_links() {
+        let toml = r#"
+[board]
+name = "Network BBS"
+
+[network]
+enabled = true
+
+[network.binkp_listener]
+enabled = true
+bind = "127.0.0.1:24554"
+
+[network.profiles.oxidenet]
+adapter = "oxidenet"
+
+[network.profiles.oxidenet.local_address]
+zone = 42
+net = 1
+node = 7
+
+[network.links.oxide_hub]
+network = "oxidenet"
+address = "42:1/0"
+host = "hub.oxidebbs.net"
+transport_security = "tls_required"
+"#;
+        let config: OxideConfig = toml::from_str(toml).expect("parse network config");
+        let error = config
+            .validate_network()
+            .expect_err("TLS identity required");
+
+        assert!(
+            error
+                .to_string()
+                .contains("binkp_listener needs tls_cert_path and tls_key_path")
+        );
+    }
+
+    #[test]
+    fn rejects_half_configured_binkp_listener_tls_identity() {
+        let toml = r#"
+[board]
+name = "Network BBS"
+
+[network]
+enabled = true
+
+[network.binkp_listener]
+enabled = true
+tls_cert_path = "./certs/binkp.crt"
+"#;
+        let config: OxideConfig = toml::from_str(toml).expect("parse network config");
+        let error = config
+            .validate_network()
+            .expect_err("half-configured TLS identity rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("TLS requires both tls_cert_path and tls_key_path")
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_network_link_fields() {
+        let toml = r#"
+[board]
+name = "Network BBS"
+
+[network.links.bad]
+network = "fidonet"
+address = "1:105/0"
+host = "fidonet.example.net"
+unknown_key = true
+"#;
+        let error = toml::from_str::<OxideConfig>(toml).expect_err("unknown field rejected");
+
+        assert!(error.to_string().contains("unknown field `unknown_key`"));
+    }
+
+    #[test]
+    fn parses_deprecated_ftn_compatibility_alias() {
+        let toml = r#"
+[board]
+name = "Legacy"
+
+[ftn]
+enabled = true
+reserved_network_name = "FidoNet"
+"#;
+        let config: OxideConfig = toml::from_str(toml).expect("parse ftn alias");
+
+        assert!(config.ftn.enabled);
+        assert_eq!(config.ftn.reserved_network_name, "FidoNet");
+        assert!(!config.network.enabled);
+    }
+
+    #[test]
     fn converts_configured_menu_to_core_router() {
         let config: OxideConfig =
             toml::from_str(include_str!("../../../config/oxidebbs.example.toml")).expect("parse");
@@ -1172,6 +2565,10 @@ time_limit_minutes = 30
         assert_eq!(
             menu.route("M"),
             Some(oxidebbs_core::menu::MenuAction::Messages)
+        );
+        assert_eq!(
+            menu.route("F"),
+            Some(oxidebbs_core::menu::MenuAction::Files)
         );
         assert_eq!(menu.route("z"), None);
         assert_eq!(
@@ -1327,6 +2724,66 @@ action = "shell"
     }
 
     #[test]
+    fn rejects_unknown_default_terminal_profile() {
+        let toml = r#"
+[board]
+name = "Test"
+
+[terminal]
+default_profile = "missing"
+"#;
+        let config: OxideConfig = toml::from_str(toml).expect("parse");
+        let error = config
+            .validate_terminal()
+            .expect_err("unknown terminal profile rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("terminal.default_profile references missing profile")
+        );
+    }
+
+    #[test]
+    fn parses_custom_c64_terminal_profile_contract() {
+        let toml = r#"
+[board]
+name = "Test"
+
+[terminal]
+default_profile = "c64"
+
+[terminal.profiles.c64]
+name = "C64 / C64 Ultimate 40-column"
+width = 40
+height = 25
+supports_ansi = false
+supports_color = false
+charset = "petscii_ascii_fallback"
+line_endings = "crlf"
+backspace_mode = "backspace_or_delete"
+output_pacing_bytes_per_second = 600
+"#;
+        let config: OxideConfig = toml::from_str(toml).expect("parse");
+        config.validate_terminal().expect("validate terminal");
+
+        let capabilities = config
+            .terminal
+            .default_capabilities()
+            .expect("default capabilities");
+        assert_eq!(capabilities.profile, TerminalProfile::C64);
+        assert_eq!(capabilities.width, 40);
+        assert_eq!(capabilities.height, 25);
+        assert!(!capabilities.supports_ansi);
+        assert_eq!(
+            capabilities.output_pacing,
+            Some(OutputPacing {
+                bytes_per_second: 600
+            })
+        );
+    }
+
+    #[test]
     fn rejects_non_ascii_menu_key() {
         let toml = r#"
 [board]
@@ -1372,6 +2829,10 @@ action = "messages"
         );
         assert_eq!(
             screen.asset_for(TerminalCapabilities::plain_text()),
+            Some("login/login.asc")
+        );
+        assert_eq!(
+            screen.asset_for(TerminalCapabilities::c64()),
             Some("login/login.asc")
         );
     }

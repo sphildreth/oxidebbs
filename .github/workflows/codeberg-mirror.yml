@@ -1,0 +1,57 @@
+name: Codeberg Mirror
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Run the mirror command without updating Codeberg
+        required: true
+        default: "true"
+
+permissions:
+  contents: read
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Configure SSH key
+        env:
+          CODEBERG_MIRROR_SSH_KEY: ${{ secrets.CODEBERG_MIRROR_SSH_KEY }}
+        run: |
+          if [[ -z "$CODEBERG_MIRROR_SSH_KEY" ]]; then
+            echo "No Codeberg mirror SSH key configured."
+            exit 0
+          fi
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$CODEBERG_MIRROR_SSH_KEY" > ~/.ssh/codeberg_mirror
+          chmod 600 ~/.ssh/codeberg_mirror
+          ssh-keyscan codeberg.org >> ~/.ssh/known_hosts
+          printf 'GIT_SSH_COMMAND=ssh -i ~/.ssh/codeberg_mirror -o IdentitiesOnly=yes\n' >> "$GITHUB_ENV"
+          printf 'CODEBERG_MIRROR_HAS_KEY=1\n' >> "$GITHUB_ENV"
+
+      - name: Mirror repository
+        env:
+          CODEBERG_MIRROR_URL: ${{ secrets.CODEBERG_MIRROR_URL }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+        run: |
+          remote_url="${CODEBERG_MIRROR_URL:-git@codeberg.org:sphildreth/oxidebbs.git}"
+          if [[ "${DRY_RUN}" == "true" && "${CODEBERG_MIRROR_HAS_KEY:-0}" != "1" ]]; then
+            echo "Dry-run completed without push validation because mirror SSH credentials are not configured."
+            exit 0
+          fi
+          if [[ "${DRY_RUN}" != "true" && "${CODEBERG_MIRROR_HAS_KEY:-0}" != "1" ]]; then
+            echo "CODEBERG_MIRROR_SSH_KEY is required when dry_run is false." >&2
+            exit 1
+          fi
+          git remote add codeberg "$remote_url"
+          if [[ "$DRY_RUN" == "true" ]]; then
+            git push --mirror --dry-run codeberg
+          else
+            git push --mirror codeberg
+          fi

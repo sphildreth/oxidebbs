@@ -2,6 +2,23 @@
 
 Rust BBS engine for telnet callers, ANSI/CP437 screens, DecentDB persistence, and DOS door games.
 
+# Personal Codex operating rules
+
+## Model and delegation preference
+
+Prefer GPT-5.3-Codex-Spark for coding work whenever practical.
+
+For any task that involves codebase exploration, bug investigation, refactoring analysis, test discovery, PR review, dependency review, or multi-file implementation planning:
+
+1. Do not perform all exploration in the main thread unless the task is tiny.
+2. Spawn one or more subagents first.
+3. Prefer `phase_executor_spark` for read-only discovery.
+4. Prefer `cheap_code_fixer` for small or medium implementation tasks.
+5. Keep the parent thread focused on orchestration, synthesis, and final decision-making.
+6. Use gpt-5.5 only when explicitly requested or when the task truly requires deep reasoning that Spark cannot handle.
+
+When spawning agents, wait for all results, consolidate findings, then proceed.
+
 ## Validate changes
 
 The CI gate is `./scripts/dev-check.sh`. It runs in this order:

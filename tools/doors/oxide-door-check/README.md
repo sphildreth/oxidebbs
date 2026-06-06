@@ -49,6 +49,18 @@ cargo run -p oxidebbs-server -- --config config/oxidebbs.example.toml serve
 Then connect over telnet, log in, open the `Doors` menu, and select
 `oxide-check`.
 
+On each live run the fixture creates or updates `OXIDECHK.DAT` in its DOS
+working directory and reports the previous and current run counts. This verifies
+OxideBBS door persistence:
+
+1. Run `oxide-check` once and quit with `Q`.
+2. Run `oxide-check` again.
+3. The second run should show `Previous runs: 1` and `Current runs: 2`.
+
+The `P` command redisplays the persistence state. The `R` command writes
+`OXIDECHK.RPT`, which is also a door-owned output file and should persist after
+the runtime directory is cleaned.
+
 Dry runs and checksum verification do not require DOSEMU2:
 
 ```bash

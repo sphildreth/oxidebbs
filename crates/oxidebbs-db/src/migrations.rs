@@ -16,6 +16,12 @@ pub fn migrate_to_current(db: &Db) -> decentdb::Result<()> {
         match version {
             2 => migrate_2_to_3(db)?,
             3 => migrate_3_to_4(db)?,
+            4 => migrate_4_to_5(db)?,
+            5 => migrate_5_to_6(db)?,
+            6 => migrate_6_to_7(db)?,
+            7 => migrate_7_to_8(db)?,
+            8 => migrate_8_to_9(db)?,
+            9 => migrate_9_to_10(db)?,
             unknown => {
                 return Err(DbError::sql(format!(
                     "Unsupported migration source schema version {unknown}; expected {SCHEMA_VERSION} or older known versions"
@@ -65,6 +71,565 @@ fn migrate_3_to_4(db: &Db) -> decentdb::Result<()> {
             "Cannot apply migration 3 -> 4 because schema_version marker is missing",
         )),
     }
+}
+
+fn migrate_4_to_5(db: &Db) -> decentdb::Result<()> {
+    match existing_schema_version(db)? {
+        Some(4) => {
+            run_migration_transaction(db, || {
+                recreate_messages_for_author_fields(db)?;
+                create_network_tables(db)?;
+                rebuild_doors_for_security_level(db, 4)?;
+                create_file_tables(db)?;
+                create_oxidenet_registry_tables(db)?;
+                set_schema_version(db, 5)
+            })?;
+            Ok(())
+        }
+        Some(other) => Err(DbError::sql(format!(
+            "Cannot apply migration 4 -> 5 from schema version {other}"
+        ))),
+        None => Err(DbError::sql(
+            "Cannot apply migration 4 -> 5 because schema_version marker is missing",
+        )),
+    }
+}
+
+fn migrate_5_to_6(db: &Db) -> decentdb::Result<()> {
+    match existing_schema_version(db)? {
+        Some(5) => {
+            if doors_needs_security_level_rebuild(db)? {
+                rebuild_doors_for_security_level(db, 5)?;
+            }
+            set_schema_version(db, 6)
+        }
+        Some(other) => Err(DbError::sql(format!(
+            "Cannot apply migration 5 -> 6 from schema version {other}"
+        ))),
+        None => Err(DbError::sql(
+            "Cannot apply migration 5 -> 6 because schema_version marker is missing",
+        )),
+    }
+}
+
+fn migrate_6_to_7(db: &Db) -> decentdb::Result<()> {
+    match existing_schema_version(db)? {
+        Some(6) => {
+            db.execute_batch(
+                "CREATE TABLE IF NOT EXISTS door_provider_credentials (
+                    id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+                    door_id UUID NOT NULL REFERENCES doors(id) ON DELETE CASCADE,
+                    provider_name TEXT NOT NULL CHECK (LENGTH(TRIM(provider_name)) > 0),
+                    credential_ref TEXT NOT NULL CHECK (LENGTH(TRIM(credential_ref)) > 0),
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (door_id, provider_name)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_door_provider_credentials_door_id ON door_provider_credentials (door_id);",
+            )?;
+            set_schema_version(db, 7)
+        }
+        Some(other) => Err(DbError::sql(format!(
+            "Cannot apply migration 6 -> 7 from schema version {other}"
+        ))),
+        None => Err(DbError::sql(
+            "Cannot apply migration 6 -> 7 because schema_version marker is missing",
+        )),
+    }
+}
+
+fn migrate_7_to_8(db: &Db) -> decentdb::Result<()> {
+    match existing_schema_version(db)? {
+        Some(7) => {
+            run_migration_transaction(db, || {
+                rebuild_network_runtime_tables_for_v8(db)?;
+                set_schema_version(db, 8)
+            })?;
+            Ok(())
+        }
+        Some(other) => Err(DbError::sql(format!(
+            "Cannot apply migration 7 -> 8 from schema version {other}"
+        ))),
+        None => Err(DbError::sql(
+            "Cannot apply migration 7 -> 8 because schema_version marker is missing",
+        )),
+    }
+}
+
+fn migrate_8_to_9(db: &Db) -> decentdb::Result<()> {
+    match existing_schema_version(db)? {
+        Some(8) => {
+            run_migration_transaction(db, || {
+                rebuild_sessions_for_v9(db)?;
+                set_schema_version(db, 9)
+            })?;
+            Ok(())
+        }
+        Some(other) => Err(DbError::sql(format!(
+            "Cannot apply migration 8 -> 9 from schema version {other}"
+        ))),
+        None => Err(DbError::sql(
+            "Cannot apply migration 8 -> 9 because schema_version marker is missing",
+        )),
+    }
+}
+
+fn rebuild_sessions_for_v9(db: &Db) -> decentdb::Result<()> {
+    db.execute_batch(
+        "ALTER TABLE sessions RENAME TO oxidebbs_schema8_sessions;
+
+        DROP INDEX IF EXISTS idx_sessions_user_id;
+        DROP INDEX IF EXISTS idx_sessions_started_at;
+
+        CREATE TABLE sessions_v9 (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            node_number INT NOT NULL CHECK (node_number > 0),
+            user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+            transport TEXT NOT NULL CHECK (transport = 'telnet' OR transport = 'serial'),
+            remote_address TEXT NOT NULL DEFAULT '',
+            remote_ip IPADDR,
+            remote_port INT CHECK (remote_port IS NULL OR (remote_port >= 0 AND remote_port <= 65535)),
+            started_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            ended_at TIMESTAMPTZ,
+            disconnect_reason TEXT
+        );
+
+        INSERT INTO sessions_v9 (
+            id, node_number, user_id, transport, remote_address, remote_ip,
+            remote_port, started_at, ended_at, disconnect_reason
+        )
+        SELECT id, node_number, user_id, transport, remote_address, remote_ip,
+               remote_port, started_at, ended_at, disconnect_reason
+        FROM oxidebbs_schema8_sessions;
+
+        ALTER TABLE sessions_v9 RENAME TO sessions;
+
+        CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions (user_id);
+        CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions (started_at);",
+    )?;
+    Ok(())
+}
+
+fn migrate_9_to_10(db: &Db) -> decentdb::Result<()> {
+    match existing_schema_version(db)? {
+        Some(9) => {
+            run_migration_transaction(db, || {
+                rebuild_sessions_for_v10(db)?;
+                set_schema_version(db, 10)
+            })?;
+            Ok(())
+        }
+        Some(other) => Err(DbError::sql(format!(
+            "Cannot apply migration 9 -> 10 from schema version {other}"
+        ))),
+        None => Err(DbError::sql(
+            "Cannot apply migration 9 -> 10 because schema_version marker is missing",
+        )),
+    }
+}
+
+fn rebuild_sessions_for_v10(db: &Db) -> decentdb::Result<()> {
+    db.execute_batch(
+        "ALTER TABLE sessions RENAME TO oxidebbs_schema9_sessions;
+
+        DROP INDEX IF EXISTS idx_sessions_user_id;
+        DROP INDEX IF EXISTS idx_sessions_started_at;
+
+        CREATE TABLE sessions_v10 (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            node_number INT NOT NULL CHECK (node_number > 0),
+            user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+            transport TEXT NOT NULL CHECK (transport = 'telnet' OR transport = 'serial' OR transport = 'websocket'),
+            remote_address TEXT NOT NULL DEFAULT '',
+            remote_ip IPADDR,
+            remote_port INT CHECK (remote_port IS NULL OR (remote_port >= 0 AND remote_port <= 65535)),
+            started_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            ended_at TIMESTAMPTZ,
+            disconnect_reason TEXT
+        );
+
+        INSERT INTO sessions_v10 (
+            id, node_number, user_id, transport, remote_address, remote_ip,
+            remote_port, started_at, ended_at, disconnect_reason
+        )
+        SELECT id, node_number, user_id, transport, remote_address, remote_ip,
+               remote_port, started_at, ended_at, disconnect_reason
+        FROM oxidebbs_schema9_sessions;
+
+        ALTER TABLE sessions_v10 RENAME TO sessions;
+
+        CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions (user_id);
+        CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions (started_at);",
+    )?;
+    Ok(())
+}
+
+fn rebuild_network_runtime_tables_for_v8(db: &Db) -> decentdb::Result<()> {
+    db.execute_batch(
+        "ALTER TABLE network_seen_by RENAME TO oxidebbs_schema7_network_seen_by;
+        ALTER TABLE network_path RENAME TO oxidebbs_schema7_network_path;
+        ALTER TABLE network_messages RENAME TO oxidebbs_schema7_network_messages;
+        ALTER TABLE network_packets RENAME TO oxidebbs_schema7_network_packets;
+        ALTER TABLE network_nodelist RENAME TO oxidebbs_schema7_network_nodelist;
+
+        DROP INDEX IF EXISTS idx_network_packets_network_id_status;
+        DROP INDEX IF EXISTS idx_network_messages_network_id;
+        DROP INDEX IF EXISTS idx_network_messages_local_message_id;
+        DROP INDEX IF EXISTS idx_network_seen_by_message_id;
+        DROP INDEX IF EXISTS idx_network_seen_by_network_id_zone_net_node;
+        DROP INDEX IF EXISTS idx_network_path_message_id_sequence;
+        DROP INDEX IF EXISTS idx_network_nodelist_network_id_zone_net_node_point;
+
+        CREATE TABLE network_packets_copy (
+            id UUID,
+            network_id UUID,
+            direction TEXT,
+            link_id UUID,
+            filename TEXT,
+            sha256 TEXT,
+            size_bytes INT,
+            status TEXT,
+            error_message TEXT,
+            received_at TIMESTAMPTZ,
+            processed_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ
+        );
+
+        INSERT INTO network_packets_copy (
+            id, network_id, direction, link_id, filename, sha256, size_bytes, status,
+            error_message, received_at, processed_at, created_at
+        )
+        SELECT
+            id, network_id, direction, link_id, filename, sha256, size_bytes, status,
+            error_message, received_at, processed_at, created_at
+        FROM oxidebbs_schema7_network_packets;
+
+        CREATE TABLE network_messages_copy (
+            id UUID,
+            network_id UUID,
+            local_message_id UUID,
+            message_type TEXT,
+            area_tag TEXT,
+            origin_address TEXT,
+            destination_address TEXT,
+            from_name TEXT,
+            to_name TEXT,
+            subject TEXT,
+            raw_text BLOB,
+            display_body TEXT,
+            msgid TEXT,
+            replyid TEXT,
+            created_at TIMESTAMPTZ,
+            imported_at TIMESTAMPTZ,
+            exported_at TIMESTAMPTZ,
+            duplicate_hash TEXT,
+            packet_id UUID,
+            status TEXT
+        );
+
+        INSERT INTO network_messages_copy (
+            id, network_id, local_message_id, message_type, area_tag, origin_address,
+            destination_address, from_name, to_name, subject, raw_text, display_body,
+            msgid, replyid, created_at, imported_at, exported_at, duplicate_hash,
+            packet_id, status
+        )
+        SELECT
+            id, network_id, local_message_id, message_type, area_tag, origin_address,
+            destination_address, from_name, to_name, subject, raw_text, display_body,
+            msgid, replyid, created_at, imported_at, exported_at, duplicate_hash,
+            packet_id, status
+        FROM oxidebbs_schema7_network_messages;
+
+        CREATE TABLE network_seen_by_copy (
+            id UUID,
+            message_id UUID,
+            network_id UUID,
+            zone INT,
+            net INT,
+            node INT
+        );
+
+        INSERT INTO network_seen_by_copy (id, message_id, network_id, zone, net, node)
+        SELECT id, message_id, network_id, zone, net, node
+        FROM oxidebbs_schema7_network_seen_by;
+
+        CREATE TABLE network_path_copy (
+            id UUID,
+            message_id UUID,
+            network_id UUID,
+            sequence INT,
+            zone INT,
+            net INT,
+            node INT
+        );
+
+        INSERT INTO network_path_copy (id, message_id, network_id, sequence, zone, net, node)
+        SELECT id, message_id, network_id, sequence, zone, net, node
+        FROM oxidebbs_schema7_network_path;
+
+        CREATE TABLE network_nodelist_copy (
+            id UUID,
+            network_id UUID,
+            zone INT,
+            net INT,
+            node INT,
+            point INT,
+            parsed_name TEXT,
+            location TEXT,
+            sysop_name TEXT,
+            phone TEXT,
+            speed TEXT,
+            flags TEXT,
+            raw_entry TEXT,
+            updated_at TIMESTAMPTZ
+        );
+
+        INSERT INTO network_nodelist_copy (
+            id, network_id, zone, net, node, point, parsed_name, location,
+            sysop_name, phone, speed, flags, raw_entry, updated_at
+        )
+        SELECT
+            id, network_id, zone, net, node, point, parsed_name, NULL,
+            NULL, NULL, NULL, '', raw_entry, updated_at
+        FROM oxidebbs_schema7_network_nodelist;
+
+        DROP TABLE oxidebbs_schema7_network_seen_by;
+        DROP TABLE oxidebbs_schema7_network_path;
+        DROP TABLE oxidebbs_schema7_network_messages;
+        DROP TABLE oxidebbs_schema7_network_packets;
+        DROP TABLE oxidebbs_schema7_network_nodelist;
+
+        CREATE TABLE network_packets (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            network_id UUID NOT NULL REFERENCES network_profiles(id) ON DELETE CASCADE,
+            direction TEXT NOT NULL
+                CHECK (direction = 'inbound' OR direction = 'outbound'),
+            link_id UUID REFERENCES network_links(id) ON DELETE SET NULL,
+            filename TEXT NOT NULL CHECK (LENGTH(TRIM(filename)) > 0),
+            sha256 TEXT NOT NULL CHECK (LENGTH(TRIM(sha256)) > 0),
+            size_bytes INT NOT NULL DEFAULT 0 CHECK (size_bytes >= 0),
+            status TEXT NOT NULL DEFAULT 'pending'
+                CHECK (status = 'pending' OR status = 'processing' OR status = 'processed' OR status = 'quarantined' OR status = 'failed' OR status = 'ready'),
+            error_message TEXT,
+            received_at TIMESTAMPTZ,
+            processed_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        INSERT INTO network_packets (
+            id, network_id, direction, link_id, filename, sha256, size_bytes, status,
+            error_message, received_at, processed_at, created_at
+        )
+        SELECT
+            id, network_id, direction, link_id, filename, sha256, size_bytes, status,
+            error_message, received_at, processed_at, created_at
+        FROM network_packets_copy;
+
+        CREATE TABLE network_messages (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            network_id UUID NOT NULL REFERENCES network_profiles(id) ON DELETE CASCADE,
+            local_message_id UUID REFERENCES messages(id) ON DELETE SET NULL,
+            message_type TEXT NOT NULL DEFAULT 'echomail'
+                CHECK (message_type = 'echomail' OR message_type = 'netmail' OR message_type = 'local'),
+            area_tag TEXT,
+            origin_address TEXT NOT NULL,
+            destination_address TEXT,
+            from_name TEXT NOT NULL CHECK (LENGTH(TRIM(from_name)) > 0),
+            to_name TEXT,
+            subject TEXT NOT NULL CHECK (LENGTH(TRIM(subject)) > 0),
+            raw_text BLOB NOT NULL,
+            display_body TEXT NOT NULL DEFAULT '',
+            msgid TEXT,
+            replyid TEXT,
+            created_at TIMESTAMPTZ NOT NULL,
+            imported_at TIMESTAMPTZ,
+            exported_at TIMESTAMPTZ,
+            duplicate_hash TEXT,
+            packet_id UUID REFERENCES network_packets(id) ON DELETE SET NULL,
+            status TEXT NOT NULL DEFAULT 'imported'
+                CHECK (status = 'imported' OR status = 'exported' OR status = 'quarantined' OR status = 'duplicate' OR status = 'pending' OR status = 'ready'),
+            CHECK (LENGTH(TRIM(origin_address)) > 0)
+        );
+
+        INSERT INTO network_messages (
+            id, network_id, local_message_id, message_type, area_tag, origin_address,
+            destination_address, from_name, to_name, subject, raw_text, display_body,
+            msgid, replyid, created_at, imported_at, exported_at, duplicate_hash,
+            packet_id, status
+        )
+        SELECT
+            id, network_id, local_message_id, message_type, area_tag, origin_address,
+            destination_address, from_name, to_name, subject, raw_text, display_body,
+            msgid, replyid, created_at, imported_at, exported_at, duplicate_hash,
+            packet_id, status
+        FROM network_messages_copy;
+
+        CREATE TABLE network_seen_by (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            message_id UUID NOT NULL REFERENCES network_messages(id) ON DELETE CASCADE,
+            network_id UUID NOT NULL REFERENCES network_profiles(id) ON DELETE CASCADE,
+            zone INT NOT NULL CHECK (zone > 0),
+            net INT NOT NULL CHECK (net > 0),
+            node INT NOT NULL CHECK (node > 0)
+        );
+
+        INSERT INTO network_seen_by (id, message_id, network_id, zone, net, node)
+        SELECT id, message_id, network_id, zone, net, node
+        FROM network_seen_by_copy;
+
+        CREATE TABLE network_path (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            message_id UUID NOT NULL REFERENCES network_messages(id) ON DELETE CASCADE,
+            network_id UUID NOT NULL REFERENCES network_profiles(id) ON DELETE CASCADE,
+            sequence INT NOT NULL CHECK (sequence >= 0),
+            zone INT NOT NULL CHECK (zone > 0),
+            net INT NOT NULL CHECK (net > 0),
+            node INT NOT NULL CHECK (node > 0)
+        );
+
+        INSERT INTO network_path (id, message_id, network_id, sequence, zone, net, node)
+        SELECT id, message_id, network_id, sequence, zone, net, node
+        FROM network_path_copy;
+
+        CREATE TABLE network_nodelist (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            network_id UUID NOT NULL REFERENCES network_profiles(id) ON DELETE CASCADE,
+            zone INT NOT NULL CHECK (zone > 0),
+            net INT NOT NULL CHECK (net > 0),
+            node INT NOT NULL CHECK (node > 0),
+            point INT NOT NULL DEFAULT 0 CHECK (point >= 0),
+            parsed_name TEXT,
+            location TEXT,
+            sysop_name TEXT,
+            phone TEXT,
+            speed TEXT,
+            flags TEXT NOT NULL DEFAULT '',
+            raw_entry TEXT NOT NULL CHECK (LENGTH(TRIM(raw_entry)) > 0),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (network_id, zone, net, node, point)
+        );
+
+        INSERT INTO network_nodelist (
+            id, network_id, zone, net, node, point, parsed_name, location,
+            sysop_name, phone, speed, flags, raw_entry, updated_at
+        )
+        SELECT id, network_id, zone, net, node, point, parsed_name, location,
+            sysop_name, phone, speed, flags, raw_entry, updated_at
+        FROM network_nodelist_copy;
+
+        DROP TABLE network_seen_by_copy;
+        DROP TABLE network_path_copy;
+        DROP TABLE network_messages_copy;
+        DROP TABLE network_packets_copy;
+        DROP TABLE network_nodelist_copy;
+
+        CREATE TABLE IF NOT EXISTS network_rescan_queue (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            network_id UUID NOT NULL REFERENCES network_profiles(id) ON DELETE CASCADE,
+            link_id UUID NOT NULL REFERENCES network_links(id) ON DELETE CASCADE,
+            area_tag TEXT NOT NULL CHECK (LENGTH(TRIM(area_tag)) > 0),
+            status TEXT NOT NULL DEFAULT 'pending'
+                CHECK (status = 'pending' OR status = 'processing' OR status = 'completed' OR status = 'failed' OR status = 'cancelled'),
+            requested_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            processed_at TIMESTAMPTZ
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_network_packets_network_id_status ON network_packets (network_id, status);
+        CREATE INDEX IF NOT EXISTS idx_network_messages_network_id ON network_messages (network_id);
+        CREATE INDEX IF NOT EXISTS idx_network_messages_local_message_id ON network_messages (local_message_id);
+        CREATE INDEX IF NOT EXISTS idx_network_seen_by_message_id ON network_seen_by (message_id);
+        CREATE INDEX IF NOT EXISTS idx_network_seen_by_network_id_zone_net_node ON network_seen_by (network_id, zone, net, node);
+        CREATE INDEX IF NOT EXISTS idx_network_path_message_id_sequence ON network_path (message_id, sequence);
+        CREATE INDEX IF NOT EXISTS idx_network_nodelist_network_id_zone_net_node_point ON network_nodelist (network_id, zone, net, node, point);",
+    )?;
+    Ok(())
+}
+
+fn doors_needs_security_level_rebuild(db: &Db) -> decentdb::Result<bool> {
+    let result = db.execute(
+        "SELECT COUNT(*) FROM information_schema.columns WHERE table_name = 'doors' AND column_name = 'min_security_level'",
+    )?;
+    let count = result
+        .rows()
+        .first()
+        .and_then(|row| row.values().first())
+        .and_then(|value| match value {
+            decentdb::Value::Int64(n) => Some(*n),
+            _ => None,
+        })
+        .unwrap_or(0);
+    Ok(count == 0)
+}
+
+fn rebuild_message_area_tables_for_v3(db: &Db) -> decentdb::Result<()> {
+    db.execute_batch(
+        "ALTER TABLE messages RENAME TO oxidebbs_schema2_messages;
+        ALTER TABLE message_areas RENAME TO oxidebbs_schema2_message_areas;
+
+        CREATE TABLE message_areas_v3 (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            key TEXT NOT NULL UNIQUE CHECK (LENGTH(TRIM(key)) > 0),
+            name TEXT NOT NULL CHECK (LENGTH(TRIM(name)) > 0),
+            description TEXT NOT NULL DEFAULT '',
+            kind TEXT NOT NULL DEFAULT 'local',
+            network_id TEXT,
+            read_security_level INT NOT NULL DEFAULT 0 CHECK (read_security_level >= 0 AND read_security_level <= 255),
+            post_security_level INT NOT NULL DEFAULT 10 CHECK (post_security_level >= 0 AND post_security_level <= 255),
+            moderated BOOL NOT NULL DEFAULT FALSE,
+            enabled BOOL NOT NULL DEFAULT TRUE,
+            CHECK (kind = 'local' OR kind = 'echomail' OR kind = 'netmail')
+        );
+
+        CREATE TABLE messages_v3 (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            area_id UUID NOT NULL REFERENCES message_areas_v3(id) ON DELETE CASCADE,
+            author_user_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+            to_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+            subject TEXT NOT NULL CHECK (LENGTH(TRIM(subject)) > 0),
+            body TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            reply_to_id UUID REFERENCES messages_v3(id) ON DELETE SET NULL,
+            network_message_id TEXT,
+            visibility TEXT NOT NULL DEFAULT 'normal'
+                CHECK (visibility = 'normal' OR visibility = 'deleted' OR visibility = 'hidden')
+        );
+
+        INSERT INTO message_areas_v3 (
+            id, key, name, description, kind, network_id,
+            read_security_level, post_security_level, moderated, enabled
+        )
+        SELECT id, key, name, description, kind, network_id, read_security_level,
+               post_security_level, moderated, TRUE
+        FROM oxidebbs_schema2_message_areas;
+
+        INSERT INTO messages_v3 (
+            id, area_id, author_user_id, to_user_id, subject, body, created_at,
+            reply_to_id, network_message_id, visibility
+        )
+        SELECT id, area_id, author_user_id, to_user_id, subject, body, created_at,
+               NULL, network_message_id, visibility
+        FROM oxidebbs_schema2_messages;
+
+        UPDATE messages_v3
+        SET reply_to_id = (
+            SELECT oxidebbs_schema2_messages.reply_to_id
+            FROM oxidebbs_schema2_messages
+            WHERE oxidebbs_schema2_messages.id = messages_v3.id
+        );
+
+        DROP INDEX IF EXISTS idx_messages_area_created_at;
+        DROP INDEX IF EXISTS idx_messages_author_user_id;
+        DROP INDEX IF EXISTS idx_messages_to_user_id;
+
+        ALTER TABLE message_areas_v3 RENAME TO message_areas;
+        ALTER TABLE messages_v3 RENAME TO messages;
+
+        CREATE INDEX IF NOT EXISTS idx_messages_area_created_at ON messages (area_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_messages_author_user_id ON messages (author_user_id);
+        CREATE INDEX IF NOT EXISTS idx_messages_to_user_id ON messages (to_user_id);",
+    )?;
+    Ok(())
 }
 
 fn ensure_v3_tables_for_user_rebuild(db: &Db) -> decentdb::Result<()> {
@@ -296,77 +861,441 @@ fn create_auth_attempts_table(db: &Db) -> decentdb::Result<()> {
     Ok(())
 }
 
-fn rebuild_message_area_tables_for_v3(db: &Db) -> decentdb::Result<()> {
-    // DecentDB 2.8.0 cannot drop the renamed schema-2 messages table because
-    // its self-referential foreign key still points at itself, and unnamed
-    // inline foreign keys cannot be removed with ALTER TABLE DROP CONSTRAINT.
-    // Keep the old tables under explicit archive names outside runtime query
-    // paths, then move freshly built v3 tables into the canonical names.
+fn recreate_messages_for_author_fields(db: &Db) -> decentdb::Result<()> {
     db.execute_batch(
-        "ALTER TABLE messages RENAME TO oxidebbs_schema2_messages;
-        ALTER TABLE message_areas RENAME TO oxidebbs_schema2_message_areas;
-
-        CREATE TABLE message_areas_v3 (
-            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
-            key TEXT NOT NULL UNIQUE CHECK (LENGTH(TRIM(key)) > 0),
-            name TEXT NOT NULL CHECK (LENGTH(TRIM(name)) > 0),
-            description TEXT NOT NULL DEFAULT '',
-            kind TEXT NOT NULL DEFAULT 'local',
-            network_id TEXT,
-            read_security_level INT NOT NULL DEFAULT 0 CHECK (read_security_level >= 0 AND read_security_level <= 255),
-            post_security_level INT NOT NULL DEFAULT 10 CHECK (post_security_level >= 0 AND post_security_level <= 255),
-            moderated BOOL NOT NULL DEFAULT FALSE,
-            enabled BOOL NOT NULL DEFAULT TRUE,
-            CHECK (kind = 'local' OR kind = 'echomail' OR kind = 'netmail')
-        );
-
-        CREATE TABLE messages_v3 (
-            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
-            area_id UUID NOT NULL REFERENCES message_areas_v3(id) ON DELETE CASCADE,
-            author_user_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
-            to_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-            subject TEXT NOT NULL CHECK (LENGTH(TRIM(subject)) > 0),
-            body TEXT NOT NULL,
-            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            reply_to_id UUID REFERENCES messages_v3(id) ON DELETE SET NULL,
-            network_message_id TEXT,
-            visibility TEXT NOT NULL DEFAULT 'normal'
-                CHECK (visibility = 'normal' OR visibility = 'deleted' OR visibility = 'hidden')
-        );
-
-        INSERT INTO message_areas_v3 (
-            id, key, name, description, kind, network_id,
-            read_security_level, post_security_level, moderated, enabled
-        )
-        SELECT id, key, name, description, kind, network_id, read_security_level,
-               post_security_level, moderated, TRUE
-        FROM oxidebbs_schema2_message_areas;
-
-        INSERT INTO messages_v3 (
-            id, area_id, author_user_id, to_user_id, subject, body, created_at,
-            reply_to_id, network_message_id, visibility
-        )
-        SELECT id, area_id, author_user_id, to_user_id, subject, body, created_at,
-               NULL, network_message_id, visibility
-        FROM oxidebbs_schema2_messages;
-
-        UPDATE messages_v3
-        SET reply_to_id = (
-            SELECT oxidebbs_schema2_messages.reply_to_id
-            FROM oxidebbs_schema2_messages
-            WHERE oxidebbs_schema2_messages.id = messages_v3.id
-        );
+        "ALTER TABLE messages RENAME TO oxidebbs_schema4_messages;
 
         DROP INDEX IF EXISTS idx_messages_area_created_at;
         DROP INDEX IF EXISTS idx_messages_author_user_id;
         DROP INDEX IF EXISTS idx_messages_to_user_id;
 
-        ALTER TABLE message_areas_v3 RENAME TO message_areas;
-        ALTER TABLE messages_v3 RENAME TO messages;
+        CREATE TABLE messages_v5 (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            area_id UUID NOT NULL REFERENCES message_areas(id) ON DELETE CASCADE,
+            author_user_id UUID REFERENCES users(id) ON DELETE RESTRICT,
+            to_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+            subject TEXT NOT NULL CHECK (LENGTH(TRIM(subject)) > 0),
+            body TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            reply_to_id UUID REFERENCES messages_v5(id) ON DELETE SET NULL,
+            network_message_id TEXT,
+            author_kind TEXT NOT NULL DEFAULT 'local'
+                CHECK (author_kind = 'local' OR author_kind = 'network' OR author_kind = 'system'),
+            author_display_name TEXT NOT NULL DEFAULT '',
+            author_network_address TEXT,
+            visibility TEXT NOT NULL DEFAULT 'normal'
+                CHECK (visibility = 'normal' OR visibility = 'deleted' OR visibility = 'hidden')
+        );
+
+        INSERT INTO messages_v5 (
+            id, area_id, author_user_id, to_user_id, subject, body, created_at,
+            network_message_id, author_kind, author_display_name, author_network_address, visibility
+        )
+        SELECT
+            id,
+            area_id,
+            author_user_id,
+            to_user_id,
+            subject,
+            body,
+            created_at,
+            network_message_id,
+            'local',
+            COALESCE((SELECT alias FROM users WHERE users.id = oxidebbs_schema4_messages.author_user_id), ''),
+            NULL,
+            visibility
+        FROM oxidebbs_schema4_messages;
+
+        UPDATE messages_v5
+        SET reply_to_id = (
+            SELECT oxidebbs_schema4_messages.reply_to_id
+            FROM oxidebbs_schema4_messages
+            WHERE oxidebbs_schema4_messages.id = messages_v5.id
+        );
+
+        ALTER TABLE messages_v5 RENAME TO messages;
 
         CREATE INDEX IF NOT EXISTS idx_messages_area_created_at ON messages (area_id, created_at);
         CREATE INDEX IF NOT EXISTS idx_messages_author_user_id ON messages (author_user_id);
+        CREATE INDEX IF NOT EXISTS idx_messages_author_kind ON messages (author_kind);
         CREATE INDEX IF NOT EXISTS idx_messages_to_user_id ON messages (to_user_id);",
+    )?;
+
+    Ok(())
+}
+
+fn create_network_tables(db: &Db) -> decentdb::Result<()> {
+    db.execute_batch(
+        "CREATE TABLE IF NOT EXISTS network_profiles (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            key TEXT NOT NULL UNIQUE CHECK (LENGTH(TRIM(key)) > 0),
+            name TEXT NOT NULL CHECK (LENGTH(TRIM(name)) > 0),
+            adapter TEXT NOT NULL DEFAULT 'legacy-ftn'
+                CHECK (adapter = 'legacy-ftn' OR adapter = 'oxidenet'),
+            local_zone INT NOT NULL CHECK (local_zone > 0),
+            local_net INT NOT NULL CHECK (local_net > 0),
+            local_node INT NOT NULL CHECK (local_node > 0),
+            local_point INT NOT NULL DEFAULT 0 CHECK (local_point >= 0),
+            enabled BOOL NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS network_links (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            key TEXT NOT NULL UNIQUE CHECK (LENGTH(TRIM(key)) > 0),
+            network_id UUID NOT NULL REFERENCES network_profiles(id) ON DELETE CASCADE,
+            address TEXT NOT NULL CHECK (LENGTH(TRIM(address)) > 0),
+            host TEXT NOT NULL CHECK (LENGTH(TRIM(host)) > 0),
+            binkp_port INT NOT NULL DEFAULT 24554 CHECK (binkp_port > 0 AND binkp_port <= 65535),
+            password TEXT NOT NULL,
+            poll_schedule_minutes INT NOT NULL DEFAULT 60 CHECK (poll_schedule_minutes > 0),
+            compression TEXT NOT NULL DEFAULT 'zip'
+                CHECK (compression = 'none' OR compression = 'zip' OR compression = 'arj'),
+            transport_security TEXT NOT NULL DEFAULT 'tls_required'
+                CHECK (transport_security = 'tls_required' OR transport_security = 'tls_opportunistic' OR transport_security = 'plaintext_legacy'),
+            enabled BOOL NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CHECK (network_id IS NOT NULL)
+        );
+
+        CREATE TABLE IF NOT EXISTS network_areas (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            network_id UUID NOT NULL REFERENCES network_profiles(id) ON DELETE CASCADE,
+            area_tag TEXT NOT NULL,
+            local_area_id UUID NOT NULL REFERENCES message_areas(id) ON DELETE CASCADE,
+            description TEXT NOT NULL DEFAULT '',
+            read_only BOOL NOT NULL DEFAULT FALSE,
+            subscribed BOOL NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CHECK (LENGTH(TRIM(area_tag)) > 0),
+            UNIQUE (network_id, area_tag),
+            UNIQUE (network_id, local_area_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS network_packets (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            network_id UUID NOT NULL REFERENCES network_profiles(id) ON DELETE CASCADE,
+            direction TEXT NOT NULL
+                CHECK (direction = 'inbound' OR direction = 'outbound'),
+            link_id UUID REFERENCES network_links(id) ON DELETE SET NULL,
+            filename TEXT NOT NULL CHECK (LENGTH(TRIM(filename)) > 0),
+            sha256 TEXT NOT NULL CHECK (LENGTH(TRIM(sha256)) > 0),
+            size_bytes INT NOT NULL DEFAULT 0 CHECK (size_bytes >= 0),
+            status TEXT NOT NULL DEFAULT 'pending'
+                CHECK (status = 'pending' OR status = 'processing' OR status = 'processed' OR status = 'quarantined' OR status = 'failed'),
+            error_message TEXT,
+            received_at TIMESTAMPTZ,
+            processed_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS network_messages (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            network_id UUID NOT NULL REFERENCES network_profiles(id) ON DELETE CASCADE,
+            local_message_id UUID REFERENCES messages(id) ON DELETE SET NULL,
+            message_type TEXT NOT NULL DEFAULT 'echomail'
+                CHECK (message_type = 'echomail' OR message_type = 'netmail' OR message_type = 'local'),
+            area_tag TEXT,
+            origin_address TEXT NOT NULL,
+            destination_address TEXT,
+            from_name TEXT NOT NULL CHECK (LENGTH(TRIM(from_name)) > 0),
+            to_name TEXT,
+            subject TEXT NOT NULL CHECK (LENGTH(TRIM(subject)) > 0),
+            raw_text BLOB NOT NULL,
+            display_body TEXT NOT NULL DEFAULT '',
+            msgid TEXT,
+            replyid TEXT,
+            created_at TIMESTAMPTZ NOT NULL,
+            imported_at TIMESTAMPTZ,
+            exported_at TIMESTAMPTZ,
+            duplicate_hash TEXT,
+            packet_id UUID REFERENCES network_packets(id) ON DELETE SET NULL,
+            status TEXT NOT NULL DEFAULT 'imported'
+                CHECK (status = 'imported' OR status = 'exported' OR status = 'quarantined' OR status = 'duplicate'),
+            CHECK (LENGTH(TRIM(origin_address)) > 0)
+        );
+
+        CREATE TABLE IF NOT EXISTS network_seen_by (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            message_id UUID NOT NULL REFERENCES network_messages(id) ON DELETE CASCADE,
+            network_id UUID NOT NULL REFERENCES network_profiles(id) ON DELETE CASCADE,
+            zone INT NOT NULL CHECK (zone > 0),
+            net INT NOT NULL CHECK (net > 0),
+            node INT NOT NULL CHECK (node > 0)
+        );
+
+        CREATE TABLE IF NOT EXISTS network_path (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            message_id UUID NOT NULL REFERENCES network_messages(id) ON DELETE CASCADE,
+            network_id UUID NOT NULL REFERENCES network_profiles(id) ON DELETE CASCADE,
+            sequence INT NOT NULL CHECK (sequence >= 0),
+            zone INT NOT NULL CHECK (zone > 0),
+            net INT NOT NULL CHECK (net > 0),
+            node INT NOT NULL CHECK (node > 0)
+        );
+
+        CREATE TABLE IF NOT EXISTS network_duplicate_log (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            network_id UUID NOT NULL REFERENCES network_profiles(id) ON DELETE CASCADE,
+            duplicate_hash TEXT NOT NULL,
+            msgid TEXT,
+            area_tag TEXT,
+            origin_address TEXT NOT NULL,
+            detected_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            action TEXT NOT NULL DEFAULT 'rejected'
+                CHECK (action = 'rejected' OR action = 'quarantined' OR action = 'replaced'),
+            CHECK (LENGTH(TRIM(duplicate_hash)) > 0)
+        );
+
+        CREATE TABLE IF NOT EXISTS network_poll_log (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            link_id UUID NOT NULL REFERENCES network_links(id) ON DELETE CASCADE,
+            started_at TIMESTAMPTZ NOT NULL,
+            ended_at TIMESTAMPTZ,
+            direction TEXT NOT NULL
+                CHECK (direction = 'inbound' OR direction = 'outbound' OR direction = 'bidirectional'),
+            status TEXT NOT NULL DEFAULT 'started'
+                CHECK (status = 'started' OR status = 'success' OR status = 'failed' OR status = 'timeout'),
+            bytes_in INT NOT NULL DEFAULT 0 CHECK (bytes_in >= 0),
+            bytes_out INT NOT NULL DEFAULT 0 CHECK (bytes_out >= 0),
+            packets_in INT NOT NULL DEFAULT 0 CHECK (packets_in >= 0),
+            packets_out INT NOT NULL DEFAULT 0 CHECK (packets_out >= 0),
+            error_message TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS network_area_subscriptions (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            area_id UUID NOT NULL REFERENCES network_areas(id) ON DELETE CASCADE,
+            link_id UUID NOT NULL REFERENCES network_links(id) ON DELETE CASCADE,
+            subscribed BOOL NOT NULL DEFAULT TRUE,
+            subscribed_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            unsubscribed_at TIMESTAMPTZ,
+            source TEXT NOT NULL DEFAULT 'manual'
+                CHECK (source = 'manual' OR source = 'areafix' OR source = 'default'),
+            UNIQUE (area_id, link_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS network_nodelist (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            network_id UUID NOT NULL REFERENCES network_profiles(id) ON DELETE CASCADE,
+            zone INT NOT NULL CHECK (zone > 0),
+            net INT NOT NULL CHECK (net > 0),
+            node INT NOT NULL CHECK (node > 0),
+            point INT NOT NULL DEFAULT 0 CHECK (point >= 0),
+            parsed_name TEXT,
+            raw_entry TEXT NOT NULL CHECK (LENGTH(TRIM(raw_entry)) > 0),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (network_id, zone, net, node, point)
+        );",
+    )?;
+
+    Ok(())
+}
+
+fn rebuild_doors_for_security_level(db: &Db, source_schema: i64) -> decentdb::Result<()> {
+    let archive_doors = format!("oxidebbs_schema{}_doors", source_schema);
+    let archive_door_runs = format!("oxidebbs_schema{}_door_runs", source_schema);
+    db.execute_batch(&format!(
+        "ALTER TABLE doors RENAME TO {archive_doors};
+         ALTER TABLE door_runs RENAME TO {archive_door_runs};
+
+         DROP INDEX IF EXISTS idx_door_runs_door_id;
+         DROP INDEX IF EXISTS idx_door_runs_user_id;
+         DROP INDEX IF EXISTS idx_door_runs_started_at;
+
+         CREATE TABLE doors_new (
+             id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+             key TEXT NOT NULL UNIQUE CHECK (LENGTH(TRIM(key)) > 0),
+             name TEXT NOT NULL CHECK (LENGTH(TRIM(name)) > 0),
+             runner TEXT NOT NULL CHECK (LENGTH(TRIM(runner)) > 0),
+             working_dir TEXT NOT NULL CHECK (LENGTH(TRIM(working_dir)) > 0),
+             command TEXT NOT NULL CHECK (LENGTH(TRIM(command)) > 0),
+             drop_file TEXT NOT NULL CHECK (LENGTH(TRIM(drop_file)) > 0),
+             exclusive BOOL NOT NULL DEFAULT FALSE,
+             time_limit_minutes INT NOT NULL DEFAULT 30 CHECK (time_limit_minutes > 0),
+             enabled BOOL NOT NULL DEFAULT TRUE,
+             min_security_level INT NOT NULL DEFAULT 0 CHECK (min_security_level >= 0 AND min_security_level <= 255)
+         );
+
+         INSERT INTO doors_new (id, key, name, runner, working_dir, command, drop_file, exclusive, time_limit_minutes, enabled, min_security_level)
+         SELECT id, key, name, runner, working_dir, command, drop_file, exclusive, time_limit_minutes, enabled, 0
+         FROM {archive_doors};
+
+         ALTER TABLE doors_new RENAME TO doors;
+
+         CREATE TABLE door_runs_new (
+             id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+             door_id UUID NOT NULL REFERENCES doors(id) ON DELETE RESTRICT,
+             user_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+             node_number INT NOT NULL CHECK (node_number > 0),
+             started_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+             ended_at TIMESTAMPTZ,
+             exit_code INT,
+             timed_out BOOL NOT NULL DEFAULT FALSE,
+             disconnect_forced BOOL NOT NULL DEFAULT FALSE,
+             bytes_in INT NOT NULL DEFAULT 0 CHECK (bytes_in >= 0),
+             bytes_out INT NOT NULL DEFAULT 0 CHECK (bytes_out >= 0)
+         );
+
+         INSERT INTO door_runs_new (id, door_id, user_id, node_number, started_at, ended_at, exit_code, timed_out, disconnect_forced, bytes_in, bytes_out)
+         SELECT id, door_id, user_id, node_number, started_at, ended_at, exit_code, timed_out, disconnect_forced, bytes_in, bytes_out
+         FROM {archive_door_runs};
+
+         ALTER TABLE door_runs_new RENAME TO door_runs;
+
+         CREATE INDEX IF NOT EXISTS idx_door_runs_door_id ON door_runs (door_id);
+         CREATE INDEX IF NOT EXISTS idx_door_runs_user_id ON door_runs (user_id);
+         CREATE INDEX IF NOT EXISTS idx_door_runs_started_at ON door_runs (started_at);",
+    ))?;
+    Ok(())
+}
+
+fn create_file_tables(db: &Db) -> decentdb::Result<()> {
+    db.execute_batch(
+        "CREATE TABLE IF NOT EXISTS file_areas (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            key TEXT NOT NULL UNIQUE CHECK (LENGTH(TRIM(key)) > 0),
+            name TEXT NOT NULL CHECK (LENGTH(TRIM(name)) > 0),
+            description TEXT NOT NULL DEFAULT '',
+            root_path TEXT NOT NULL CHECK (LENGTH(TRIM(root_path)) > 0),
+            read_security_level INT NOT NULL DEFAULT 0 CHECK (read_security_level >= 0 AND read_security_level <= 255),
+            download_security_level INT NOT NULL DEFAULT 10 CHECK (download_security_level >= 0 AND download_security_level <= 255),
+            upload_security_level INT NOT NULL DEFAULT 0 CHECK (upload_security_level >= 0 AND upload_security_level <= 255),
+            max_upload_bytes INT CHECK (max_upload_bytes IS NULL OR max_upload_bytes >= 0),
+            enabled BOOL NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS file_entries (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            area_id UUID NOT NULL REFERENCES file_areas(id) ON DELETE CASCADE,
+            storage_name TEXT NOT NULL CHECK (LENGTH(TRIM(storage_name)) > 0),
+            display_name TEXT NOT NULL CHECK (LENGTH(TRIM(display_name)) > 0),
+            original_name TEXT,
+            size_bytes INT NOT NULL DEFAULT 0 CHECK (size_bytes >= 0),
+            content_crc32 TEXT,
+            description TEXT NOT NULL DEFAULT '',
+            uploader_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+            download_count INT NOT NULL DEFAULT 0 CHECK (download_count >= 0),
+            approved BOOL NOT NULL DEFAULT FALSE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS file_transfers (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            node_number INT NOT NULL CHECK (node_number > 0),
+            user_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+            area_id UUID REFERENCES file_areas(id) ON DELETE SET NULL,
+            file_entry_id UUID REFERENCES file_entries(id) ON DELETE SET NULL,
+            direction TEXT NOT NULL CHECK (direction = 'download' OR direction = 'upload'),
+            protocol TEXT NOT NULL CHECK (protocol = 'zmodem' OR protocol = 'xmodem_crc'),
+            requested_name TEXT,
+            storage_name TEXT,
+            declared_size_bytes INT CHECK (declared_size_bytes IS NULL OR declared_size_bytes >= 0),
+            transferred_payload_bytes INT NOT NULL DEFAULT 0 CHECK (transferred_payload_bytes >= 0),
+            committed_size_bytes INT CHECK (committed_size_bytes IS NULL OR committed_size_bytes >= 0),
+            started_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            ended_at TIMESTAMPTZ,
+            duration_ms INT CHECK (duration_ms IS NULL OR duration_ms >= 0),
+            outcome TEXT NOT NULL DEFAULT 'started' CHECK (outcome = 'started' OR outcome = 'success' OR outcome = 'cancelled' OR outcome = 'failed'),
+            error_code TEXT,
+            error_message TEXT,
+            retry_count INT NOT NULL DEFAULT 0 CHECK (retry_count >= 0)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_file_entries_area_id ON file_entries (area_id);
+        CREATE INDEX IF NOT EXISTS idx_file_entries_approved ON file_entries (approved);
+        CREATE INDEX IF NOT EXISTS idx_file_transfers_user_id ON file_transfers (user_id);
+        CREATE INDEX IF NOT EXISTS idx_file_transfers_started_at ON file_transfers (started_at);",
+    )?;
+    Ok(())
+}
+
+fn create_oxidenet_registry_tables(db: &Db) -> decentdb::Result<()> {
+    db.execute_batch(
+        "CREATE TABLE IF NOT EXISTS network_applications (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            submitted_at TIMESTAMPTZ,
+            reviewed_at TIMESTAMPTZ,
+            status TEXT NOT NULL DEFAULT 'submitted'
+                CHECK (status = 'draft' OR status = 'submitted' OR status = 'needs-info' OR status = 'approved' OR status = 'config-generated' OR status = 'first-poll-pending' OR status = 'active' OR status = 'probation' OR status = 'suspended' OR status = 'retired' OR status = 'rejected' OR status = 'withdrawn' OR status = 'needs-review-hold'),
+            applicant_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+            board_name TEXT NOT NULL CHECK (LENGTH(TRIM(board_name)) > 0),
+            sysop_alias TEXT NOT NULL CHECK (LENGTH(TRIM(sysop_alias)) > 0),
+            contact_email TEXT NOT NULL CHECK (LENGTH(TRIM(contact_email)) > 0),
+            host TEXT NOT NULL CHECK (LENGTH(TRIM(host)) > 0),
+            binkp_port INT NOT NULL DEFAULT 24554 CHECK (binkp_port > 0 AND binkp_port <= 65535),
+            telnet_host TEXT,
+            telnet_port INT CHECK (telnet_port IS NULL OR (telnet_port > 0 AND telnet_port <= 65535)),
+            software TEXT NOT NULL DEFAULT 'OxideBBS' CHECK (LENGTH(TRIM(software)) > 0),
+            software_version TEXT NOT NULL DEFAULT '',
+            timezone TEXT NOT NULL DEFAULT 'UTC' CHECK (LENGTH(TRIM(timezone)) > 0),
+            region TEXT NOT NULL DEFAULT '',
+            description TEXT NOT NULL DEFAULT '',
+            reason TEXT NOT NULL DEFAULT '',
+            policy_version TEXT NOT NULL DEFAULT '',
+            policy_accepted_at TIMESTAMPTZ,
+            admin_notes TEXT NOT NULL DEFAULT '',
+            reviewed_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+            assigned_address TEXT UNIQUE
+        );
+
+        CREATE TABLE IF NOT EXISTS network_nodes (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            application_id UUID REFERENCES network_applications(id) ON DELETE SET NULL,
+            network_key TEXT NOT NULL DEFAULT 'oxidenet' CHECK (LENGTH(TRIM(network_key)) > 0),
+            address TEXT NOT NULL UNIQUE CHECK (LENGTH(TRIM(address)) > 0),
+            zone INT NOT NULL CHECK (zone > 0),
+            net INT NOT NULL CHECK (net > 0),
+            node INT NOT NULL CHECK (node > 0),
+            point INT NOT NULL DEFAULT 0 CHECK (point >= 0),
+            hub_address TEXT NOT NULL CHECK (LENGTH(TRIM(hub_address)) > 0),
+            board_name TEXT NOT NULL CHECK (LENGTH(TRIM(board_name)) > 0),
+            sysop_alias TEXT NOT NULL CHECK (LENGTH(TRIM(sysop_alias)) > 0),
+            contact_email TEXT NOT NULL CHECK (LENGTH(TRIM(contact_email)) > 0),
+            host TEXT NOT NULL CHECK (LENGTH(TRIM(host)) > 0),
+            binkp_port INT NOT NULL DEFAULT 24554 CHECK (binkp_port > 0 AND binkp_port <= 65535),
+            telnet_host TEXT,
+            telnet_port INT CHECK (telnet_port IS NULL OR (telnet_port > 0 AND telnet_port <= 65535)),
+            software TEXT NOT NULL DEFAULT 'OxideBBS' CHECK (LENGTH(TRIM(software)) > 0),
+            software_version TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'first-poll-pending'
+                CHECK (status = 'first-poll-pending' OR status = 'config-generated' OR status = 'active' OR status = 'probation' OR status = 'suspended' OR status = 'retired'),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            activated_at TIMESTAMPTZ,
+            suspended_at TIMESTAMPTZ,
+            retired_at TIMESTAMPTZ,
+            last_poll_at TIMESTAMPTZ,
+            last_successful_poll_at TIMESTAMPTZ,
+            flags TEXT NOT NULL DEFAULT ''
+        );
+
+        CREATE TABLE IF NOT EXISTS network_credentials (
+            id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+            node_id UUID NOT NULL REFERENCES network_nodes(id) ON DELETE CASCADE,
+            credential_kind TEXT NOT NULL
+                CHECK (credential_kind = 'binkp_session' OR credential_kind = 'invite_token'),
+            secret_hash TEXT NOT NULL CHECK (LENGTH(TRIM(secret_hash)) > 0),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            rotated_at TIMESTAMPTZ,
+            expires_at TIMESTAMPTZ,
+            status TEXT NOT NULL DEFAULT 'active'
+                CHECK (status = 'active' OR status = 'revoked' OR status = 'expired')
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_network_applications_status ON network_applications (status);
+        CREATE INDEX IF NOT EXISTS idx_network_applications_assigned_address ON network_applications (assigned_address);
+        CREATE INDEX IF NOT EXISTS idx_network_nodes_network_key_status ON network_nodes (network_key, status);
+        CREATE INDEX IF NOT EXISTS idx_network_nodes_address ON network_nodes (address);
+        CREATE INDEX IF NOT EXISTS idx_network_credentials_node_status ON network_credentials (node_id, status);",
     )?;
     Ok(())
 }
@@ -573,6 +1502,307 @@ mod tests {
     }
 
     #[test]
+    fn migration_4_to_5_adds_author_fields_network_file_and_oxidenet_tables() {
+        let db = Db::open_or_create(":memory:", DbConfig::default()).expect("open DecentDB");
+
+        seed_schema_2_database(&db);
+        migrate_2_to_3(&db).expect("apply migration 2->3");
+        migrate_3_to_4(&db).expect("apply migration 3->4");
+
+        assert_eq!(schema::schema_version(&db).expect("schema before 4->5"), 4);
+
+        db.execute_batch(
+            "INSERT INTO auth_attempts (
+                scope, scope_key, failed_count, first_failed_at, last_failed_at, locked_until
+            ) VALUES (
+                'alias', 'testlock', 1, '2026-01-01T00:00:00.000000Z',
+                '2026-01-01T00:01:00.000000Z', '2026-01-01T00:15:00.000000Z'
+            );
+
+            INSERT INTO sessions (
+                id, node_number, user_id, transport, remote_address, remote_port,
+                started_at
+            ) VALUES (
+                UUID_PARSE('00000000-0000-4000-8000-000000000301'), 1,
+                UUID_PARSE('00000000-0000-4000-8000-000000000011'), 'telnet',
+                '127.0.0.1:2323', 2323, '2026-01-01T00:02:00.000000Z'
+            );
+
+            INSERT INTO doors (
+                id, key, name, runner, working_dir, command, drop_file, exclusive,
+                time_limit_minutes, enabled
+            ) VALUES (
+                UUID_PARSE('00000000-0000-4000-8000-000000000401'), 'test-door',
+                'Test Door', 'dosemu', './doors/test', 'TEST.EXE', 'DORINFO1.DEF',
+                FALSE, 5, TRUE
+            );
+
+            INSERT INTO door_runs (
+                id, door_id, user_id, node_number, started_at, ended_at, exit_code,
+                timed_out, disconnect_forced, bytes_in, bytes_out
+            ) VALUES (
+                UUID_PARSE('00000000-0000-4000-8000-000000000402'),
+                UUID_PARSE('00000000-0000-4000-8000-000000000401'),
+                UUID_PARSE('00000000-0000-4000-8000-000000000011'), 1,
+                '2026-01-01T00:04:00.000000Z', '2026-01-01T00:05:00.000000Z',
+                0, FALSE, FALSE, 12, 34
+            );
+
+            INSERT INTO audit_events (
+                id, created_at, event_type, user_id, node_number, details
+            ) VALUES (
+                UUID_PARSE('00000000-0000-4000-8000-000000000501'),
+                '2026-01-01T00:06:00.000000Z', 'login_success',
+                UUID_PARSE('00000000-0000-4000-8000-000000000011'), 1,
+                'preserve audit'
+            );",
+        )
+        .expect("seed schema-4 runtime rows");
+
+        migrate_4_to_5(&db).expect("apply migration 4->5");
+        assert_eq!(schema::schema_version(&db).expect("schema after 4->5"), 5);
+
+        migrate_5_to_6(&db).expect("apply migration 5->6");
+        assert_eq!(schema::schema_version(&db).expect("schema after 5->6"), 6);
+
+        migrate_6_to_7(&db).expect("apply migration 6->7");
+        assert_eq!(schema::schema_version(&db).expect("schema after 6->7"), 7);
+
+        migrate_7_to_8(&db).expect("apply migration 7->8");
+        assert_eq!(schema::schema_version(&db).expect("schema after 7->8"), 8);
+
+        migrate_8_to_9(&db).expect("apply migration 8->9");
+        assert_eq!(schema::schema_version(&db).expect("schema after 8->9"), 9);
+
+        migrate_9_to_10(&db).expect("apply migration 9->10");
+        assert_eq!(schema::schema_version(&db).expect("schema after 9->10"), 10);
+
+        assert_eq!(
+            schema::schema_version(&db).expect("schema version"),
+            SCHEMA_VERSION
+        );
+
+        let author_kind = {
+            let result = db
+                .execute(
+                    "SELECT author_kind, author_display_name FROM messages ORDER BY created_at",
+                )
+                .expect("query message author fields");
+            let row = result
+                .rows()
+                .first()
+                .and_then(|row| row.values().first())
+                .expect("author kind exists");
+            match row {
+                Value::Text(value) => value.clone(),
+                _ => String::new(),
+            }
+        };
+        assert_eq!(author_kind, "local");
+
+        let has_network_tables = db
+            .list_tables()
+            .expect("list tables")
+            .iter()
+            .any(|table| table.name == "network_profiles");
+        assert!(has_network_tables);
+
+        let has_file_tables = db
+            .list_tables()
+            .expect("list tables")
+            .iter()
+            .any(|table| table.name == "file_areas");
+        assert!(has_file_tables);
+
+        let has_oxidenet_tables = db
+            .list_tables()
+            .expect("list tables")
+            .iter()
+            .any(|table| table.name == "network_applications");
+        assert!(has_oxidenet_tables);
+
+        let has_rescan_table = db
+            .list_tables()
+            .expect("list tables")
+            .iter()
+            .any(|table| table.name == "network_rescan_queue");
+        assert!(has_rescan_table);
+
+        assert_eq!(count_rows(&db, "users"), 1);
+        assert_eq!(count_rows(&db, "auth_attempts"), 1);
+        assert_eq!(count_rows(&db, "message_areas"), 1);
+        assert_eq!(count_rows(&db, "messages"), 2);
+        assert_eq!(count_rows(&db, "sessions"), 1);
+        assert_eq!(count_rows(&db, "doors"), 1);
+        assert_eq!(count_rows(&db, "door_runs"), 1);
+        assert_eq!(count_rows(&db, "audit_events"), 1);
+
+        assert_eq!(scalar_int(&db, "SELECT min_security_level FROM doors"), 0);
+        assert_eq!(scalar_int(&db, "SELECT bytes_out FROM door_runs"), 34);
+        assert_eq!(
+            scalar_text(&db, "SELECT details FROM audit_events"),
+            "preserve audit"
+        );
+
+        db.execute(
+            "SELECT location, sysop_name, phone, speed, flags FROM network_nodelist LIMIT 0",
+        )
+        .expect("structured nodelist columns exist");
+    }
+
+    #[test]
+    fn migration_4_to_current_preserves_runtime_tables() {
+        let db = Db::open_or_create(":memory:", DbConfig::default()).expect("open DecentDB");
+
+        seed_schema_2_database(&db);
+        migrate_2_to_3(&db).expect("apply migration 2->3");
+        migrate_3_to_4(&db).expect("apply migration 3->4");
+        assert_eq!(schema::schema_version(&db).expect("schema before"), 4);
+
+        db.execute_batch(
+            "INSERT INTO auth_attempts (
+                scope, scope_key, failed_count, first_failed_at, last_failed_at, locked_until
+            ) VALUES (
+                'alias', 'alice', 2, '2026-01-01T00:00:00.000000Z',
+                '2026-01-01T00:01:00.000000Z', '2026-01-01T00:15:00.000000Z'
+            );
+
+            INSERT INTO sessions (
+                id, node_number, user_id, transport, remote_address, remote_port,
+                started_at, ended_at, disconnect_reason
+            ) VALUES (
+                UUID_PARSE('00000000-0000-4000-8000-000000000301'), 1,
+                UUID_PARSE('00000000-0000-4000-8000-000000000011'), 'telnet',
+                '127.0.0.1:2323', 2323, '2026-01-01T00:02:00.000000Z',
+                '2026-01-01T00:03:00.000000Z', 'caller_logoff'
+            );
+
+            INSERT INTO doors (
+                id, key, name, runner, working_dir, command, drop_file, exclusive,
+                time_limit_minutes, enabled
+            ) VALUES (
+                UUID_PARSE('00000000-0000-4000-8000-000000000401'), 'test-door',
+                'Test Door', 'dosemu', './doors/test', 'TEST.EXE', 'DORINFO1.DEF',
+                FALSE, 5, TRUE
+            );
+
+            INSERT INTO door_runs (
+                id, door_id, user_id, node_number, started_at, ended_at, exit_code,
+                timed_out, disconnect_forced, bytes_in, bytes_out
+            ) VALUES (
+                UUID_PARSE('00000000-0000-4000-8000-000000000402'),
+                UUID_PARSE('00000000-0000-4000-8000-000000000401'),
+                UUID_PARSE('00000000-0000-4000-8000-000000000011'), 1,
+                '2026-01-01T00:04:00.000000Z', '2026-01-01T00:05:00.000000Z',
+                0, FALSE, FALSE, 12, 34
+            );
+
+            INSERT INTO audit_events (
+                id, created_at, event_type, user_id, node_number, details
+            ) VALUES (
+                UUID_PARSE('00000000-0000-4000-8000-000000000501'),
+                '2026-01-01T00:06:00.000000Z', 'login_success',
+                UUID_PARSE('00000000-0000-4000-8000-000000000011'), 1,
+                'preserve audit'
+            );",
+        )
+        .expect("seed schema-4 runtime rows");
+
+        migrate_to_current(&db).expect("migrate schema 4 to current");
+        assert_eq!(
+            schema::schema_version(&db).expect("schema version"),
+            SCHEMA_VERSION
+        );
+
+        assert_eq!(count_rows(&db, "users"), 1);
+        assert_eq!(count_rows(&db, "auth_attempts"), 1);
+        assert_eq!(count_rows(&db, "message_areas"), 1);
+        assert_eq!(count_rows(&db, "messages"), 2);
+        assert_eq!(count_rows(&db, "sessions"), 1);
+        assert_eq!(count_rows(&db, "doors"), 1);
+        assert_eq!(count_rows(&db, "door_runs"), 1);
+        assert_eq!(count_rows(&db, "audit_events"), 1);
+
+        assert_eq!(
+            scalar_text(
+                &db,
+                "SELECT subject FROM messages WHERE id = UUID_PARSE('00000000-0000-4000-8000-000000000201')"
+            ),
+            "First"
+        );
+        assert_eq!(
+            scalar_text(&db, "SELECT remote_address FROM sessions"),
+            "127.0.0.1:2323"
+        );
+        assert_eq!(scalar_int(&db, "SELECT min_security_level FROM doors"), 0);
+        assert_eq!(scalar_int(&db, "SELECT bytes_out FROM door_runs"), 34);
+        assert_eq!(
+            scalar_text(&db, "SELECT details FROM audit_events"),
+            "preserve audit"
+        );
+    }
+
+    #[test]
+    fn migration_5_to_6_is_noop_when_doors_already_has_security_level() {
+        let db = Db::open_or_create(":memory:", DbConfig::default()).expect("open DecentDB");
+
+        seed_schema_2_database(&db);
+        migrate_2_to_3(&db).expect("apply migration 2->3");
+        migrate_3_to_4(&db).expect("apply migration 3->4");
+        migrate_4_to_5(&db).expect("apply migration 4->5");
+
+        db.execute_batch(
+            "INSERT INTO doors (
+                id, key, name, runner, working_dir, command, drop_file, exclusive,
+                time_limit_minutes, enabled, min_security_level
+            ) VALUES (
+                UUID_PARSE('00000000-0000-4000-8000-000000000401'), 'test-door',
+                'Test Door', 'dosemu', './doors/test', 'TEST.EXE', 'DORINFO1.DEF',
+                FALSE, 5, TRUE, 50
+            );",
+        )
+        .expect("seed door with security level");
+
+        migrate_5_to_6(&db).expect("apply migration 5->6");
+        assert_eq!(schema::schema_version(&db).expect("schema after 5->6"), 6);
+
+        assert_eq!(
+            scalar_int(
+                &db,
+                "SELECT min_security_level FROM doors WHERE key = 'test-door'"
+            ),
+            50
+        );
+    }
+
+    #[test]
+    fn migration_5_to_6_rebuilds_doors_when_min_security_level_missing() {
+        let db = Db::open_or_create(":memory:", DbConfig::default()).expect("open DecentDB");
+
+        init_schema_at_version_5_without_doors_rebuild(&db);
+
+        db.execute_batch(
+            "INSERT INTO doors (id, key, name, runner, working_dir, command, drop_file, exclusive, time_limit_minutes, enabled)
+             VALUES (UUID_PARSE('00000000-0000-4000-8000-000000000401'), 'test-door',
+             'Test Door', 'dosemu', './doors/test', 'TEST.EXE', 'DORINFO1.DEF',
+             FALSE, 5, TRUE);",
+        )
+        .expect("insert test door");
+
+        assert_eq!(
+            scalar_int(&db, "SELECT COUNT(*) FROM doors"),
+            1,
+            "should have one door before migration"
+        );
+
+        migrate_5_to_6(&db).expect("apply migration 5->6");
+        assert_eq!(schema::schema_version(&db).expect("schema after 5->6"), 6);
+
+        assert_eq!(scalar_int(&db, "SELECT min_security_level FROM doors"), 0);
+        assert_eq!(scalar_int(&db, "SELECT COUNT(*) FROM doors"), 1);
+    }
+
+    #[test]
     fn migration_runner_rejects_future_versions() {
         let db = Db::open_or_create(":memory:", DbConfig::default()).expect("open DecentDB");
         db.execute_batch(
@@ -661,5 +1891,87 @@ mod tests {
             })
             .count();
         assert_eq!(archive_count, 2);
+    }
+
+    fn init_schema_at_version_5_without_doors_rebuild(db: &Db) {
+        crate::schema::init_schema(db).expect("init schema");
+        assert_eq!(
+            crate::schema::schema_version(db).expect("schema version"),
+            SCHEMA_VERSION
+        );
+
+        db.execute_batch(
+            "DELETE FROM door_runs;
+             DELETE FROM door_provider_credentials;
+             DELETE FROM doors;
+
+             DROP TABLE door_provider_credentials;
+             DROP TABLE door_runs;
+             DROP TABLE doors;
+
+             CREATE TABLE doors (
+                 id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+                 key TEXT NOT NULL UNIQUE CHECK (LENGTH(TRIM(key)) > 0),
+                 name TEXT NOT NULL CHECK (LENGTH(TRIM(name)) > 0),
+                 runner TEXT NOT NULL CHECK (LENGTH(TRIM(runner)) > 0),
+                 working_dir TEXT NOT NULL CHECK (LENGTH(TRIM(working_dir)) > 0),
+                 command TEXT NOT NULL CHECK (LENGTH(TRIM(command)) > 0),
+                 drop_file TEXT NOT NULL CHECK (LENGTH(TRIM(drop_file)) > 0),
+                 exclusive BOOL NOT NULL DEFAULT FALSE,
+                 time_limit_minutes INT NOT NULL DEFAULT 30 CHECK (time_limit_minutes > 0),
+                 enabled BOOL NOT NULL DEFAULT TRUE
+             );
+
+             CREATE TABLE door_runs (
+                 id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+                 door_id UUID NOT NULL REFERENCES doors(id) ON DELETE RESTRICT,
+                 user_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+                 node_number INT NOT NULL CHECK (node_number > 0),
+                 started_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                 ended_at TIMESTAMPTZ,
+                 exit_code INT,
+                 timed_out BOOL NOT NULL DEFAULT FALSE,
+                 disconnect_forced BOOL NOT NULL DEFAULT FALSE,
+                 bytes_in INT NOT NULL DEFAULT 0 CHECK (bytes_in >= 0),
+                 bytes_out INT NOT NULL DEFAULT 0 CHECK (bytes_out >= 0)
+             );
+
+             CREATE INDEX IF NOT EXISTS idx_door_runs_door_id ON door_runs (door_id);
+             CREATE INDEX IF NOT EXISTS idx_door_runs_user_id ON door_runs (user_id);
+             CREATE INDEX IF NOT EXISTS idx_door_runs_started_at ON door_runs (started_at);
+
+             UPDATE system_config SET value = '5' WHERE key = 'schema_version';",
+        )
+        .expect("rebuild doors without min_security_level");
+    }
+
+    fn count_rows(db: &Db, table: &str) -> i64 {
+        scalar_int(db, &format!("SELECT COUNT(*) FROM {table}"))
+    }
+
+    fn scalar_int(db: &Db, query: &str) -> i64 {
+        db.execute(query)
+            .expect("execute scalar int query")
+            .rows()
+            .first()
+            .and_then(|row| row.values().first())
+            .and_then(|value| match value {
+                Value::Int64(value) => Some(*value),
+                _ => None,
+            })
+            .expect("int scalar result")
+    }
+
+    fn scalar_text(db: &Db, query: &str) -> String {
+        db.execute(query)
+            .expect("execute scalar text query")
+            .rows()
+            .first()
+            .and_then(|row| row.values().first())
+            .and_then(|value| match value {
+                Value::Text(value) => Some(value.clone()),
+                _ => None,
+            })
+            .expect("text scalar result")
     }
 }

@@ -1,0 +1,5 @@
+Doors, messages, and sysop tools are
+available from the main menu.
+
+ANSI art has a plain fallback path.
+

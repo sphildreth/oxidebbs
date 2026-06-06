@@ -7,6 +7,7 @@ use crate::screens::common::UiAction;
 use crate::theme::Theme;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 pub struct AnsiScreen {
     pub theme: Theme,
@@ -54,6 +55,42 @@ impl AnsiScreen {
             UiEvent::Key(key) if key.code == KeyCode::Esc => {
                 return UiAction::Navigate(ScreenId::Dashboard);
             }
+            UiEvent::Key(key) if key.code == KeyCode::Char('r') => {
+                self.status = match self.entries.first() {
+                    Some(entry) => {
+                        let path = self.screens_path.join(&entry.path);
+                        match fs::read(&path) {
+                            Ok(bytes) => format!(
+                                "Raw {}: {}",
+                                entry.path,
+                                bytes
+                                    .iter()
+                                    .take(16)
+                                    .map(|byte| format!("{byte:02X}"))
+                                    .collect::<Vec<_>>()
+                                    .join(" ")
+                            ),
+                            Err(error) => format!("Raw read failed: {error}"),
+                        }
+                    }
+                    None => "Raw read failed: no ANSI asset selected".to_string(),
+                };
+            }
+            UiEvent::Key(key) if key.code == KeyCode::Char('i') && !_readonly => {
+                self.status = match install_default_screens(&self.screens_path) {
+                    Ok(count) => {
+                        self.refresh();
+                        format!("Installed {count} default screen(s)")
+                    }
+                    Err(error) => format!("Install failed: {error}"),
+                };
+            }
+            UiEvent::Key(key) if key.code == KeyCode::Char('e') && !_readonly => {
+                self.status = match self.entries.first() {
+                    Some(entry) => launch_editor(&self.screens_path.join(&entry.path)),
+                    None => "Editor launch failed: no ANSI asset selected".to_string(),
+                };
+            }
             _ => {}
         }
         UiAction::None
@@ -96,6 +133,15 @@ impl AnsiScreen {
             ])
         }));
 
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled("Actions: ", self.theme.label_style()),
+            Span::styled(
+                "R Raw Bytes | I Install Defaults | E Editor | Esc Back",
+                self.theme.muted_style(),
+            ),
+        ]));
+
         Paragraph::new(lines)
             .style(self.theme.normal_style())
             .block(
@@ -106,6 +152,47 @@ impl AnsiScreen {
                     .title_style(self.theme.title_style()),
             )
             .render(area, frame.buffer_mut());
+    }
+}
+
+fn install_default_screens(root: &Path) -> std::io::Result<usize> {
+    fs::create_dir_all(root)?;
+    let defaults = [
+        (
+            "welcome.ans",
+            "\x1b[2J\x1b[1;36mWelcome to OxideBBS\x1b[0m\r\n",
+        ),
+        (
+            "goodbye.ans",
+            "\x1b[2J\x1b[1;33mThanks for calling!\x1b[0m\r\n",
+        ),
+        (
+            "apply-oxidenet.ans",
+            "\x1b[1;32mOxideNet Application\x1b[0m\r\n",
+        ),
+    ];
+    let mut installed = 0;
+    for (name, contents) in defaults {
+        let path = root.join(name);
+        if !path.exists() {
+            fs::write(path, contents.as_bytes())?;
+            installed += 1;
+        }
+    }
+    Ok(installed)
+}
+
+fn launch_editor(path: &Path) -> String {
+    let editor = std::env::var("EDITOR").unwrap_or_default();
+    if editor.trim().is_empty() {
+        return format!(
+            "Editor launch skipped for {}: EDITOR is not set",
+            path.display()
+        );
+    }
+    match Command::new(editor).arg(path).status() {
+        Ok(status) => format!("Editor exited with {status} for {}", path.display()),
+        Err(error) => format!("Editor launch failed: {error}"),
     }
 }
 

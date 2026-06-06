@@ -43,16 +43,18 @@ OxideBBS ships an owned DOS test fixture, not third-party game content:
 
 ## Drop files
 
-Support early:
+Current drop-file renderers:
 
 - `DOOR.SYS`
 - `DORINFO1.DEF`
-
-Support later:
-
 - `CHAIN.TXT`
 - `DOORFILE.SR`
-- Wildcat, PCBoard, and other variants as needed
+- `PCBOARD.SYS`
+- `CALLINFO.BBS`
+
+Every current renderer has exact CRLF byte-output tests in `oxidebbs-door`.
+Additional Wildcat and vendor-specific variants remain future compatibility
+work.
 
 For DOSEMU2 execution:
 
@@ -161,3 +163,29 @@ transport.
 The DOSEMU2 COM1 bridge is host-owned byte transport, not a Rust FOSSIL TSR or
 DOS interrupt driver replacement. DOSEMU2 remains responsible for presenting COM1
 UART semantics to DOS door programs.
+
+## Remote providers
+
+`oxidebbs-door` exposes `RemoteDoorProvider`, `ProviderRegistry`, and BBSLink
+and DoorParty-style adapters. The adapters support local dry-run validation and
+TCP/telnet live connector sessions. Integration tests use localhost fake
+providers so release validation never contacts external BBSLink or DoorParty
+services.
+
+Remote provider secrets use `RemoteDoorSecret`, which redacts by default through
+`Debug`, `Display`, and the provider redacted-config view. Raw access is limited
+to the explicit secret accessor used by connector code.
+
+Door records use the existing runtime fields for remote providers:
+
+- `runner = "remote:bbslink"` or `runner = "remote:doorparty"`
+- `working_dir` stores the provider endpoint, such as `telnet://host:port`
+- `command` stores the provider-side game key or command
+
+Provider credentials are stored separately in `door_provider_credentials` as
+secret references. CLI and sysop-service mutations accept reference values such
+as `env:BBSLINK_AUTH_CODE`, `file:/run/secrets/bbslink`, or
+`vault://doors/lord/bbslink`; raw provider secrets are rejected at the CLI
+boundary. CLI output, TUI detail display, audit details, and JSON exports redact
+credential references as `[redacted]`. Importing a redacted JSON export does not
+recreate a fake secret reference.

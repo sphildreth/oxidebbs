@@ -80,6 +80,11 @@ const DEFAULT_ASSETS: &[DefaultAsset] = &[
         bytes: include_bytes!("../../../assets/ansi/welcome.asc"),
     },
     DefaultAsset {
+        root: DefaultAssetRoot::Ansi,
+        path: "welcome-40.asc",
+        bytes: include_bytes!("../../../assets/ansi/welcome-40.asc"),
+    },
+    DefaultAsset {
         root: DefaultAssetRoot::Screens,
         path: "info/screen1.ans",
         bytes: include_bytes!("../../../assets/screens/info/screen1.ans"),
@@ -91,8 +96,18 @@ const DEFAULT_ASSETS: &[DefaultAsset] = &[
     },
     DefaultAsset {
         root: DefaultAssetRoot::Screens,
+        path: "info/screen1-40.asc",
+        bytes: include_bytes!("../../../assets/screens/info/screen1-40.asc"),
+    },
+    DefaultAsset {
+        root: DefaultAssetRoot::Screens,
         path: "info/screen1.txt",
         bytes: include_bytes!("../../../assets/screens/info/screen1.txt"),
+    },
+    DefaultAsset {
+        root: DefaultAssetRoot::Screens,
+        path: "info/screen1-40.txt",
+        bytes: include_bytes!("../../../assets/screens/info/screen1-40.txt"),
     },
     DefaultAsset {
         root: DefaultAssetRoot::Screens,
@@ -106,8 +121,18 @@ const DEFAULT_ASSETS: &[DefaultAsset] = &[
     },
     DefaultAsset {
         root: DefaultAssetRoot::Screens,
+        path: "info/screen2-40.asc",
+        bytes: include_bytes!("../../../assets/screens/info/screen2-40.asc"),
+    },
+    DefaultAsset {
+        root: DefaultAssetRoot::Screens,
         path: "info/screen2.txt",
         bytes: include_bytes!("../../../assets/screens/info/screen2.txt"),
+    },
+    DefaultAsset {
+        root: DefaultAssetRoot::Screens,
+        path: "info/screen2-40.txt",
+        bytes: include_bytes!("../../../assets/screens/info/screen2-40.txt"),
     },
     DefaultAsset {
         root: DefaultAssetRoot::Screens,
@@ -208,7 +233,7 @@ struct GeneratedConfig {
     screens: BTreeMap<String, GeneratedScreenConfig>,
     menus: BTreeMap<String, GeneratedMenuConfig>,
     doors: GeneratedDoorsConfig,
-    ftn: GeneratedFtnConfig,
+    network: GeneratedNetworkConfig,
 }
 
 #[derive(Serialize)]
@@ -288,9 +313,26 @@ struct GeneratedSysopConfig {
 #[derive(Serialize)]
 struct GeneratedTerminalConfig {
     default_encoding: String,
+    default_profile: String,
+    manual_profile_selection: bool,
     clear_screen_on_connect: bool,
     welcome_screen: String,
     logoff_screen: String,
+    profiles: BTreeMap<String, GeneratedTerminalProfileConfig>,
+}
+
+#[derive(Serialize)]
+struct GeneratedTerminalProfileConfig {
+    name: String,
+    width: u16,
+    height: u16,
+    supports_ansi: bool,
+    supports_color: bool,
+    charset: String,
+    line_endings: String,
+    backspace_mode: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    output_pacing_bytes_per_second: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -305,7 +347,9 @@ struct GeneratedFlowConfig {
 struct GeneratedScreenConfig {
     ansi: String,
     ansi_40: Option<String>,
+    ascii_40: Option<String>,
     ascii: String,
+    text_40: Option<String>,
     text: String,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pause: bool,
@@ -314,6 +358,8 @@ struct GeneratedScreenConfig {
 #[derive(Serialize)]
 struct GeneratedMenuConfig {
     screen: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    help_screen: Option<String>,
     prompt: String,
     items: Vec<GeneratedMenuItemConfig>,
 }
@@ -347,9 +393,8 @@ struct GeneratedDoorDefinitionConfig {
 }
 
 #[derive(Serialize)]
-struct GeneratedFtnConfig {
+struct GeneratedNetworkConfig {
     enabled: bool,
-    reserved_network_name: String,
 }
 
 pub fn build_setup_toml(answers: &SetupAnswers) -> io::Result<String> {
@@ -359,7 +404,9 @@ pub fn build_setup_toml(answers: &SetupAnswers) -> io::Result<String> {
         GeneratedScreenConfig {
             ansi: "login/login.ans".to_string(),
             ansi_40: Some("login/login-40.ans".to_string()),
+            ascii_40: Some("login/login.asc".to_string()),
             ascii: "login/login.asc".to_string(),
+            text_40: Some("login/login.asc".to_string()),
             text: "login/login.txt".to_string(),
             pause: false,
         },
@@ -369,7 +416,9 @@ pub fn build_setup_toml(answers: &SetupAnswers) -> io::Result<String> {
         GeneratedScreenConfig {
             ansi: "info/screen1.ans".to_string(),
             ansi_40: None,
+            ascii_40: Some("info/screen1-40.asc".to_string()),
             ascii: "info/screen1.asc".to_string(),
+            text_40: Some("info/screen1-40.txt".to_string()),
             text: "info/screen1.txt".to_string(),
             pause: true,
         },
@@ -379,7 +428,9 @@ pub fn build_setup_toml(answers: &SetupAnswers) -> io::Result<String> {
         GeneratedScreenConfig {
             ansi: "info/screen2.ans".to_string(),
             ansi_40: None,
+            ascii_40: Some("info/screen2-40.asc".to_string()),
             ascii: "info/screen2.asc".to_string(),
+            text_40: Some("info/screen2-40.txt".to_string()),
             text: "info/screen2.txt".to_string(),
             pause: true,
         },
@@ -389,7 +440,9 @@ pub fn build_setup_toml(answers: &SetupAnswers) -> io::Result<String> {
         GeneratedScreenConfig {
             ansi: "menus/main/main.ans".to_string(),
             ansi_40: Some("menus/main/main-40.ans".to_string()),
+            ascii_40: Some("menus/main/main.asc".to_string()),
             ascii: "menus/main/main.asc".to_string(),
+            text_40: Some("menus/main/main.txt".to_string()),
             text: "menus/main/main.txt".to_string(),
             pause: false,
         },
@@ -400,6 +453,7 @@ pub fn build_setup_toml(answers: &SetupAnswers) -> io::Result<String> {
         "login".to_string(),
         GeneratedMenuConfig {
             screen: "login".to_string(),
+            help_screen: None,
             prompt: "Login? ".to_string(),
             items: vec![
                 GeneratedMenuItemConfig {
@@ -424,6 +478,7 @@ pub fn build_setup_toml(answers: &SetupAnswers) -> io::Result<String> {
         "main".to_string(),
         GeneratedMenuConfig {
             screen: "main_menu".to_string(),
+            help_screen: None,
             prompt: "Command? ".to_string(),
             items: vec![
                 GeneratedMenuItemConfig {
@@ -528,9 +583,12 @@ pub fn build_setup_toml(answers: &SetupAnswers) -> io::Result<String> {
         sysop: GeneratedSysopConfig { confirm_quit: true },
         terminal: GeneratedTerminalConfig {
             default_encoding: "cp437".to_string(),
+            default_profile: "plain".to_string(),
+            manual_profile_selection: true,
             clear_screen_on_connect: true,
             welcome_screen: "welcome.ans".to_string(),
             logoff_screen: "logoff.ans".to_string(),
+            profiles: generated_terminal_profiles(),
         },
         flow: GeneratedFlowConfig {
             login_screen: "login".to_string(),
@@ -541,14 +599,58 @@ pub fn build_setup_toml(answers: &SetupAnswers) -> io::Result<String> {
         screens,
         menus,
         doors,
-        ftn: GeneratedFtnConfig {
-            enabled: false,
-            reserved_network_name: "OxideNet".to_string(),
-        },
+        network: GeneratedNetworkConfig { enabled: false },
     };
 
     toml::to_string_pretty(&config)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+}
+
+fn generated_terminal_profiles() -> BTreeMap<String, GeneratedTerminalProfileConfig> {
+    let mut profiles = BTreeMap::new();
+    profiles.insert(
+        "ansi80".to_string(),
+        GeneratedTerminalProfileConfig {
+            name: "ANSI / CP437 80-column".to_string(),
+            width: 80,
+            height: 25,
+            supports_ansi: true,
+            supports_color: true,
+            charset: "cp437".to_string(),
+            line_endings: "crlf".to_string(),
+            backspace_mode: "backspace_or_delete".to_string(),
+            output_pacing_bytes_per_second: None,
+        },
+    );
+    profiles.insert(
+        "plain".to_string(),
+        GeneratedTerminalProfileConfig {
+            name: "Plain ASCII".to_string(),
+            width: 80,
+            height: 25,
+            supports_ansi: false,
+            supports_color: false,
+            charset: "ascii".to_string(),
+            line_endings: "crlf".to_string(),
+            backspace_mode: "backspace_or_delete".to_string(),
+            output_pacing_bytes_per_second: None,
+        },
+    );
+    profiles.insert(
+        "c64".to_string(),
+        GeneratedTerminalProfileConfig {
+            name: "C64 / C64 Ultimate 40-column".to_string(),
+            width: 40,
+            height: 25,
+            supports_ansi: false,
+            supports_color: false,
+            charset: "petscii_ascii_fallback".to_string(),
+            line_endings: "crlf".to_string(),
+            backspace_mode: "backspace_or_delete".to_string(),
+            output_pacing_bytes_per_second: Some(1_200),
+        },
+    );
+    profiles
 }
 
 pub fn setup_required_directories(output_path: &Path, answers: &SetupAnswers) -> Vec<PathBuf> {
@@ -821,6 +923,19 @@ mod tests {
             parsed.doors.allowed_runners,
             vec!["dosemu".to_string(), "dosemu2".to_string()]
         );
+        assert_eq!(parsed.terminal.default_profile, "plain");
+        assert!(parsed.terminal.manual_profile_selection);
+        assert_eq!(
+            parsed
+                .terminal
+                .capabilities_for_profile("c64")
+                .expect("c64 profile"),
+            oxidebbs_term::TerminalCapabilities::c64()
+        );
+        assert_eq!(
+            parsed.screens["screen1"].ascii_40.as_deref(),
+            Some("info/screen1-40.asc")
+        );
     }
 
     #[test]
@@ -878,31 +993,31 @@ mod tests {
         parsed.validate().expect("validate generated config");
 
         assert_default_menu_asset_contains_items(
-            include_str!("../../../assets/screens/login/login.ans"),
+            include_bytes!("../../../assets/screens/login/login.ans"),
             &parsed.menus["login"].items,
         );
         assert_default_menu_asset_contains_items(
-            include_str!("../../../assets/screens/login/login-40.ans"),
+            include_bytes!("../../../assets/screens/login/login-40.ans"),
             &parsed.menus["login"].items,
         );
         assert_default_menu_asset_contains_items(
-            include_str!("../../../assets/screens/login/login.asc"),
+            include_bytes!("../../../assets/screens/login/login.asc"),
             &parsed.menus["login"].items,
         );
         assert_default_menu_asset_contains_items(
-            include_str!("../../../assets/screens/menus/main/main.ans"),
+            include_bytes!("../../../assets/screens/menus/main/main.ans"),
             &parsed.menus["main"].items,
         );
         assert_default_menu_asset_contains_items(
-            include_str!("../../../assets/screens/menus/main/main-40.ans"),
+            include_bytes!("../../../assets/screens/menus/main/main-40.ans"),
             &parsed.menus["main"].items,
         );
         assert_default_menu_asset_contains_items(
-            include_str!("../../../assets/screens/menus/main/main.asc"),
+            include_bytes!("../../../assets/screens/menus/main/main.asc"),
             &parsed.menus["main"].items,
         );
         assert_default_menu_asset_contains_items(
-            include_str!("../../../assets/screens/menus/main/main.txt"),
+            include_bytes!("../../../assets/screens/menus/main/main.txt"),
             &parsed.menus["main"].items,
         );
         assert!(
@@ -924,7 +1039,73 @@ mod tests {
         );
     }
 
-    fn assert_default_menu_asset_contains_items(asset: &str, items: &[MenuItemConfig]) {
+    #[test]
+    fn bundled_ansi_assets_are_terminal_safe() {
+        for asset in DEFAULT_ASSETS {
+            if !asset.path.ends_with(".ans") {
+                continue;
+            }
+
+            let max_width = if asset.path.ends_with("-40.ans") {
+                40
+            } else {
+                80
+            };
+            assert_ansi_asset_is_terminal_safe(asset.path, asset.bytes, max_width);
+        }
+    }
+
+    fn assert_ansi_asset_is_terminal_safe(path: &str, bytes: &[u8], max_width: usize) {
+        let mut line = 1usize;
+        let mut width = 0usize;
+        let mut index = 0usize;
+
+        while index < bytes.len() {
+            let byte = bytes[index];
+
+            if byte == 0x1b {
+                assert_eq!(
+                    bytes.get(index + 1),
+                    Some(&b'['),
+                    "ANSI asset {path} line {line} contains unsupported escape sequence"
+                );
+                index += 2;
+                while index < bytes.len() {
+                    let final_byte = bytes[index];
+                    index += 1;
+                    if (0x40..=0x7e).contains(&final_byte) {
+                        break;
+                    }
+                }
+                continue;
+            }
+
+            match byte {
+                b'\r' => {}
+                b'\n' => {
+                    line += 1;
+                    width = 0;
+                }
+                0x00..=0x1f | 0x7f => {
+                    panic!(
+                        "ANSI asset {path} line {line} contains unsafe control byte 0x{byte:02x}"
+                    );
+                }
+                _ => {
+                    width += 1;
+                    assert!(
+                        width <= max_width,
+                        "ANSI asset {path} line {line} is wider than {max_width} safe columns"
+                    );
+                }
+            }
+
+            index += 1;
+        }
+    }
+
+    fn assert_default_menu_asset_contains_items(asset: &[u8], items: &[MenuItemConfig]) {
+        let asset = String::from_utf8_lossy(asset);
         for item in items {
             assert!(
                 asset.contains(&format!("[{}]", item.key)) || asset.contains(&item.key),

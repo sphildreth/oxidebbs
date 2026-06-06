@@ -1,3 +1,6 @@
+mod admin_status;
+mod admin_web;
+mod binkp_listener;
 mod commands;
 mod config;
 mod control;
@@ -5,6 +8,7 @@ mod door_session;
 mod serve;
 mod setup;
 mod sysop_cli;
+mod web_terminal;
 
 #[tokio::main]
 async fn main() {

@@ -5,6 +5,188 @@ All notable changes to OxideBBS will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [1.2.0] - 2026-06-06
+
+### Added
+- `oxidebbs-network` protocol-neutral network foundation types, shared
+  `network_*` DecentDB tables, repository APIs, and the shared `[network]`
+  config model with deprecated `[ftn]` alias compatibility.
+- Network profile/link, queue state, packet boundary, local-message envelope,
+  network-message envelope, and local-to-network conversion types in
+  `oxidebbs-network`.
+- `oxidebbs-db::DbWriter`, a bounded single-writer service with ordered
+  execution, transaction rollback, queue backpressure, and shutdown drain
+  coverage.
+- Menu-level `min_security_level` enforcement for caller menu routing.
+- Per-door `min_security_level` enforcement at door selection time.
+- Caller sysop submenu with `min_security_level = 255` in the default example config.
+- Dedicated logoff screen rendering from `terminal.logoff_screen` configuration.
+- Root `VERSION` source-of-truth workflow with `scripts/bump-version.sh` for aligned release metadata.
+- Codeberg mirror automation that defaults to dry-run and keeps GitHub canonical.
+- Optional DOSEMU2 smoke workflow that skips cleanly when the runner cannot provide DOSEMU2.
+- BBSLink and DoorParty-style remote door provider adapters with local dry-run
+  validation and redacted provider-secret display helpers.
+- `oxidebbs-oxidenet` address classification/allocation helpers, PRD-aligned
+  application lifecycle statuses, and validated config-package structs for
+  OxideNet onboarding package data.
+- OxideNet DecentDB registry tables and repository APIs for applications,
+  assigned nodes, and credential hashes, with schema-8 backup/restore support.
+- Exact CRLF byte-output tests for every currently supported door drop-file
+  format.
+- `files` sysop CLI group for file-area list/add/edit, file list/import/remove,
+  and transfer-history inspection.
+- `oxidebbs-transfer` CRC-16/XMODEM, XMODEM CRC/checksum negotiation, and
+  owned ZMODEM send/receive state machines with metadata, retry, cancel, batch,
+  and protocol loopback coverage.
+- Caller file-area workflows for ZMODEM and negotiated XMODEM uploads/downloads,
+  including security gates, upload path sanitization, pending-review uploads,
+  transfer history persistence, and telnet IAC escaping for binary transfers.
+- `oxidebbs-ftn` Type-2 packet reader/writer, echomail kludge
+  parser/composer, duplicate-key policy, and DecentDB-backed duplicate detector.
+- `oxidebbs-ftn` bundle classification boundary for raw `.pkt`, ZIP arcmail,
+  and ARJ arcmail inputs with explicit unsupported-extraction errors.
+- Safe ZIP arcmail packet extraction in `oxidebbs-ftn`, limited to top-level
+  `.pkt` entries with typed errors for corrupt, empty, nested, duplicate, and
+  overwrite-risk archives.
+- ZIP arcmail bundle creation in `oxidebbs-ftn` with deterministic `.pkt` entry
+  ordering plus empty-input, duplicate-name, non-packet, and overwrite guards.
+- `oxidebbs-ftn` full-nodelist parser for common Zone/Host/node/point rows.
+- `oxidebbs-ftn` pure `NetmailRouter` and `RoutingDecision` coverage for
+  local, direct, hub-routed, crash, hold, and unknown netmail destinations.
+- `oxidebbs-ftn` AreaFix command parser for `%LIST`, `%QUERY`, `%HELP`,
+  subscribe, unsubscribe, and rescan request command forms.
+- `oxidebbs-server net` read-only status, link, area, poll-log, and nodelist
+  import/list/lookup commands backed by DecentDB network tables.
+- `oxidebbs-server net` queue, packet, link-show, poll dry-run, and manual area
+  subscription commands backed by DecentDB network state.
+- `oxidebbs-server net packets summary/show/retry/mark-quarantined` for packet
+  visibility and safe DecentDB-only packet state controls.
+- `oxidebbs-server net nodelist apply-diff`, backed by conservative FTS-style
+  `NODEDIFF.xxx` apply support in `oxidebbs-ftn`.
+- `oxidebbs-server net toss <network>` for inbound raw `.pkt` and safe ZIP
+  packet-bundle processing, including packet password/origin validation,
+  DecentDB packet/message state, duplicate skips, SEEN-BY/PATH storage, archive
+  movement, and quarantine movement.
+- `oxidebbs-server net scan <network>` for subscribed local echomail export into
+  outbound Type-2+ packet files with DecentDB packet/message state.
+- `oxidebbs-server net poll <link|--all>` BinkP client polling with
+  TLS-required, TLS-opportunistic fallback, and plaintext-legacy modes. Polls
+  send ready outbound packets, receive inbound files into the profile inbound
+  drop directory, update packet state, and record poll logs.
+- `oxidebbs-server net areafix send <link>` for local AreaFix command
+  execution with link-password authentication, DecentDB subscription mutation,
+  audit events, and generated reply text.
+- `oxidebbs-binkp` command/data frame parser/writer plus client/server
+  handshake primitives with address/password validation.
+- `oxidebbs-binkp` `M_FILE` offer parsing/writing, bounded data-frame
+  send/receive helpers, `M_GOT` acknowledgement, `M_EOB` end-of-batch handling,
+  batch send/receive helpers, empty-batch handling, and session-level filename
+  validation.
+- `oxidebbs-binkp` transport-security preflight policy for TLS-required,
+  TLS-opportunistic, and plaintext-legacy BinkP links.
+- `oxidebbs-binkp` exponential retry policy helper used by BinkP poll loops.
+- `oxidebbs-binkp` one-active-session-per-link guard primitive used by BinkP
+  poll/listener loops.
+- Read-only Network screen in the local sysop TUI with DecentDB-backed profile,
+  link, area, packet, message, poll-log, duplicate, packet-status, and nodelist
+  counts.
+- Public docs pages for doors, serial/modem transport, caller file-transfer
+  status, and OxideNet status, with navigation entries.
+- Disabled-by-default `[admin_web]` monitoring configuration model with
+  validation for loopback, private-LAN, link-local, and unspecified direct-LAN
+  binds, public-status opt-in, origin allowlists, reverse-proxy TLS policy with
+  no native HTTPS listener, read-only mode, CSRF/replay timing, and rate-limit
+  settings.
+- Remote monitoring authentication with Argon2 password verification,
+  cookie-backed in-memory sysop sessions, CSRF token runtime validation, origin
+  checks, login rate limiting, authenticated read-only API views, logout session
+  deletion, and guarded mutation routes that validate nonce/timestamp replay
+  headers before read-only mode blocks the mutation.
+- Reusable read-only admin status JSON payload helper shared by the existing
+  `status --json` command and the opt-in loopback or LAN `/status` route.
+- C64/C64 Ultimate caller compatibility requirement with a named `c64`
+  terminal profile, 40-column plain fallback assets, C64 terminal-type
+  detection, CR/LF and backspace/delete coverage, and terminal profile config
+  contract.
+- ARJ arcmail extraction support in `oxidebbs-ftn` bundle processing, enabling
+  inbound ARJ bundle decompression alongside existing ZIP support.
+- Netmail forwarding in `oxidebbs-ftn` tosser using `NetmailRouter` for routing
+  decisions, queuing outbound packets for direct, crash, hold, and hub-routed
+  destinations.
+- Bundle creation integration in `oxidebbs-ftn` scanner with `bundle_ready_packets()`
+  method to create ZIP bundles with FTN-standard hex naming from ready packets.
+- Complete nodelist parser field extraction in `oxidebbs-ftn` including location,
+  sysop name, phone number, speed, and flags for all node and point entries.
+- Optional CRC validation for nodediff application via `apply_nodelist_diff_with_options()`
+  with configurable CRC checking against base nodelist content.
+- Inbound AreaFix netmail processing in `oxidebbs-ftn` tosser, automatically detecting
+  AreaFix requests addressed to "AreaFix" or "AreaMgr" and routing them through the
+  AreaFixProcessor for authentication and command execution.
+- AreaFix reply netmail generation with outbound packet creation, queuing response
+  messages for delivery to requesting links with proper packet tracking.
+- AreaFix rescan queueing with `network_rescan_queue` table and `insert_network_rescan_queue()`
+  function to track pending rescan requests for subscribed areas.
+- BinkP retry execution in `net poll` command using `BinkpRetryPolicy` with exponential backoff,
+  automatically retrying failed connection attempts up to the configured maximum.
+- Inbound BinkP listener loop in `oxidebbs-server` with TCP listener, accept loop, session
+  management via `LinkSessionRegistry`, and file reception to inbound spool directory. Configurable
+  via `[network.binkp_listener]` section with `enabled`, `bind`, and `max_connections` options.
+- TLS support for BinkP transport via `native-tls` with `BinkpTlsClientConfig` and
+  `BinkpTlsServerConfig` for client/server TLS configuration, `connect_tls()` and `accept_tls()`
+  functions for TLS handshake, and `BinkpStream` enum for unified plain/TLS stream handling.
+  Enforces TLS 1.2 minimum for security.
+- BinkP listener TLS accept support with `tls_cert_path` and `tls_key_path`,
+  TLS-required plaintext rejection, per-link password validation, outbound file
+  sending, and packet completion after acknowledgement.
+- ByteTransport-Transport bridge in `oxidebbs-transfer` with `TransportAdapter` that wraps
+  telnet `Transport` implementations to provide the `ByteTransport` interface, enabling file
+  transfer protocols (XMODEM, ZMODEM) to work over any transport layer with timeout support.
+- Path sanitization utilities in `oxidebbs-transfer` with `sanitize_filename()`,
+  `validate_path_within_base()`, and `safe_upload_path()` functions to prevent directory traversal
+  attacks and ensure secure file upload operations.
+- Packet retention policy in `net packets cleanup` command with configurable archive and delete
+  thresholds, dry-run preview mode, and automatic cleanup of processed/failed packets older than
+  the specified retention period. Configurable via `[network.retention]` section with
+  `archive_days` and `delete_days` options.
+- FTN stress tests validating performance under load: 1000-message packet processing (39.6s),
+  100-packet batch toss (2.0s), and 50,000-entry nodelist import (41.3s) with sub-second queries.
+
+### Changed
+- Schema version bumped to 8; schema `5` added shared network and message-author
+  foundation tables, schema `6` added `doors.min_security_level`, schema `7`
+  added file-transfer storage tables, and schema `8` added OxideNet registry
+  storage with JSON backup/restore coverage for application, node, and
+  credential-hash rows.
+- Menu items and door definitions now carry `min_security_level` (defaults to 0).
+- The caller menu and door dispatch enforce security levels before executing actions.
+- Live caller door validation now accepts every drop-file format rendered by
+  `oxidebbs-door`.
+- Exclusive local doors now block a second launch while the same door has an
+  unfinished DecentDB `door_runs` row.
+- Release workflow manual dispatch now defaults to the `v1.2.0` release line and smokes packaged binaries before upload.
+- File-entry removal from the sysop CLI is a safe unapprove operation that
+  requires a reason and preserves stored file bytes.
+- `messages search` now matches area keys and network metadata in addition to
+  subject, body, and author display text.
+- User, message, message-area, door, file, nodelist, and manual network
+  subscription CLI write commands now audit successful mutations where DecentDB
+  audit storage is available.
+- Caller-session helpers now operate over the shared byte `Transport` trait, so
+  the login/menu flow can be reused by future serial/modem listeners without
+  changing telnet behavior.
+- Sysop TUI read-only mode now blocks Dashboard send/broadcast shortcuts and
+  mutating modal/command-palette submissions while preserving navigation,
+  filters, refresh, and quit confirmation.
+- TLS-required and TLS-opportunistic non-dry-run `net poll` use native BinkP
+  TLS session support. Opportunistic links fall back to plaintext only when
+  legacy compatibility is explicitly enabled.
+- Remote monitoring remains disabled by default, but `[admin_web]` can now start
+  an opt-in loopback or LAN public `/status` endpoint plus sysop-authenticated
+  read-only API views. Remote mutations remain blocked by read-only mode after
+  auth, CSRF, replay, rate-limit, origin, and audit checks.
+
 ## [1.1.0] - 2026-06-03
 
 ### Added
@@ -156,8 +338,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `db import --format json <path>` as a full, schema-validated restore into
   schema-only DecentDB targets, with transactional insertion and FK-aware load
   ordering.
-- Documented and enforced `db compact` explicit unsupported behavior in this
-  release because DecentDB exposes no safe production compaction API.
+- Added `db compact --output <path> [--overwrite]` for verified output-file
+  DecentDB compaction that refuses the active database path.
 - Added a documentation-first Oxide Door Check validation flow (`doors check`,
   `doors dropfile`, and `doors test --dry-run`) and live testing guidance via DOSEMU2
   for the caller `Doors` menu path.

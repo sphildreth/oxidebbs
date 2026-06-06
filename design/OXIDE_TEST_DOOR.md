@@ -477,15 +477,17 @@ For `DORINFO1.DEF`, OxideBBS writes:
 
 ```text
 line 1: board name
-line 2: sysop name
-line 3: COM port
-line 4: baud string
-line 5: reserved/zero
-line 6: caller first name
-line 7: caller last name
-line 8: caller location
-line 9: caller security level
-line 10: caller minutes remaining
+line 2: sysop first name
+line 3: sysop last name
+line 4: COM port
+line 5: baud string
+line 6: reserved/zero
+line 7: caller first name
+line 8: caller last name
+line 9: caller location
+line 10: ANSI/graphics flag
+line 11: caller security level
+line 12: caller minutes remaining
 ```
 
 `OXIDECHK.EXE` must display:

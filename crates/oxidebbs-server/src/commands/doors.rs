@@ -12,18 +12,22 @@ use serde_json::json;
 
 use oxidebbs_core::door::DoorDefinition;
 use oxidebbs_db::{
-    DoorDefinitionRecord, find_door_by_key, find_door_run_by_id, insert_door_definition,
-    list_door_definitions, list_door_runs, update_door_definition, update_door_enabled,
+    DoorDefinitionRecord, DoorProviderCredentialRecord, delete_door_provider_credential,
+    find_door_by_key, find_door_provider_credential, find_door_run_by_id, insert_door_definition,
+    insert_door_provider_credential, list_door_definitions, list_door_provider_credentials,
+    list_door_runs, update_door_definition, update_door_enabled, update_door_provider_credential,
 };
 use oxidebbs_door::{
-    DoorCaller, DoorRunRequest, DoorRunner, DryRunDoorRunner, node_runtime_dir, render_door_sys,
-    render_dorinfo1_def, runner_supports_dosemu2_cli,
+    BBSLINK_PROVIDER_KEY, DOORPARTY_PROVIDER_KEY, DoorCaller, DoorRunRequest, DoorRunner,
+    DryRunDoorRunner, REDACTED_PROVIDER_SECRET, node_runtime_dir, render_callinfo_bbs,
+    render_chain_txt, render_door_sys, render_doorfile_sr, render_dorinfo1_def, render_pcboard_sys,
+    runner_supports_dosemu2_cli,
 };
 
 use crate::config::DoorDefConfig;
 use crate::sysop_cli::{
-    AppContext, CliError, CliResult, emit_ok, generated_uuid, open_database, print_json,
-    require_config_door, require_user,
+    AppContext, CliError, CliResult, audit, current_timestamp, emit_ok, generated_uuid,
+    open_database, print_json, require_config_door, require_user,
 };
 
 #[derive(Debug, Clone)]
@@ -69,10 +73,8 @@ pub enum DoorsCommand {
     },
     Test(DoorTestArgs),
     Dropfile(DoorDropfileArgs),
-    Add,
-    Edit {
-        door_key: String,
-    },
+    Add(DoorAddArgs),
+    Edit(DoorEditArgs),
     Runs {
         #[command(subcommand)]
         command: Option<DoorRunsCommand>,
@@ -102,6 +104,65 @@ pub struct DoorDropfileArgs {
     pub format: String,
     #[arg(long)]
     pub output: Option<std::path::PathBuf>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct DoorAddArgs {
+    pub key: String,
+    pub name: String,
+    #[arg(long, default_value = "dosemu")]
+    pub runner: String,
+    #[arg(long)]
+    pub provider: Option<String>,
+    #[arg(long)]
+    pub endpoint: Option<String>,
+    #[arg(long)]
+    pub credential_ref: Option<String>,
+    pub working_dir: String,
+    pub command: String,
+    #[arg(long, default_value = "door.sys")]
+    pub drop_file: String,
+    #[arg(long)]
+    pub exclusive: bool,
+    #[arg(long, default_value_t = 30)]
+    pub time_limit_minutes: u32,
+    #[arg(long, default_value_t = true)]
+    pub enabled: bool,
+    #[arg(long, default_value_t = 0)]
+    pub min_security_level: i32,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct DoorEditArgs {
+    pub door_key: String,
+    #[arg(long)]
+    pub key: Option<String>,
+    #[arg(long)]
+    pub name: Option<String>,
+    #[arg(long)]
+    pub runner: Option<String>,
+    #[arg(long)]
+    pub provider: Option<String>,
+    #[arg(long)]
+    pub endpoint: Option<String>,
+    #[arg(long)]
+    pub credential_ref: Option<String>,
+    #[arg(long, default_value_t = false)]
+    pub clear_credential_ref: bool,
+    #[arg(long)]
+    pub working_dir: Option<String>,
+    #[arg(long)]
+    pub command: Option<String>,
+    #[arg(long)]
+    pub drop_file: Option<String>,
+    #[arg(long)]
+    pub exclusive: Option<bool>,
+    #[arg(long)]
+    pub time_limit_minutes: Option<u32>,
+    #[arg(long)]
+    pub enabled: Option<bool>,
+    #[arg(long)]
+    pub min_security_level: Option<i32>,
 }
 
 #[derive(Subcommand)]
@@ -163,12 +224,13 @@ pub fn run_doors(command: DoorsCommand, ctx: &AppContext) -> CliResult<()> {
         DoorsCommand::List => {
             let doors = effective_doors(&db, &ctx.config)?;
             if ctx.json {
-                print_json(&doors_json_payload(&doors))?;
+                print_json(&doors_json_payload_with_credentials(&db, &doors)?)?;
             } else {
                 for door in doors {
+                    let credentials = redacted_credential_summary(&db, &door)?;
                     println!(
-                        "{}\t{}\trunner={}\tenabled={}",
-                        door.key, door.name, door.runner, door.enabled
+                        "{}\t{}\trunner={}\tenabled={}\tcredentials={}",
+                        door.key, door.name, door.runner, door.enabled, credentials
                     );
                 }
             }
@@ -176,16 +238,26 @@ pub fn run_doors(command: DoorsCommand, ctx: &AppContext) -> CliResult<()> {
         DoorsCommand::Show { door_key } => {
             let door = require_effective_door(&db, &ctx.config, &door_key)?;
             if ctx.json {
-                print_json(&door_json(&door))?;
+                print_json(&door_json_with_credentials(&db, &door)?)?;
             } else {
                 println!("{} - {}", door.key, door.name);
                 println!("runner: {}", door.runner);
+                if let Some(provider) = remote_provider_from_runner(&door.runner) {
+                    println!("provider: {provider}");
+                    println!("endpoint: {}", door.working_dir);
+                }
                 println!("working dir: {}", door.working_dir);
                 println!("command: {}", door.command);
                 println!("drop file: {}", door.drop_file);
                 println!("exclusive: {}", door.exclusive);
                 println!("time limit: {} minutes", door.time_limit_minutes);
                 println!("enabled: {}", door.enabled);
+                for credential in list_door_provider_credentials(db.db(), &door.id)? {
+                    println!(
+                        "credential: provider={} ref={}",
+                        credential.provider_name, REDACTED_PROVIDER_SECRET
+                    );
+                }
             }
         }
         DoorsCommand::Check { door_key } => {
@@ -196,8 +268,8 @@ pub fn run_doors(command: DoorsCommand, ctx: &AppContext) -> CliResult<()> {
             };
             let checks = doors
                 .iter()
-                .map(|door| check_door(door, &ctx.config))
-                .collect::<Vec<_>>();
+                .map(|door| check_door(door, &ctx.config, &db))
+                .collect::<CliResult<Vec<_>>>()?;
             let errors = checks
                 .iter()
                 .flat_map(|check| check.issues.iter())
@@ -222,7 +294,14 @@ pub fn run_doors(command: DoorsCommand, ctx: &AppContext) -> CliResult<()> {
         }
         DoorsCommand::Enable { door_key } => {
             let enabled = true;
-            set_door_enabled(&db, &ctx.config, &door_key, enabled)?;
+            let door = set_door_enabled(&db, &ctx.config, &door_key, enabled)?;
+            audit(
+                &db,
+                "door:enable",
+                None,
+                None,
+                &format!("door {} ({}) enabled", door.key, door.id),
+            )?;
             emit_ok(
                 ctx.json,
                 "door enabled",
@@ -231,7 +310,14 @@ pub fn run_doors(command: DoorsCommand, ctx: &AppContext) -> CliResult<()> {
         }
         DoorsCommand::Disable { door_key } => {
             let enabled = false;
-            set_door_enabled(&db, &ctx.config, &door_key, enabled)?;
+            let door = set_door_enabled(&db, &ctx.config, &door_key, enabled)?;
+            audit(
+                &db,
+                "door:disable",
+                None,
+                None,
+                &format!("door {} ({}) disabled", door.key, door.id),
+            )?;
             emit_ok(
                 ctx.json,
                 "door disabled",
@@ -240,16 +326,8 @@ pub fn run_doors(command: DoorsCommand, ctx: &AppContext) -> CliResult<()> {
         }
         DoorsCommand::Test(args) => run_door_test(args, ctx, &db)?,
         DoorsCommand::Dropfile(args) => run_door_dropfile(args, ctx, &db)?,
-        DoorsCommand::Add => {
-            return Err(CliError::Message(
-                "door add is intentionally deferred to config-file editing for v1; use [[doors.definitions]] in the board config".to_string(),
-            ));
-        }
-        DoorsCommand::Edit { door_key } => {
-            return Err(CliError::Message(format!(
-                "door edit for {door_key:?} is intentionally deferred to config-file editing for v1"
-            )));
-        }
+        DoorsCommand::Add(args) => run_door_add(args, ctx, &db)?,
+        DoorsCommand::Edit(args) => run_door_edit(args, ctx, &db)?,
         DoorsCommand::Runs { command } => match command
             .unwrap_or(DoorRunsCommand::List { limit: 25 })
         {
@@ -310,10 +388,23 @@ pub fn run_doors(command: DoorsCommand, ctx: &AppContext) -> CliResult<()> {
     Ok(())
 }
 
+#[cfg(test)]
 fn doors_json_payload(doors: &[DoorDefinitionRecord]) -> JsonValue {
     json!({
         "doors": doors.iter().map(door_json).collect::<Vec<_>>()
     })
+}
+
+fn doors_json_payload_with_credentials(
+    db: &oxidebbs_db::OxideDb,
+    doors: &[DoorDefinitionRecord],
+) -> CliResult<JsonValue> {
+    Ok(json!({
+        "doors": doors
+            .iter()
+            .map(|door| door_json_with_credentials(db, door))
+            .collect::<CliResult<Vec<_>>>()?
+    }))
 }
 
 pub fn run_door_test(
@@ -381,9 +472,19 @@ pub fn run_door_dropfile(
             &caller,
         ),
         "DOOR.SYS" => render_door_sys(&caller, args.node, 38_400),
+        "CHAIN.TXT" => render_chain_txt(&caller, args.node, 38_400),
+        "DOORFILE.SR" => render_doorfile_sr(
+            &caller,
+            args.node,
+            38_400,
+            &ctx.config.board.name,
+            &ctx.config.board.sysop_name,
+        ),
+        "PCBOARD.SYS" => render_pcboard_sys(&caller, args.node, 38_400, &ctx.config.board.name),
+        "CALLINFO.BBS" => render_callinfo_bbs(&caller, args.node, 38_400),
         other => {
             return Err(CliError::Message(format!(
-                "unsupported drop-file format {other:?}; supported formats are DOOR.SYS and DORINFO1.DEF"
+                "unsupported drop-file format {other:?}; supported formats are DOOR.SYS, DORINFO1.DEF, CHAIN.TXT, DOORFILE.SR, PCBOARD.SYS, and CALLINFO.BBS"
             )));
         }
     };
@@ -399,22 +500,422 @@ pub fn run_door_dropfile(
     Ok(())
 }
 
+fn run_door_add(args: DoorAddArgs, ctx: &AppContext, db: &oxidebbs_db::OxideDb) -> CliResult<()> {
+    let provider = provider_for_add(&args)?;
+    if args.endpoint.is_some() && provider.is_none() {
+        return Err(CliError::Message(
+            "--endpoint is only valid with --provider or a remote provider runner".to_string(),
+        ));
+    }
+    if args.credential_ref.is_some() && provider.is_none() {
+        return Err(CliError::Message(
+            "--credential-ref is only valid with --provider or a remote provider runner"
+                .to_string(),
+        ));
+    }
+    let runner = provider
+        .as_deref()
+        .map(provider_runner)
+        .unwrap_or_else(|| args.runner.clone());
+    let working_dir = args
+        .endpoint
+        .clone()
+        .unwrap_or_else(|| args.working_dir.clone());
+    validate_door_fields_before_write(
+        &args.key,
+        &args.command,
+        args.time_limit_minutes,
+        &args.drop_file,
+        provider.as_deref(),
+        &working_dir,
+    )?;
+    if let Some(provider) = provider.as_deref() {
+        let Some(credential_ref) = args.credential_ref.as_deref() else {
+            return Err(CliError::Message(format!(
+                "remote provider {provider} requires --credential-ref"
+            )));
+        };
+        validate_secret_reference(credential_ref)?;
+    }
+    if find_door_by_key(db.db(), &args.key)?.is_some() {
+        return Err(CliError::Message(format!(
+            "door {:?} already exists; use `doors edit` to update it",
+            args.key
+        )));
+    }
+    let record = DoorDefinitionRecord {
+        id: generated_uuid(db)?,
+        key: args.key.clone(),
+        name: args.name.clone(),
+        runner,
+        working_dir,
+        command: args.command.clone(),
+        drop_file: args.drop_file.clone(),
+        exclusive: args.exclusive,
+        time_limit_minutes: i64::from(args.time_limit_minutes),
+        enabled: args.enabled,
+        min_security_level: i64::from(args.min_security_level),
+    };
+    insert_door_definition(db.db(), &record)?;
+    if let (Some(provider), Some(credential_ref)) = (provider.as_deref(), args.credential_ref) {
+        upsert_door_provider_credential(db, &record.id, provider, &credential_ref)?;
+    }
+    audit(
+        db,
+        "door:add",
+        None,
+        None,
+        &format!(
+            "door {} ({}) added runner={} command={} drop_file={} enabled={} min_security_level={} provider={} credential_ref={}",
+            record.key,
+            record.id,
+            record.runner,
+            record.command,
+            record.drop_file,
+            record.enabled,
+            record.min_security_level,
+            provider.as_deref().unwrap_or("local"),
+            if provider.is_some() {
+                REDACTED_PROVIDER_SECRET
+            } else {
+                ""
+            }
+        ),
+    )?;
+    emit_ok(
+        ctx.json,
+        "door created",
+        json!({
+            "door": args.key,
+            "id": record.id,
+            "provider": provider,
+            "credential_ref": provider.as_ref().map(|_| REDACTED_PROVIDER_SECRET)
+        }),
+    )?;
+    Ok(())
+}
+
+fn run_door_edit(args: DoorEditArgs, ctx: &AppContext, db: &oxidebbs_db::OxideDb) -> CliResult<()> {
+    let existing = require_effective_door(db, &ctx.config, &args.door_key)?;
+    if args.provider.is_some() && args.runner.is_some() {
+        return Err(CliError::Message(
+            "--provider and --runner are mutually exclusive for doors edit".to_string(),
+        ));
+    }
+    let requested_runner_provider = args.runner.as_deref().and_then(remote_provider_from_runner);
+    if args.endpoint.is_some()
+        && args.provider.is_none()
+        && requested_runner_provider.is_none()
+        && remote_provider_from_runner(&existing.runner).is_none()
+    {
+        return Err(CliError::Message(
+            "--endpoint is only valid for a remote provider door".to_string(),
+        ));
+    }
+    if args.credential_ref.is_some() && args.clear_credential_ref {
+        return Err(CliError::Message(
+            "--credential-ref and --clear-credential-ref are mutually exclusive".to_string(),
+        ));
+    }
+    let existing_provider = remote_provider_from_runner(&existing.runner);
+    let provider = provider_for_edit(&args, existing_provider.as_deref())?;
+    let key = args.key.unwrap_or(existing.key);
+    let name = args.name.unwrap_or(existing.name);
+    let runner = provider
+        .as_deref()
+        .map(provider_runner)
+        .unwrap_or_else(|| args.runner.unwrap_or(existing.runner));
+    let working_dir = args
+        .endpoint
+        .or(args.working_dir)
+        .unwrap_or(existing.working_dir);
+    let command = args.command.unwrap_or(existing.command);
+    let drop_file = args.drop_file.unwrap_or(existing.drop_file);
+    let exclusive = args.exclusive.unwrap_or(existing.exclusive);
+    let time_limit_minutes = args
+        .time_limit_minutes
+        .map(u32::try_from)
+        .transpose()
+        .map_err(|_| CliError::Message("time_limit_minutes must fit in u32".to_string()))?
+        .unwrap_or(u32::try_from(existing.time_limit_minutes).unwrap_or(30));
+    let enabled = args.enabled.unwrap_or(existing.enabled);
+    let min_security_level = args
+        .min_security_level
+        .unwrap_or(existing.min_security_level as i32);
+
+    validate_door_fields_before_write(
+        &key,
+        &command,
+        time_limit_minutes,
+        &drop_file,
+        provider.as_deref(),
+        &working_dir,
+    )?;
+    if let Some(credential_ref) = args.credential_ref.as_deref() {
+        validate_secret_reference(credential_ref)?;
+    }
+    if let Some(provider) = provider.as_deref() {
+        let has_credential = args.credential_ref.is_some()
+            || find_door_provider_credential(db.db(), &existing.id, provider)?.is_some();
+        if !has_credential && !args.clear_credential_ref {
+            return Err(CliError::Message(format!(
+                "remote provider {provider} requires --credential-ref"
+            )));
+        }
+    } else if args.credential_ref.is_some() || args.clear_credential_ref {
+        return Err(CliError::Message(
+            "credential reference options are only valid for remote provider doors".to_string(),
+        ));
+    }
+
+    let record = DoorDefinitionRecord {
+        id: existing.id,
+        key,
+        name,
+        runner,
+        working_dir,
+        command,
+        drop_file,
+        exclusive,
+        time_limit_minutes: i64::from(time_limit_minutes),
+        enabled,
+        min_security_level: i64::from(min_security_level),
+    };
+    update_door_definition(db.db(), &record)?;
+    if let Some(old_provider) = existing_provider.as_deref()
+        && Some(old_provider) != provider.as_deref()
+    {
+        delete_door_provider_credential_for_provider(db, &record.id, old_provider)?;
+    }
+    if let Some(provider) = provider.as_deref() {
+        if args.clear_credential_ref {
+            delete_door_provider_credential_for_provider(db, &record.id, provider)?;
+        } else if let Some(credential_ref) = args.credential_ref.as_deref() {
+            upsert_door_provider_credential(db, &record.id, provider, credential_ref)?;
+        }
+    }
+    audit(
+        db,
+        "door:edit",
+        None,
+        None,
+        &format!(
+            "door {} ({}) updated runner={} command={} drop_file={} enabled={} min_security_level={} provider={} credential_ref={}",
+            record.key,
+            record.id,
+            record.runner,
+            record.command,
+            record.drop_file,
+            record.enabled,
+            record.min_security_level,
+            provider.as_deref().unwrap_or("local"),
+            if args.credential_ref.is_some() || args.clear_credential_ref {
+                REDACTED_PROVIDER_SECRET
+            } else {
+                ""
+            }
+        ),
+    )?;
+    emit_ok(
+        ctx.json,
+        "door updated",
+        json!({"door": record.key, "id": record.id}),
+    )?;
+    Ok(())
+}
+
+fn validate_door_fields_before_write(
+    key: &str,
+    command: &str,
+    time_limit_minutes: u32,
+    drop_file: &str,
+    provider: Option<&str>,
+    working_dir_or_endpoint: &str,
+) -> CliResult<()> {
+    if key.trim().is_empty() {
+        return Err(CliError::Message("door key must not be blank".to_string()));
+    }
+    if command.trim().is_empty() {
+        return Err(CliError::Message(
+            "door command must not be blank".to_string(),
+        ));
+    }
+    if !(1..=240).contains(&time_limit_minutes) {
+        return Err(CliError::Message(
+            "time limit minutes must be between 1 and 240".to_string(),
+        ));
+    }
+    if !matches!(
+        drop_file.to_ascii_uppercase().as_str(),
+        "DOOR.SYS" | "DORINFO1.DEF" | "CHAIN.TXT" | "DOORFILE.SR" | "PCBOARD.SYS" | "CALLINFO.BBS"
+    ) {
+        return Err(CliError::Message(format!(
+            "unsupported drop-file format {drop_file:?}"
+        )));
+    }
+    if let Some(provider) = provider {
+        validate_remote_provider(provider)?;
+        validate_remote_endpoint_for_cli(provider, working_dir_or_endpoint)?;
+    }
+    Ok(())
+}
+
+fn validate_remote_provider(provider: &str) -> CliResult<String> {
+    let provider = provider.trim().to_ascii_lowercase();
+    match provider.as_str() {
+        BBSLINK_PROVIDER_KEY | DOORPARTY_PROVIDER_KEY => Ok(provider),
+        _ => Err(CliError::Message(format!(
+            "unsupported remote provider {provider:?}; supported providers are {BBSLINK_PROVIDER_KEY} and {DOORPARTY_PROVIDER_KEY}"
+        ))),
+    }
+}
+
+fn provider_runner(provider: &str) -> String {
+    format!("remote:{}", provider.trim().to_ascii_lowercase())
+}
+
+fn remote_provider_from_runner(runner: &str) -> Option<String> {
+    let runner = runner.trim().to_ascii_lowercase();
+    let candidate = runner.strip_prefix("remote:").unwrap_or(&runner);
+    match candidate {
+        BBSLINK_PROVIDER_KEY | DOORPARTY_PROVIDER_KEY => Some(candidate.to_string()),
+        _ => None,
+    }
+}
+
+fn provider_for_add(args: &DoorAddArgs) -> CliResult<Option<String>> {
+    if let Some(provider) = args.provider.as_deref() {
+        return validate_remote_provider(provider).map(Some);
+    }
+    if let Some(provider) = remote_provider_from_runner(&args.runner) {
+        return Ok(Some(provider));
+    }
+    Ok(None)
+}
+
+fn provider_for_edit(
+    args: &DoorEditArgs,
+    existing_provider: Option<&str>,
+) -> CliResult<Option<String>> {
+    if let Some(provider) = args.provider.as_deref() {
+        return validate_remote_provider(provider).map(Some);
+    }
+    if let Some(runner) = args.runner.as_deref() {
+        return Ok(remote_provider_from_runner(runner));
+    }
+    Ok(existing_provider.map(ToOwned::to_owned))
+}
+
+fn validate_remote_endpoint_for_cli(provider: &str, endpoint: &str) -> CliResult<()> {
+    let endpoint = endpoint.trim();
+    if endpoint.is_empty() {
+        return Err(CliError::Message(format!(
+            "{provider} remote endpoint must not be blank"
+        )));
+    }
+    if endpoint.chars().any(char::is_control) || endpoint.split_whitespace().count() > 1 {
+        return Err(CliError::Message(format!(
+            "{provider} remote endpoint must be a single host, host:port, or telnet://host:port value"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_secret_reference(reference: &str) -> CliResult<()> {
+    let reference = reference.trim();
+    if reference.is_empty() {
+        return Err(CliError::Message(
+            "provider credential reference must not be blank".to_string(),
+        ));
+    }
+    if reference.chars().any(char::is_control) || reference.split_whitespace().count() > 1 {
+        return Err(CliError::Message(
+            "provider credential reference must be a single secret-reference token".to_string(),
+        ));
+    }
+    let allowed_prefix = [
+        "env:",
+        "file:",
+        "vault://",
+        "keyring://",
+        "op://",
+        "secret://",
+    ]
+    .iter()
+    .any(|prefix| reference.starts_with(prefix));
+    if !allowed_prefix {
+        return Err(CliError::Message(
+            "provider credential reference must use env:, file:, vault://, keyring://, op://, or secret://; raw provider secrets are not accepted".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn upsert_door_provider_credential(
+    db: &oxidebbs_db::OxideDb,
+    door_id: &str,
+    provider_name: &str,
+    credential_ref: &str,
+) -> CliResult<()> {
+    let now = current_timestamp(db)?;
+    match find_door_provider_credential(db.db(), door_id, provider_name)? {
+        Some(existing) => update_door_provider_credential(
+            db.db(),
+            &DoorProviderCredentialRecord {
+                id: existing.id,
+                door_id: existing.door_id,
+                provider_name: existing.provider_name,
+                credential_ref: credential_ref.to_string(),
+                created_at: existing.created_at,
+                updated_at: now,
+            },
+        )?,
+        None => insert_door_provider_credential(
+            db.db(),
+            &DoorProviderCredentialRecord {
+                id: generated_uuid(db)?,
+                door_id: door_id.to_string(),
+                provider_name: provider_name.to_string(),
+                credential_ref: credential_ref.to_string(),
+                created_at: now.clone(),
+                updated_at: now,
+            },
+        )?,
+    }
+    Ok(())
+}
+
+fn delete_door_provider_credential_for_provider(
+    db: &oxidebbs_db::OxideDb,
+    door_id: &str,
+    provider_name: &str,
+) -> CliResult<()> {
+    if let Some(existing) = find_door_provider_credential(db.db(), door_id, provider_name)? {
+        delete_door_provider_credential(db.db(), &existing.id)?;
+    }
+    Ok(())
+}
+
 fn set_door_enabled(
     db: &oxidebbs_db::OxideDb,
     config: &crate::config::OxideConfig,
     door_key: &str,
     enabled: bool,
-) -> CliResult<()> {
+) -> CliResult<DoorDefinitionRecord> {
     let door = require_config_door(config, door_key)?;
     match find_door_by_key(db.db(), door_key)? {
-        Some(existing) => update_door_enabled(db.db(), &existing.id, enabled)?,
+        Some(mut existing) => {
+            update_door_enabled(db.db(), &existing.id, enabled)?;
+            existing.enabled = enabled;
+            Ok(existing)
+        }
         None => {
             let mut record = door_record_from_config(db, door, true)?;
             record.enabled = enabled;
             insert_door_definition(db.db(), &record)?;
+            Ok(record)
         }
     }
-    Ok(())
 }
 
 pub(crate) fn sync_configured_doors(
@@ -472,8 +973,50 @@ fn require_effective_door(
         .ok_or_else(|| CliError::Message(format!("door {key:?} was not found")))
 }
 
-fn check_door(door: &DoorDefinitionRecord, config: &crate::config::OxideConfig) -> DoorCheck {
+fn check_door(
+    door: &DoorDefinitionRecord,
+    config: &crate::config::OxideConfig,
+    db: &oxidebbs_db::OxideDb,
+) -> CliResult<DoorCheck> {
     let mut issues = Vec::new();
+    if let Some(provider) = remote_provider_from_runner(&door.runner) {
+        if let Err(error) = validate_remote_endpoint_for_cli(&provider, &door.working_dir) {
+            issues.push(CheckIssue::error(error.to_string()));
+        }
+        if door.command.trim().is_empty() {
+            issues.push(CheckIssue::error(
+                "remote door command/provider door key is empty",
+            ));
+        }
+        if !matches!(
+            door.drop_file.to_ascii_uppercase().as_str(),
+            "DOOR.SYS"
+                | "DORINFO1.DEF"
+                | "CHAIN.TXT"
+                | "DOORFILE.SR"
+                | "PCBOARD.SYS"
+                | "CALLINFO.BBS"
+        ) {
+            issues.push(CheckIssue::error(format!(
+                "drop-file format {:?} is not supported",
+                door.drop_file
+            )));
+        }
+        if !(1..=240).contains(&door.time_limit_minutes) {
+            issues.push(CheckIssue::error(
+                "time limit must be in 1..=240 minutes".to_string(),
+            ));
+        }
+        if find_door_provider_credential(db.db(), &door.id, &provider)?.is_none() {
+            issues.push(CheckIssue::error(format!(
+                "remote provider {provider} requires a stored credential reference"
+            )));
+        }
+        return Ok(DoorCheck {
+            key: door.key.clone(),
+            issues,
+        });
+    }
     let doors_root = match std::path::Path::new(&config.paths.doors).canonicalize() {
         Ok(root) => root,
         Err(error) => {
@@ -551,7 +1094,7 @@ fn check_door(door: &DoorDefinitionRecord, config: &crate::config::OxideConfig) 
     }
     if !matches!(
         door.drop_file.to_ascii_uppercase().as_str(),
-        "DOOR.SYS" | "DORINFO1.DEF"
+        "DOOR.SYS" | "DORINFO1.DEF" | "CHAIN.TXT" | "DOORFILE.SR" | "PCBOARD.SYS" | "CALLINFO.BBS"
     ) {
         issues.push(CheckIssue::error(format!(
             "drop-file format {:?} is not supported",
@@ -569,10 +1112,10 @@ fn check_door(door: &DoorDefinitionRecord, config: &crate::config::OxideConfig) 
             config.paths.runtime.display()
         )));
     }
-    DoorCheck {
+    Ok(DoorCheck {
         key: door.key.clone(),
         issues,
-    }
+    })
 }
 
 fn resolve_runner_path(command: &str) -> Option<std::path::PathBuf> {
@@ -689,6 +1232,7 @@ fn door_record_from_config_with_id(
         exclusive: door.exclusive,
         time_limit_minutes: i64::from(door.time_limit_minutes),
         enabled: board_doors_enabled && door.enabled,
+        min_security_level: i64::from(door.min_security_level),
     }
 }
 
@@ -704,6 +1248,7 @@ fn door_to_core(door: &DoorDefinitionRecord) -> DoorDefinition {
         exclusive: door.exclusive,
         time_limit_minutes: u32::try_from(door.time_limit_minutes).unwrap_or(30),
         enabled: door.enabled,
+        min_security_level: door.min_security_level as i32,
     }
 }
 
@@ -728,8 +1273,60 @@ fn door_json(door: &DoorDefinitionRecord) -> JsonValue {
         "drop_file": door.drop_file,
         "exclusive": door.exclusive,
         "time_limit_minutes": door.time_limit_minutes,
-        "enabled": door.enabled
+        "enabled": door.enabled,
+        "min_security_level": door.min_security_level
     })
+}
+
+fn door_json_with_credentials(
+    db: &oxidebbs_db::OxideDb,
+    door: &DoorDefinitionRecord,
+) -> CliResult<JsonValue> {
+    let mut value = door_json(door);
+    if let Some(object) = value.as_object_mut() {
+        object.insert(
+            "provider".to_string(),
+            remote_provider_from_runner(&door.runner)
+                .map(JsonValue::String)
+                .unwrap_or(JsonValue::Null),
+        );
+        object.insert(
+            "provider_credentials".to_string(),
+            JsonValue::Array(
+                list_door_provider_credentials(db.db(), &door.id)?
+                    .iter()
+                    .map(redacted_credential_json)
+                    .collect(),
+            ),
+        );
+    }
+    Ok(value)
+}
+
+fn redacted_credential_json(credential: &DoorProviderCredentialRecord) -> JsonValue {
+    json!({
+        "id": credential.id,
+        "door_id": credential.door_id,
+        "provider_name": credential.provider_name,
+        "credential_ref": REDACTED_PROVIDER_SECRET,
+        "created_at": credential.created_at,
+        "updated_at": credential.updated_at
+    })
+}
+
+fn redacted_credential_summary(
+    db: &oxidebbs_db::OxideDb,
+    door: &DoorDefinitionRecord,
+) -> CliResult<String> {
+    let credentials = list_door_provider_credentials(db.db(), &door.id)?;
+    if credentials.is_empty() {
+        return Ok("none".to_string());
+    }
+    Ok(credentials
+        .iter()
+        .map(|credential| format!("{}={}", credential.provider_name, REDACTED_PROVIDER_SECRET))
+        .collect::<Vec<_>>()
+        .join(","))
 }
 
 fn door_run_json(run: &oxidebbs_db::DoorRunRecord) -> JsonValue {
@@ -765,6 +1362,7 @@ mod tests {
             exclusive: false,
             time_limit_minutes: 30,
             enabled: true,
+            min_security_level: 0,
         }];
 
         let payload = doors_json_payload(&doors);
@@ -783,6 +1381,88 @@ mod tests {
         );
         assert_eq!(door.get("enabled"), Some(&JsonValue::Bool(true)));
         assert_eq!(door.get("time_limit_minutes"), Some(&JsonValue::from(30)));
+    }
+
+    #[test]
+    fn door_json_with_credentials_redacts_secret_reference() {
+        let db = oxidebbs_db::OxideDb::open_memory().expect("open db");
+        let door = DoorDefinitionRecord {
+            id: "00000000-0000-4000-8000-000000000001".to_string(),
+            key: "bbslink-lord".to_string(),
+            name: "Remote LORD".to_string(),
+            runner: "remote:bbslink".to_string(),
+            working_dir: "telnet://127.0.0.1:2323".to_string(),
+            command: "LORD".to_string(),
+            drop_file: "DOOR.SYS".to_string(),
+            exclusive: false,
+            time_limit_minutes: 30,
+            enabled: true,
+            min_security_level: 0,
+        };
+        insert_door_definition(db.db(), &door).expect("insert door");
+        upsert_door_provider_credential(
+            &db,
+            &door.id,
+            BBSLINK_PROVIDER_KEY,
+            "vault://doors/bbslink-lord/auth-code",
+        )
+        .expect("upsert credential");
+
+        let value = door_json_with_credentials(&db, &door).expect("json");
+        let text = value.to_string();
+
+        assert!(text.contains(REDACTED_PROVIDER_SECRET));
+        assert!(!text.contains("vault://doors/bbslink-lord/auth-code"));
+    }
+
+    #[test]
+    fn validates_provider_secret_references_without_accepting_raw_secret_values() {
+        assert!(validate_secret_reference("env:BBSLINK_AUTH").is_ok());
+        assert!(validate_secret_reference("vault://doors/lord/bbslink").is_ok());
+
+        let error = validate_secret_reference("plain-password").expect_err("raw secret rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("raw provider secrets are not accepted")
+        );
+    }
+
+    #[test]
+    fn remote_provider_check_requires_stored_credential_reference() {
+        let db = oxidebbs_db::OxideDb::open_memory().expect("open db");
+        let config: crate::config::OxideConfig =
+            toml::from_str("[board]\nname = \"Test\"\n").expect("config");
+        let door = DoorDefinitionRecord {
+            id: "00000000-0000-4000-8000-000000000001".to_string(),
+            key: "bbslink-lord".to_string(),
+            name: "Remote LORD".to_string(),
+            runner: "remote:bbslink".to_string(),
+            working_dir: "telnet://127.0.0.1:2323".to_string(),
+            command: "LORD".to_string(),
+            drop_file: "DOOR.SYS".to_string(),
+            exclusive: false,
+            time_limit_minutes: 30,
+            enabled: true,
+            min_security_level: 0,
+        };
+        insert_door_definition(db.db(), &door).expect("insert door");
+
+        let check = check_door(&door, &config, &db).expect("check without credential");
+        assert!(check.issues.iter().any(|issue| {
+            issue.level == "error" && issue.message.contains("stored credential reference")
+        }));
+
+        upsert_door_provider_credential(&db, &door.id, BBSLINK_PROVIDER_KEY, "env:BBSLINK_AUTH")
+            .expect("upsert credential");
+
+        let check = check_door(&door, &config, &db).expect("check with credential");
+        assert!(
+            !check
+                .issues
+                .iter()
+                .any(|issue| issue.message.contains("stored credential reference"))
+        );
     }
 
     #[test]
@@ -809,15 +1489,17 @@ mod tests {
             exclusive: false,
             time_limit_minutes: 30,
             enabled: true,
+            min_security_level: 0,
         };
         let mut config: crate::config::OxideConfig =
             toml::from_str("[board]\nname = \"Test\"\n").expect("config");
+        let db = oxidebbs_db::OxideDb::open_memory().expect("open db");
         config.paths.runtime = temp.join("runtime");
         config.doors.allowed_runners = vec![door.runner.clone()];
         let _ = fs::remove_dir_all(config.paths.runtime.clone());
         fs::create_dir_all(config.paths.runtime.clone()).expect("runtime dir");
 
-        let check = check_door(&door, &config);
+        let check = check_door(&door, &config, &db).expect("check door");
         assert!(
             !check
                 .issues
@@ -826,7 +1508,7 @@ mod tests {
         );
 
         door.command = "\"LORD.EXE\"".to_string();
-        let check = check_door(&door, &config);
+        let check = check_door(&door, &config, &db).expect("check door");
         assert!(check.issues.iter().any(|issue| {
             issue.level == "error"
                 && issue.message.contains("quoted DOS commands")
@@ -834,7 +1516,7 @@ mod tests {
         }));
 
         door.command = "   ".to_string();
-        let check = check_door(&door, &config);
+        let check = check_door(&door, &config, &db).expect("check door");
         assert!(
             check
                 .issues
@@ -844,7 +1526,7 @@ mod tests {
 
         door.command = "LORD.EXE".to_string();
         door.runner = "dosbox".to_string();
-        let check = check_door(&door, &config);
+        let check = check_door(&door, &config, &db).expect("check door");
         assert!(check.issues.iter().any(|issue| {
             issue.level == "error"
                 && issue.message.contains("not supported")
@@ -886,21 +1568,23 @@ mod tests {
             exclusive: false,
             time_limit_minutes: 241,
             enabled: true,
+            min_security_level: 0,
         };
         let mut config: crate::config::OxideConfig =
             toml::from_str("[board]\nname = \"Test\"\n").expect("config");
+        let db = oxidebbs_db::OxideDb::open_memory().expect("open db");
         config.paths.runtime = runtime;
         config.doors.allowed_runners = vec![runner_path.to_string_lossy().to_string()];
         fs::create_dir_all(&working_dir).expect("working");
 
-        let check = check_door(&door, &config);
+        let check = check_door(&door, &config, &db).expect("check door");
         assert!(check.issues.iter().any(|issue| {
             issue.level == "error" && issue.message.contains("time limit must be in 1..=240")
         }));
 
         let mut good = door;
         good.time_limit_minutes = 240;
-        let check = check_door(&good, &config);
+        let check = check_door(&good, &config, &db).expect("check door");
         assert!(
             !check
                 .issues
@@ -910,7 +1594,7 @@ mod tests {
         );
         let mut disallowed = good.clone();
         disallowed.runner = "dosbox".to_string();
-        let check = check_door(&disallowed, &config);
+        let check = check_door(&disallowed, &config, &db).expect("check door");
         assert!(
             check
                 .issues
@@ -927,7 +1611,7 @@ mod tests {
                 .mode();
             fs::set_permissions(&runner_path, fs::Permissions::from_mode(mode | 0o020))
                 .expect("set group write");
-            let check = check_door(&good, &config);
+            let check = check_door(&good, &config, &db).expect("check door");
             assert!(check
                 .issues
                 .iter()
@@ -964,6 +1648,7 @@ mod tests {
                 exclusive: true,
                 time_limit_minutes: 1,
                 enabled: false,
+                min_security_level: 0,
             },
         )
         .expect("insert stale door");

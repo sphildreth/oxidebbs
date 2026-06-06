@@ -26,7 +26,7 @@ repository are covered by Apache-2.0 unless a file explicitly says otherwise.
 Do not bundle old DOS doors, shareware packages, abandonware, or third-party
 assets unless their license clearly allows redistribution by OxideBBS.
 
-A Codeberg mirror may be added later, but GitHub is the source of truth unless this ADR is superseded.
+A Codeberg mirror is now available, but GitHub remains the source of truth unless this ADR is superseded.
 
 ## Consequences
 

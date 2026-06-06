@@ -1,19 +1,23 @@
 # Deployment and Operations
 
-OxideBBS runs as a local binary (`oxidebbs-server`) plus a local CLI. Remote
-admin access is intentionally not supported in this release.
+OxideBBS runs as one server binary (`oxidebbs-server`) plus local sysop
+commands. The normal sysop install choices are:
 
-For cross-platform deployments on Windows, macOS, and Linux hosts with Docker,
-use [Docker Deployment](/project/docker). That path keeps the runtime Linux,
-includes DOSEMU2 inside the image, and stores DecentDB/runtime/door state on
-Docker named volumes.
+| Path | Use when |
+| --- | --- |
+| [Docker](./docker.md) | You want the easiest cross-platform setup and bundled DOSEMU2 runtime. |
+| [Release binaries](./release-binaries.md) | You want to run directly on a Linux, macOS, or Windows host without compiling. |
+| Build from source | You are developing OxideBBS or need local patches. |
+
+Remote monitoring and `/terminal` can be enabled for LAN use. Public/WAN HTTPS
+should be handled by a reverse proxy. Remote mutation APIs remain disabled.
 
 ## Runtime deployment workflow
 
 1. Generate config and scaffold:
 
 ```bash
-cargo run -p oxidebbs-server -- --data /srv/oxidebbs/data/oxidebbs.ddb setup \
+oxidebbs-server --data /srv/oxidebbs/data/oxidebbs.ddb setup \
   --output /etc/oxidebbs/oxidebbs.toml \
   --board-name "My BBS" \
   --sysop-alias sysop \
@@ -23,13 +27,13 @@ cargo run -p oxidebbs-server -- --data /srv/oxidebbs/data/oxidebbs.ddb setup \
 2. Validate before first boot:
 
 ```bash
-cargo run -p oxidebbs-server -- --config /etc/oxidebbs/oxidebbs.toml check
+oxidebbs-server --config /etc/oxidebbs/oxidebbs.toml check
 ```
 
 3. Start serving:
 
 ```bash
-cargo run -p oxidebbs-server -- --config /etc/oxidebbs/oxidebbs.toml serve
+oxidebbs-server --config /etc/oxidebbs/oxidebbs.toml serve
 ```
 
 4. Install your distribution's DOSEMU2 package on hosts that will launch DOS
@@ -62,9 +66,9 @@ test -d /dev/pts && ls -ld /dev/pts
 5. Validate and dry-run the bundled test door:
 
 ```bash
-cargo run -p oxidebbs-server -- --config /etc/oxidebbs/oxidebbs.toml doors check oxide-check
-cargo run -p oxidebbs-server -- --config /etc/oxidebbs/oxidebbs.toml doors dropfile oxide-check --user sysop --node 1 --format DORINFO1.DEF
-cargo run -p oxidebbs-server -- --config /etc/oxidebbs/oxidebbs.toml doors test oxide-check --user sysop --dry-run
+oxidebbs-server --config /etc/oxidebbs/oxidebbs.toml doors check oxide-check
+oxidebbs-server --config /etc/oxidebbs/oxidebbs.toml doors dropfile oxide-check --user sysop --node 1 --format DORINFO1.DEF
+oxidebbs-server --config /etc/oxidebbs/oxidebbs.toml doors test oxide-check --user sysop --dry-run
 ```
 
 6. To run a live smoke test, keep DOSEMU2 installed, enable `oxide-check` in the
@@ -92,8 +96,8 @@ Live launch should produce per-node runtime data and report files under
 7. Verify health:
 
 ```bash
-cargo run -p oxidebbs-server -- --config /etc/oxidebbs/oxidebbs.toml status
-cargo run -p oxidebbs-server -- --config /etc/oxidebbs/oxidebbs.toml nodes list
+oxidebbs-server --config /etc/oxidebbs/oxidebbs.toml status
+oxidebbs-server --config /etc/oxidebbs/oxidebbs.toml nodes list
 ```
 
 Live launch fails clearly when:
@@ -104,9 +108,10 @@ Live launch fails clearly when:
 - the caller disconnects before the door exits,
 - or the runtime timeout triggers and closes the child.
 
-## Native build prerequisites
+## Source build prerequisites
 
-When compiling in fresh Debian/Ubuntu environments:
+Release binaries do not require Rust, Cargo, Node.js, or libclang. When building
+from source in fresh Debian/Ubuntu environments:
 
 ```bash
 sudo apt-get install -y clang libclang-dev

@@ -32,30 +32,141 @@ const CP437_HIGH: [char; 128] = [
 ];
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum TerminalProfile {
+    Ansi80,
+    Ansi40,
+    PlainAscii,
+    C64,
+}
+
+impl TerminalProfile {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ansi80 => "ansi80",
+            Self::Ansi40 => "ansi40",
+            Self::PlainAscii => "plain",
+            Self::C64 => "c64",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum TerminalCharset {
+    Cp437,
+    Ascii,
+    PetsciiAsciiFallback,
+}
+
+impl TerminalCharset {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Cp437 => "cp437",
+            Self::Ascii => "ascii",
+            Self::PetsciiAsciiFallback => "petscii_ascii_fallback",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum LineEndingMode {
+    Crlf,
+}
+
+impl LineEndingMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Crlf => "crlf",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum BackspaceMode {
+    BackspaceOrDelete,
+}
+
+impl BackspaceMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::BackspaceOrDelete => "backspace_or_delete",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct OutputPacing {
+    pub bytes_per_second: u32,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct TerminalCapabilities {
+    pub profile: TerminalProfile,
     pub supports_ansi: bool,
+    pub supports_color: bool,
     pub width: u16,
+    pub height: u16,
+    pub charset: TerminalCharset,
+    pub line_endings: LineEndingMode,
+    pub backspace_mode: BackspaceMode,
+    pub output_pacing: Option<OutputPacing>,
 }
 
 impl TerminalCapabilities {
     pub fn ansi_80() -> Self {
         Self {
+            profile: TerminalProfile::Ansi80,
             supports_ansi: true,
+            supports_color: true,
             width: 80,
+            height: 25,
+            charset: TerminalCharset::Cp437,
+            line_endings: LineEndingMode::Crlf,
+            backspace_mode: BackspaceMode::BackspaceOrDelete,
+            output_pacing: None,
         }
     }
 
     pub fn ansi_40() -> Self {
         Self {
+            profile: TerminalProfile::Ansi40,
             supports_ansi: true,
+            supports_color: true,
             width: 40,
+            height: 25,
+            charset: TerminalCharset::Cp437,
+            line_endings: LineEndingMode::Crlf,
+            backspace_mode: BackspaceMode::BackspaceOrDelete,
+            output_pacing: None,
         }
     }
 
     pub fn plain_text() -> Self {
         Self {
+            profile: TerminalProfile::PlainAscii,
             supports_ansi: false,
+            supports_color: false,
             width: 80,
+            height: 25,
+            charset: TerminalCharset::Ascii,
+            line_endings: LineEndingMode::Crlf,
+            backspace_mode: BackspaceMode::BackspaceOrDelete,
+            output_pacing: None,
+        }
+    }
+
+    pub fn c64() -> Self {
+        Self {
+            profile: TerminalProfile::C64,
+            supports_ansi: false,
+            supports_color: false,
+            width: 40,
+            height: 25,
+            charset: TerminalCharset::PetsciiAsciiFallback,
+            line_endings: LineEndingMode::Crlf,
+            backspace_mode: BackspaceMode::BackspaceOrDelete,
+            output_pacing: Some(OutputPacing {
+                bytes_per_second: 1_200,
+            }),
         }
     }
 }
@@ -70,7 +181,9 @@ pub enum LoadedScreen {
 pub struct ScreenAsset {
     pub ansi: Option<String>,
     pub ansi_40: Option<String>,
+    pub ascii_40: Option<String>,
     pub ascii: Option<String>,
+    pub text_40: Option<String>,
     pub text: Option<String>,
     pub pause: bool,
 }
@@ -95,6 +208,16 @@ impl ScreenAsset {
                 return Some((asset, ScreenLoadMode::Ansi));
             }
         } else {
+            if capabilities.width <= 40 {
+                if let Some(asset) = self.ascii_40.as_deref() {
+                    return Some((asset, ScreenLoadMode::Text));
+                }
+
+                if let Some(asset) = self.text_40.as_deref() {
+                    return Some((asset, ScreenLoadMode::Text));
+                }
+            }
+
             if let Some(asset) = self.ascii.as_deref() {
                 return Some((asset, ScreenLoadMode::Text));
             }
@@ -433,6 +556,29 @@ mod tests {
     }
 
     #[test]
+    fn c64_profile_declares_plain_40_column_capabilities() {
+        let capabilities = TerminalCapabilities::c64();
+
+        assert_eq!(capabilities.profile, TerminalProfile::C64);
+        assert_eq!(capabilities.width, 40);
+        assert_eq!(capabilities.height, 25);
+        assert!(!capabilities.supports_ansi);
+        assert!(!capabilities.supports_color);
+        assert_eq!(capabilities.charset, TerminalCharset::PetsciiAsciiFallback);
+        assert_eq!(capabilities.line_endings, LineEndingMode::Crlf);
+        assert_eq!(
+            capabilities.backspace_mode,
+            BackspaceMode::BackspaceOrDelete
+        );
+        assert_eq!(
+            capabilities.output_pacing,
+            Some(OutputPacing {
+                bytes_per_second: 1_200
+            })
+        );
+    }
+
+    #[test]
     fn selects_ansi_40_asset_for_narrow_ansi_capability() {
         let screens_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/screens");
         let asset = ScreenAsset {
@@ -481,6 +627,50 @@ mod tests {
             .load(&screens_root, TerminalCapabilities::plain_text())
             .expect("load fallback screen");
         assert_eq!(loaded, LoadedScreen::PlainText("Oxide ╔".into()));
+
+        fs::remove_dir_all(&screens_root).expect("cleanup fixture");
+    }
+
+    #[test]
+    fn c64_profile_selects_40_column_plain_asset_without_ansi() {
+        let unique = format!(
+            "oxidebbs-term-c64-assets-{}-{}",
+            process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time valid")
+                .as_nanos()
+        );
+        let screens_root = env::temp_dir().join(unique);
+        fs::create_dir_all(&screens_root).expect("create fixture dir");
+
+        fs::write(screens_root.join("wide.asc"), b"Wide plain screen\r\n")
+            .expect("write wide fixture");
+        fs::write(screens_root.join("c64.asc"), b"C64 plain screen\r\n")
+            .expect("write c64 fixture");
+        fs::write(screens_root.join("screen.ans"), b"\x1b[31mANSI screen\r\n")
+            .expect("write ansi fixture");
+
+        let asset = ScreenAsset {
+            ansi: Some("screen.ans".into()),
+            ascii_40: Some("c64.asc".into()),
+            ascii: Some("wide.asc".into()),
+            ..Default::default()
+        };
+
+        let selected = asset
+            .resolve_for_terminal(TerminalCapabilities::c64())
+            .expect("terminal should resolve a screen");
+        assert_eq!(selected.0, "c64.asc");
+        assert_eq!(selected.1, ScreenLoadMode::Text);
+
+        let loaded = asset
+            .load(&screens_root, TerminalCapabilities::c64())
+            .expect("load C64 plain screen");
+        assert_eq!(
+            loaded,
+            LoadedScreen::PlainText("C64 plain screen\r\n".into())
+        );
 
         fs::remove_dir_all(&screens_root).expect("cleanup fixture");
     }

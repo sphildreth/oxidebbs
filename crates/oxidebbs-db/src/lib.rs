@@ -2,18 +2,22 @@
 
 use std::path::Path;
 
-pub use decentdb::{Db, DbConfig, DbError, QueryResult, QueryRow, Value};
+pub use decentdb::{Db, DbConfig, DbError, QueryResult, QueryRow, Value, evict_shared_wal};
 
 mod audit_repo;
 mod auth_repo;
+mod db_writer;
 mod door_repo;
+mod file_repo;
 mod message_repo;
 mod migrations;
+mod network_repo;
+mod oxidenet_repo;
 mod schema;
 mod session_repo;
 mod user_repo;
 
-pub const SCHEMA_VERSION: i64 = 4;
+pub const SCHEMA_VERSION: i64 = 10;
 
 pub use audit_repo::{
     AuditEventRecord, insert_audit_event, insert_audit_event_preserving_record, list_audit_events,
@@ -23,10 +27,21 @@ pub use auth_repo::{
     AuthAttemptRecord, clear_auth_attempt, find_auth_attempt, insert_auth_attempt,
     is_auth_scope_locked, list_auth_attempts, record_auth_failure,
 };
+pub use db_writer::{DbWriteTicket, DbWriter, DbWriterError, DbWriterResult};
 pub use door_repo::{
-    DoorDefinitionRecord, DoorRunFinish, DoorRunRecord, find_door_by_key, find_door_run_by_id,
-    finish_door_run, insert_door_definition, insert_door_run, list_door_definitions,
-    list_door_runs, update_door_definition, update_door_enabled,
+    DoorDefinitionRecord, DoorProviderCredentialRecord, DoorRunFinish, DoorRunRecord,
+    delete_door_provider_credential, find_active_door_run_by_door_id, find_door_by_key,
+    find_door_provider_credential, find_door_run_by_id, finish_door_run, insert_door_definition,
+    insert_door_provider_credential, insert_door_run, list_door_definitions,
+    list_door_provider_credentials, list_door_runs, update_door_definition, update_door_enabled,
+    update_door_provider_credential,
+};
+pub use file_repo::{
+    FileAreaRecord, FileEntryRecord, FileTransferRecord, find_file_area_by_key,
+    find_file_entry_by_id, find_file_entry_by_storage_name, find_file_transfer_by_id,
+    increment_file_entry_download_count, insert_file_area, insert_file_entry, insert_file_transfer,
+    list_file_areas, list_file_entries, list_file_transfers, update_file_area,
+    update_file_entry_approved,
 };
 pub use message_repo::{
     MessageAreaRecord, MessageRecord, find_message_area_by_key, find_message_by_id, insert_message,
@@ -35,6 +50,35 @@ pub use message_repo::{
     update_message_area_levels, update_message_visibility,
 };
 pub use migrations::migrate_to_current;
+pub use network_repo::{
+    NetworkAreaRecord, NetworkDuplicateLogRecord, NetworkLinkRecord, NetworkMessageRecord,
+    NetworkNodelistRecord, NetworkOperationsStats, NetworkPacketRecord, NetworkPacketSummaryRecord,
+    NetworkPathNode, NetworkPollLogRecord, NetworkProfileRecord, NetworkRescanQueueRecord,
+    NetworkSeenByNode, NetworkSubscriptionRecord, count_network_nodelist_entries,
+    count_network_packets_before, delete_network_packets_older_than,
+    find_network_area_by_tag_and_profile, find_network_link_by_key, find_network_nodelist_entry,
+    find_network_packet_by_id, find_network_profile_by_id, find_network_profile_by_key,
+    find_network_rescan_by_id, finish_network_packet, finish_network_poll,
+    get_network_operations_stats, insert_network_area, insert_network_duplicate_log,
+    insert_network_link, insert_network_message, insert_network_nodelist_entry,
+    insert_network_packet, insert_network_path, insert_network_path_node, insert_network_poll_log,
+    insert_network_profile, insert_network_rescan_queue, insert_network_seen_by,
+    insert_network_seen_by_node, insert_network_subscription, list_network_areas,
+    list_network_duplicates, list_network_links, list_network_messages,
+    list_network_nodelist_entries, list_network_packets, list_network_packets_for_retention,
+    list_network_path, list_network_poll_logs, list_network_profiles, list_network_rescan_queue,
+    list_network_seen_by, list_network_subscriptions, mark_network_packet_quarantined,
+    replace_network_nodelist_entries, requeue_network_packet, set_network_area_subscribed,
+    set_network_profile_enabled, set_network_subscription_status, summarize_network_packets,
+    update_network_packet_file_status, update_network_rescan_status,
+};
+pub use oxidenet_repo::{
+    OxideNetApplicationRecord, OxideNetCredentialRecord, OxideNetNodeRecord,
+    find_oxidenet_application_by_id, find_oxidenet_node_by_address, insert_oxidenet_application,
+    insert_oxidenet_credential, insert_oxidenet_node, list_oxidenet_applications,
+    list_oxidenet_credentials_for_node, list_oxidenet_nodes, record_oxidenet_node_poll,
+    revoke_oxidenet_credential, update_oxidenet_application_status, update_oxidenet_node_status,
+};
 pub use schema::schema_version as read_schema_version;
 pub use session_repo::{
     SessionRecord, end_session, find_active_session_by_node, insert_session, list_active_sessions,

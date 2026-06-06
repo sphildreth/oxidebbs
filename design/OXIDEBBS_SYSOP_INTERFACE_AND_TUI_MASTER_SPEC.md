@@ -136,13 +136,17 @@ oxidebbs serve
 oxidebbs init
 oxidebbs check
 oxidebbs status
+oxidebbs audit ...
+oxidebbs config ...
 oxidebbs users ...
 oxidebbs nodes ...
 oxidebbs messages ...
 oxidebbs doors ...
+oxidebbs files ...
 oxidebbs ansi ...
 oxidebbs db ...
 oxidebbs logs ...
+oxidebbs net ...
 ```
 
 ### Essential v1 commands
@@ -455,7 +459,7 @@ oxidebbs db backup <output-path>
 ```bash
 oxidebbs db export --format json
 oxidebbs db import --format json <path>
-oxidebbs db compact
+oxidebbs db compact --output <path> [--overwrite]
 oxidebbs db verify
 ```
 
@@ -603,7 +607,7 @@ oxidebbs doors add
 oxidebbs doors edit
 oxidebbs ansi convert
 oxidebbs db import
-oxidebbs db compact
+oxidebbs db compact --output <path>
 oxidebbs config set
 ```
 
@@ -710,7 +714,8 @@ For the initial TUI:
 - No editing raw DecentDB internals.
 - No replacing the remote caller menu system.
 - No direct bundling of DOS door binaries.
-- No file-transfer administration until file areas become a real feature.
+- No caller-facing file-transfer workflows in the local TUI; file-area
+  administration is available through the v1.2 Files screen and CLI.
 - No full ANSI art editor in the first version.
 
 ### Recommended command
@@ -2042,7 +2047,11 @@ _Note: door config check, drop-file viewer, dry-run, test launch, and runtime cl
 - Delete message with confirmation.
 - Soft-delete via `MessageAdminService`.
 
-_Note: area add/edit, pin/move, and network metadata remain planned for future enhancement._
+_v1.2 adds message-area enable/disable and detailed network metadata display
+for network messages. The local TUI also includes Files, Network, and OxideNet
+screens that summarize file areas, file entries, transfer history, profiles,
+links, areas, packets, messages, poll logs, duplicate events, nodelist counts,
+applications, nodes, queues, and subscriptions from DecentDB._
 
 #### Milestone TUI-5: Database, logs, audit ✅ (v1.1)
 
@@ -2051,7 +2060,8 @@ _Note: area add/edit, pin/move, and network metadata remain planned for future e
 - Audit recent events.
 - Audit user filter.
 
-_Note: backup command, doctor/check command, and export remain CLI-only for v1.1._
+_v1.2 adds database backup/export status, verify progress, log export, and audit
+export workflows._
 
 #### Milestone TUI-6: OxideNet
 
@@ -2065,7 +2075,9 @@ _Note: backup command, doctor/check command, and export remain CLI-only for v1.1
 - Poll logs.
 - Nodelist generation.
 
-_Note: OxideNet is not yet implemented; this milestone is pending._
+_v1.2 implements the OxideNet screen with dashboard, application review, node
+registry, packet queue/quarantine summaries, subscriptions, poll logs, nodelist
+generation, and config-package operations._
 
 ### V1.1 shipped TUI
 

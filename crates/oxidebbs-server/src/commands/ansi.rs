@@ -8,7 +8,7 @@ use serde_json::json;
 use crate::config::TerminalCapabilities;
 use crate::setup::install_default_assets;
 use crate::sysop_cli::{AppContext, CliError, CliResult, emit_ok, print_json};
-use oxidebbs_term::{decode_cp437, encode_cp437, render_plain_text};
+use oxidebbs_term::{decode_cp437, render_plain_text};
 
 #[derive(Debug)]
 struct CheckIssue {
@@ -46,10 +46,9 @@ pub enum AnsiCommand {
     },
     Convert {
         input: std::path::PathBuf,
-        #[arg(long)]
-        from: Encoding,
-        #[arg(long)]
-        to: Encoding,
+        output: std::path::PathBuf,
+        #[arg(long, default_value = "text")]
+        format: ConvertFormat,
     },
     Inspect {
         screen_name: String,
@@ -60,6 +59,12 @@ pub enum AnsiCommand {
 pub enum Encoding {
     Utf8,
     Cp437,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum ConvertFormat {
+    Text,
+    Utf8,
 }
 
 pub fn run_ansi(command: AnsiCommand, ctx: &AppContext) -> CliResult<()> {
@@ -145,22 +150,31 @@ pub fn run_ansi(command: AnsiCommand, ctx: &AppContext) -> CliResult<()> {
                 println!("{}", render_plain_text(&bytes));
             }
         }
-        AnsiCommand::Convert { input, from, to } => {
+        AnsiCommand::Convert {
+            input,
+            output,
+            format,
+        } => {
             let bytes = fs::read(&input)?;
-            match (from, to) {
-                (Encoding::Utf8, Encoding::Cp437) => {
-                    let text = String::from_utf8(bytes)
-                        .map_err(|error| CliError::Message(error.to_string()))?;
-                    let encoded = encode_cp437(&text)
-                        .map_err(|error| CliError::Message(error.to_string()))?;
-                    io::stdout().write_all(&encoded)?;
-                }
-                (Encoding::Cp437, Encoding::Utf8) => {
-                    println!("{}", decode_cp437(&bytes));
-                }
-                (Encoding::Utf8, Encoding::Utf8) | (Encoding::Cp437, Encoding::Cp437) => {
-                    io::stdout().write_all(&bytes)?;
-                }
+            let input_size = bytes.len();
+            let result = match format {
+                ConvertFormat::Text => strip_ansi_and_decode(&bytes),
+                ConvertFormat::Utf8 => decode_cp437(&bytes).into_bytes(),
+            };
+            let output_size = result.len();
+            fs::write(&output, &result)?;
+            if ctx.json {
+                print_json(&json!({
+                    "input": input,
+                    "output": output,
+                    "format": format!("{:?}", format).to_ascii_lowercase(),
+                    "input_bytes": input_size,
+                    "output_bytes": output_size
+                }))?;
+            } else {
+                println!("input: {} ({} bytes)", input.display(), input_size);
+                println!("output: {} ({} bytes)", output.display(), output_size);
+                println!("format: {}", format!("{format:?}").to_ascii_lowercase());
             }
         }
         AnsiCommand::Inspect { screen_name } => {
@@ -241,11 +255,22 @@ fn screen_assets(screen: &crate::config::ScreenConfig) -> Vec<&str> {
     if let Some(asset) = screen.ansi_40.as_deref() {
         assets.push(asset);
     }
+    if let Some(asset) = screen.ascii_40.as_deref() {
+        assets.push(asset);
+    }
     if let Some(asset) = screen.ascii.as_deref() {
+        assets.push(asset);
+    }
+    if let Some(asset) = screen.text_40.as_deref() {
         assets.push(asset);
     }
     if let Some(asset) = screen.text.as_deref() {
         assets.push(asset);
     }
     assets
+}
+
+fn strip_ansi_and_decode(bytes: &[u8]) -> Vec<u8> {
+    let stripped = oxidebbs_term::ansi_parser::strip_ansi(bytes);
+    oxidebbs_term::decode_cp437(&stripped).into_bytes()
 }

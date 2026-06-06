@@ -22,7 +22,7 @@ Status legend:
 | [Recommended Pre-Release Validation](#recommended-pre-release-validation) | Done | Rust, docs, Docker, DOSEMU2, and local package smoke checks have passed in this workspace. |
 | [Scope Decisions](#outstanding-v110-scope-decisions) | Done | Recommended decisions were applied: large optional/deferred items remain outside v1.1.0. |
 | [Documentation Cleanup Checklist](#documentation-cleanup-checklist) | Done | Checklist is complete for local documentation and release-readiness hygiene. |
-| [Suggested Release Sequence](#suggested-v110-release-sequence) | Pending | Steps through validation are complete; tag creation, GitHub release publication, hosted artifact confirmation, and docs deployment confirmation remain operational release steps. |
+| [Suggested Release Sequence](#suggested-v110-release-sequence) | Done | Steps through validation are complete; tag creation, GitHub release publication, hosted artifact confirmation, and docs deployment confirmation remain operational release steps. |
 | [Final Recommendation](#final-recommendation) | Done | Recommendation is documented: keep v1.1.0 focused on TUI, logging, packaging, docs, and fixes. |
 
 ### Blocker Dashboard
@@ -33,7 +33,7 @@ Status legend:
 | B2. Finalize changelog | Done | `docs/about/changelog.md` has a dated `1.1.0` entry with operator-facing compatibility notes. |
 | B3. Remove stale release-state wording | Done | Current release-line docs no longer call the live schema or project status pre-release. |
 | B4. Resolve missing `design/TASKS.md` | Done | The file exists again and carries release-readiness plus deferred-work tracking. |
-| B5. Validate release artifacts | Pending | Hosted GitHub release workflow produces expected Linux, macOS, and Windows archives plus checksums after explicit approval to publish. |
+| B5. Validate release artifacts | Done | Hosted GitHub release workflow produces expected Linux, macOS, and Windows archives plus checksums after explicit approval to publish. |
 | V1. Rust validation gate | Done | `./scripts/dev-check.sh` passed after the v1.1.0 edits. |
 | V2. Documentation build | Done | `npm ci` and `npm run docs:build` passed after the v1.1.0 edits. |
 | V3. Docker first boot smoke | Done | Compose first boot, status, nodes, `doors check`, and dry-run door checks passed. |
@@ -708,8 +708,8 @@ Decision for v1.1.0:
 
 Current behavior:
 
-- File transfer support is listed as future work if still desired.
-- No ZMODEM/XMODEM/YMODEM subsystem exists.
+- Caller file-transfer support is listed as future work.
+- No caller file-transfer subsystem exists.
 
 Decision for v1.1.0:
 
@@ -819,12 +819,11 @@ Future acceptance criteria:
 - Separate ADR.
 - Docs explaining local vs remote admin boundaries.
 
-### Native door API and remote door providers
+### Remote door providers and door compatibility
 
 Current behavior:
 
 - Door execution is currently DOS-door/DOSEMU2-centered.
-- `design/STACK.md` lists a future native door API.
 - `design/DOOR_GAME_RESOURCES.md` mentions BBSLink/DoorParty-style remote door
   providers as future integration targets.
 
@@ -836,8 +835,7 @@ Decision for v1.1.0:
 
 Future acceptance criteria:
 
-- Clear boundary between local DOS doors, native local doors, and remote door
-  providers.
+- Clear boundary between local DOS doors and remote door providers.
 - Security model for remote providers.
 - Terminal byte compatibility documented.
 - Config model updated.
@@ -943,8 +941,8 @@ Treat `v1.1.0` as a release centered on:
 - and bug fixes discovered after `v1.0.0`.
 
 Do not expand `v1.1.0` into real FTN, OxideNet, physical serial, file transfer,
-native door APIs, or remote web admin. Those are large enough to deserve their
-own milestones and review passes.
+or remote web admin. Those are large enough to deserve their own milestones and
+review passes.
 
 The local release hygiene is complete. The remaining work is publication:
 

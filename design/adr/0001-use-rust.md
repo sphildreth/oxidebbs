@@ -6,7 +6,7 @@ Accepted
 
 ## Context
 
-OxideBBS is a systems-heavy application: telnet sessions, byte-oriented terminal rendering, process orchestration, node management, future serial support, and embedded database usage.
+OxideBBS is a systems-heavy application: telnet sessions, byte-oriented terminal rendering, process orchestration, node management, serial/modem support, and embedded database usage.
 
 ## Decision
 

@@ -2,9 +2,9 @@ use clap::{Args, Subcommand};
 use serde_json::{Value as JsonValue, json};
 
 use crate::sysop_cli::{
-    AppContext, CliError, CliResult, current_timestamp, emit_ok, generated_uuid, hash_password,
-    open_database, print_audit_events, print_json, print_sessions, print_user, prompt_line,
-    require_user, user_json,
+    AppContext, CliError, CliResult, audit, current_timestamp, emit_ok, generated_uuid,
+    hash_password, open_database, print_audit_events, print_json, print_sessions, print_user,
+    prompt_line, require_user, user_json,
 };
 use oxidebbs_db::{
     UserRecord, insert_user, list_audit_events_for_user, list_recent_sessions, list_users,
@@ -52,6 +52,8 @@ pub enum UsersCommand {
     },
     Delete {
         alias_or_id: String,
+        #[arg(long)]
+        reason: Option<String>,
     },
 }
 
@@ -120,11 +122,28 @@ pub fn run_users(command: UsersCommand, ctx: &AppContext) -> CliResult<()> {
                 }
             };
             update_user_password_hash(db.db(), &user.id, &hash)?;
+            audit(
+                &db,
+                "user:password-reset",
+                Some(&user.id),
+                None,
+                &format!("password reset for user {} ({})", user.alias, user.id),
+            )?;
             emit_ok(ctx.json, "password updated", json!({"user": user.alias}))?;
         }
         UsersCommand::SetLevel { alias_or_id, level } => {
             let user = require_user(&db, &alias_or_id)?;
             update_user_security_level(db.db(), &user.id, level)?;
+            audit(
+                &db,
+                "user:security-level",
+                Some(&user.id),
+                None,
+                &format!(
+                    "user {} ({}) security level changed from {} to {}",
+                    user.alias, user.id, user.security_level, level
+                ),
+            )?;
             emit_ok(
                 ctx.json,
                 "security level updated",
@@ -134,21 +153,76 @@ pub fn run_users(command: UsersCommand, ctx: &AppContext) -> CliResult<()> {
         UsersCommand::Enable { alias_or_id } => {
             let user = require_user(&db, &alias_or_id)?;
             update_user_status(db.db(), &user.id, "active")?;
+            audit(
+                &db,
+                "user:enable",
+                Some(&user.id),
+                None,
+                &format!(
+                    "user {} ({}) status changed from {} to active",
+                    user.alias, user.id, user.status
+                ),
+            )?;
             emit_ok(ctx.json, "user enabled", json!({"user": user.alias}))?;
         }
-        UsersCommand::Disable { alias_or_id } | UsersCommand::Delete { alias_or_id } => {
+        UsersCommand::Disable { alias_or_id } => {
             let user = require_user(&db, &alias_or_id)?;
             update_user_status(db.db(), &user.id, "disabled")?;
+            audit(
+                &db,
+                "user:disable",
+                Some(&user.id),
+                None,
+                &format!(
+                    "user {} ({}) status changed from {} to disabled",
+                    user.alias, user.id, user.status
+                ),
+            )?;
+            emit_ok(
+                ctx.json,
+                "user disabled",
+                json!({"user": user.alias, "status": "disabled"}),
+            )?;
+        }
+        UsersCommand::Delete {
+            alias_or_id,
+            reason,
+        } => {
+            let reason_text = reason.ok_or_else(|| {
+                CliError::Message("--reason is required for users delete".to_string())
+            })?;
+            let user = require_user(&db, &alias_or_id)?;
+            update_user_status(db.db(), &user.id, "disabled")?;
+            audit(
+                &db,
+                "user:delete",
+                Some(&user.id),
+                None,
+                &format!(
+                    "user {} ({}) disabled; reason: {}",
+                    user.alias, user.id, reason_text
+                ),
+            )?;
             emit_ok(
                 ctx.json,
                 "user disabled; delete is implemented as a safe disable",
-                json!({"user": user.alias, "status": "disabled"}),
+                json!({"user": user.alias, "status": "disabled", "reason": reason_text}),
             )?;
         }
         UsersCommand::PromoteSysop { alias_or_id } => {
             let user = require_user(&db, &alias_or_id)?;
             update_user_is_sysop(db.db(), &user.id, true)?;
             update_user_security_level(db.db(), &user.id, 255)?;
+            audit(
+                &db,
+                "user:promote-sysop",
+                Some(&user.id),
+                None,
+                &format!(
+                    "user {} ({}) promoted to sysop; previous sysop={} level={}",
+                    user.alias, user.id, user.is_sysop, user.security_level
+                ),
+            )?;
             emit_ok(
                 ctx.json,
                 "user promoted to sysop",
@@ -158,6 +232,13 @@ pub fn run_users(command: UsersCommand, ctx: &AppContext) -> CliResult<()> {
         UsersCommand::DemoteSysop { alias_or_id } => {
             let user = require_user(&db, &alias_or_id)?;
             update_user_is_sysop(db.db(), &user.id, false)?;
+            audit(
+                &db,
+                "user:demote-sysop",
+                Some(&user.id),
+                None,
+                &format!("user {} ({}) demoted from sysop", user.alias, user.id),
+            )?;
             emit_ok(
                 ctx.json,
                 "user demoted from sysop",
@@ -170,6 +251,16 @@ pub fn run_users(command: UsersCommand, ctx: &AppContext) -> CliResult<()> {
         } => {
             let user = require_user(&db, &old_alias)?;
             update_user_alias(db.db(), &user.id, &new_alias)?;
+            audit(
+                &db,
+                "user:rename",
+                Some(&user.id),
+                None,
+                &format!(
+                    "user {} ({}) renamed from {} to {}",
+                    user.alias, user.id, old_alias, new_alias
+                ),
+            )?;
             emit_ok(
                 ctx.json,
                 "user renamed",
@@ -228,6 +319,16 @@ fn add_user(args: UserAddArgs, db: &oxidebbs_db::OxideDb, json_output: bool) -> 
         status: "active".to_string(),
     };
     insert_user(db.db(), &user)?;
+    audit(
+        db,
+        "user:add",
+        Some(&user.id),
+        None,
+        &format!(
+            "user {} ({}) added with security level {} sysop={}",
+            user.alias, user.id, user.security_level, user.is_sysop
+        ),
+    )?;
     if json_output {
         print_json(&user_json(&user))?;
     } else {
@@ -276,5 +377,28 @@ mod tests {
         assert_eq!(user.get("security_level"), Some(&JsonValue::from(100)));
         assert_eq!(user.get("is_sysop"), Some(&JsonValue::Bool(true)));
         assert!(user.get("password_hash").is_none());
+    }
+
+    #[test]
+    fn add_user_writes_audit_event_without_password_material() {
+        let db = OxideDb::open_memory().expect("open in-memory db");
+        let args = UserAddArgs {
+            alias: Some("alice".to_string()),
+            real_name: Some("Alice User".to_string()),
+            email: None,
+            password: Some("secret-password".to_string()),
+            level: 42,
+            sysop: false,
+        };
+
+        add_user(args, &db, false).expect("add user");
+        let user = require_user(&db, "alice").expect("find user");
+        let events = list_audit_events_for_user(db.db(), &user.id, 10).expect("audit events");
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, "user:add");
+        assert!(events[0].details.contains("alice"));
+        assert!(!events[0].details.contains("secret-password"));
+        assert!(!events[0].details.contains(&user.password_hash));
     }
 }

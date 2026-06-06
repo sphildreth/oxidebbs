@@ -69,7 +69,11 @@ OxideNet is not:
 
 OxideBBS should be useful without OxideNet.
 
-OxideNet should be a later milestone built on top of stable OxideBBS primitives.
+OxideNet is implemented in v1.2 as a first-party profile on top of shared
+network primitives. The v1.2 implementation includes application submission,
+manual review, member address assignment, token and credential lifecycle,
+config package generation/import, hub/member registry state, BinkP poll
+integration, nodelist generation, and local sysop TUI operations.
 
 ## Core idea
 
@@ -98,11 +102,15 @@ The signup process itself becomes part of the BBS culture.
 OxideNet should be built using layered crates/modules.
 
 ```text
+oxidebbs-network
+    Protocol-neutral address, profile, link, message-envelope, duplicate-key,
+    queue-state, and packet-boundary types shared by FTN and OxideNet.
+
 oxidebbs-ftn
-    Generic FTN-style message model and packet handling.
+    Legacy FTN packet handling and kludge/duplicate primitives.
 
 oxidebbs-binkp
-    Future BinkP-compatible transport/poller/listener.
+    BinkP-compatible frame primitives and future transport/poller/listener.
 
 oxidebbs-oxidenet
     First-party OxideNet profile: signup, policy, config generation,
@@ -127,19 +135,19 @@ The new crates fit into the existing workspace dependency graph as follows:
 
 ```text
 oxidebbs-server
+  -> oxidebbs-network
   -> oxidebbs-ftn
   -> oxidebbs-oxidenet
-  -> oxidebbs-binkp (future)
+  -> oxidebbs-binkp
 
 oxidebbs-oxidenet
-  -> oxidebbs-ftn
-  -> oxidebbs-db
+  -> oxidebbs-network
 
 oxidebbs-binkp
-  -> oxidebbs-ftn
+  -> no OxideBBS workspace crates
 
 oxidebbs-ftn
-  -> oxidebbs-core
+  -> oxidebbs-network
   -> oxidebbs-db
 ```
 
@@ -1676,17 +1684,17 @@ Acceptance criteria:
 
 ## Documentation deliverables
 
-OxideNet should eventually include:
+OxideNet v1.2 includes:
 
 ```text
 docs/oxidenet/PRD.md
-docs/oxidenet/POLICY.md
+docs/oxidenet/policy.md
 docs/oxidenet/SETUP_MEMBER.md
 docs/oxidenet/HUB_ADMIN.md
-docs/oxidenet/ADDRESSING.md
-docs/oxidenet/AREAS.md
+docs/oxidenet/addressing.md
+docs/oxidenet/areas.md
 docs/oxidenet/CONFIG_PACKAGE.md
-docs/oxidenet/TROUBLESHOOTING.md
+docs/oxidenet/troubleshooting.md
 ```
 
 ## Final product vision

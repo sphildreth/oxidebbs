@@ -24,6 +24,20 @@ pub trait Transport: Send {
     fn hangup(&mut self) -> impl std::future::Future<Output = Result<(), TransportError>> + Send;
 }
 
+impl<T: Transport + ?Sized> Transport for &mut T {
+    async fn read_byte(&mut self) -> Result<Option<u8>, TransportError> {
+        (**self).read_byte().await
+    }
+
+    async fn write_all(&mut self, bytes: &[u8]) -> Result<(), TransportError> {
+        (**self).write_all(bytes).await
+    }
+
+    async fn hangup(&mut self) -> Result<(), TransportError> {
+        (**self).hangup().await
+    }
+}
+
 pub struct TcpTransport {
     reader: tokio::io::ReadHalf<tokio::net::TcpStream>,
     writer: tokio::io::WriteHalf<tokio::net::TcpStream>,

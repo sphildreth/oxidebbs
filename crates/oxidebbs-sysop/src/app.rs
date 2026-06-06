@@ -24,10 +24,13 @@ use crate::screens::dashboard::DashboardScreen;
 use crate::screens::database::DatabaseScreen;
 use crate::screens::doctor::DoctorScreen;
 use crate::screens::doors::DoorsScreen;
+use crate::screens::files::FilesScreen;
 use crate::screens::help::HelpScreen;
 use crate::screens::logs::LogsScreen;
 use crate::screens::messages::MessagesScreen;
+use crate::screens::network::NetworkScreen;
 use crate::screens::nodes::NodesScreen;
+use crate::screens::oxidenet::OxideNetScreen;
 use crate::screens::users::UsersScreen;
 use crate::services::node_service::NodeAdminService;
 use crate::theme::Theme;
@@ -92,6 +95,9 @@ pub struct App {
     pub nodes_screen: NodesScreen,
     pub users_screen: UsersScreen,
     pub messages_screen: MessagesScreen,
+    pub files_screen: FilesScreen,
+    pub network_screen: NetworkScreen,
+    pub oxidenet_screen: OxideNetScreen,
     pub doors_screen: DoorsScreen,
     pub ansi_screen: AnsiScreen,
     pub config_screen: ConfigScreen,
@@ -146,6 +152,9 @@ impl App {
             nodes_screen: NodesScreen::new(theme.clone(), node_count),
             users_screen: UsersScreen::new(theme.clone()),
             messages_screen: MessagesScreen::new(theme.clone()),
+            files_screen: FilesScreen::new(theme.clone()),
+            network_screen: NetworkScreen::new(theme.clone()),
+            oxidenet_screen: OxideNetScreen::new(theme.clone()),
             doors_screen: DoorsScreen::new(theme.clone()),
             ansi_screen: AnsiScreen::new(theme.clone(), screens_path),
             config_screen: ConfigScreen::new(theme.clone(), config_path),
@@ -201,6 +210,30 @@ impl App {
                 action: PaletteAction::Navigate(ScreenId::Messages),
             },
             PaletteCommand {
+                id: "nav.files".into(),
+                label: "Go to Files".into(),
+                description: "Manage file areas, uploads, and transfer history".into(),
+                shortcut: Some("Ctrl+F".into()),
+                is_destructive: false,
+                action: PaletteAction::Navigate(ScreenId::Files),
+            },
+            PaletteCommand {
+                id: "nav.network".into(),
+                label: "Go to Network".into(),
+                description: "View FTN and OxideNet status".into(),
+                shortcut: Some("Ctrl+X".into()),
+                is_destructive: false,
+                action: PaletteAction::Navigate(ScreenId::Network),
+            },
+            PaletteCommand {
+                id: "nav.oxidenet".into(),
+                label: "Go to OxideNet".into(),
+                description: "Manage OxideNet applications, nodes, queues, and nodelists".into(),
+                shortcut: Some("Ctrl+O".into()),
+                is_destructive: false,
+                action: PaletteAction::Navigate(ScreenId::OxideNet),
+            },
+            PaletteCommand {
                 id: "nav.logs".into(),
                 label: "Go to Logs".into(),
                 description: "View server logs".into(),
@@ -220,7 +253,7 @@ impl App {
                 id: "nav.doctor".into(),
                 label: "Go to Doctor".into(),
                 description: "Run verbose sysop health checks".into(),
-                shortcut: Some("Ctrl+O".into()),
+                shortcut: None,
                 is_destructive: false,
                 action: PaletteAction::Navigate(ScreenId::Doctor),
             },
@@ -250,6 +283,24 @@ impl App {
                 is_destructive: true,
                 action: PaletteAction::RunCommand("nodes.reset_stale".into()),
             });
+            commands.extend([
+                PaletteCommand {
+                    id: "oxidenet.install_hub".into(),
+                    label: "Install OxideNet Hub".into(),
+                    description: "Install default OxideNet hub profile, node, and areas".into(),
+                    shortcut: None,
+                    is_destructive: true,
+                    action: PaletteAction::RunCommand("oxidenet.install_hub".into()),
+                },
+                PaletteCommand {
+                    id: "oxidenet.generate_nodelist".into(),
+                    label: "Generate OxideNet Nodelist".into(),
+                    description: "Publish the OxideNet nodelist from the registry".into(),
+                    shortcut: None,
+                    is_destructive: true,
+                    action: PaletteAction::RunCommand("oxidenet.generate_nodelist".into()),
+                },
+            ]);
         }
         commands
     }
@@ -290,6 +341,9 @@ impl App {
             self.users_screen.refresh(db);
             self.doors_screen.refresh(db);
             self.messages_screen.refresh(db);
+            self.files_screen.refresh(db);
+            self.network_screen.refresh(db);
+            self.oxidenet_screen.refresh(db);
             self.database_screen.refresh(db);
             self.audit_screen.refresh(db);
             self.active_nodes = self
@@ -355,6 +409,18 @@ impl App {
                 self.messages_screen
                     .handle_event(event, &self.db, self.config.readonly)
             }
+            ScreenId::Files => {
+                self.files_screen
+                    .handle_event(event, &self.db, self.config.readonly)
+            }
+            ScreenId::Network => {
+                self.network_screen
+                    .handle_event(event, &self.db, self.config.readonly)
+            }
+            ScreenId::OxideNet => {
+                self.oxidenet_screen
+                    .handle_event(event, &self.db, self.config.readonly)
+            }
             ScreenId::Database => {
                 self.database_screen
                     .handle_event(event, &self.db, self.config.readonly)
@@ -387,6 +453,9 @@ impl App {
             ScreenId::Nodes => self.nodes_screen.render(frame, area),
             ScreenId::Users => self.users_screen.render(frame, area),
             ScreenId::Messages => self.messages_screen.render(frame, area),
+            ScreenId::Files => self.files_screen.render(frame, area),
+            ScreenId::Network => self.network_screen.render(frame, area),
+            ScreenId::OxideNet => self.oxidenet_screen.render(frame, area),
             ScreenId::Doors => self.doors_screen.render(frame, area),
             ScreenId::Ansi => self.ansi_screen.render(frame, area),
             ScreenId::Config => self.config_screen.render(frame, area),
@@ -618,13 +687,28 @@ fn handle_ui_event(app: &mut App, event: UiEvent) {
             UiEvent::Cancel => {
                 app.users_screen.cancel_pending_action();
                 app.doors_screen.cancel_pending_action();
+                app.messages_screen.cancel_pending_action();
+                app.files_screen.cancel_pending_action();
+                app.oxidenet_screen.cancel_pending_action();
                 app.modal = None;
             }
             UiEvent::Confirm => {
                 if let Some(modal) = app.modal.take() {
                     match modal {
-                        ModalKind::Form(form) => handle_form_submit(app, form),
-                        ModalKind::Confirm(confirm) => handle_confirm_submit(app, &confirm.title),
+                        ModalKind::Form(form) => {
+                            if app.config.readonly && form_submit_mutates(&form.title) {
+                                block_readonly_action(app, &form.title);
+                            } else {
+                                handle_form_submit(app, form);
+                            }
+                        }
+                        ModalKind::Confirm(confirm) => {
+                            if app.config.readonly && confirm_submit_mutates(&confirm.title) {
+                                block_readonly_action(app, &confirm.title);
+                            } else {
+                                handle_confirm_submit(app, &confirm.title);
+                            }
+                        }
                         ModalKind::Error(_) | ModalKind::Info(_) => {}
                     }
                 }
@@ -658,12 +742,19 @@ fn handle_ui_event(app: &mut App, event: UiEvent) {
                     Some(ModalKind::Confirm(_)) => match key.code {
                         KeyCode::Char('y') | KeyCode::Char('Y') => {
                             if let Some(ModalKind::Confirm(confirm)) = app.modal.take() {
-                                handle_confirm_submit(app, &confirm.title);
+                                if app.config.readonly && confirm_submit_mutates(&confirm.title) {
+                                    block_readonly_action(app, &confirm.title);
+                                } else {
+                                    handle_confirm_submit(app, &confirm.title);
+                                }
                             }
                         }
                         KeyCode::Char('n') | KeyCode::Char('N') => {
                             app.users_screen.cancel_pending_action();
                             app.doors_screen.cancel_pending_action();
+                            app.messages_screen.cancel_pending_action();
+                            app.files_screen.cancel_pending_action();
+                            app.oxidenet_screen.cancel_pending_action();
                             app.modal = None;
                         }
                         _ => {}
@@ -698,7 +789,9 @@ fn handle_ui_event(app: &mut App, event: UiEvent) {
                     match cmd.action {
                         PaletteAction::Navigate(screen) => app.navigate_to(screen),
                         PaletteAction::RunCommand(ref id) => {
-                            if id == "nodes.reset_stale" {
+                            if app.config.readonly {
+                                block_readonly_action(app, &cmd.label);
+                            } else if id == "nodes.reset_stale" {
                                 match app.node_service.reset_stale() {
                                     Ok(()) => {
                                         if let Some(db) = &app.db {
@@ -713,6 +806,26 @@ fn handle_ui_event(app: &mut App, event: UiEvent) {
                                         app.refresh_data();
                                     }
                                     Err(error) => set_error(app, "Reset Stale Nodes", error),
+                                }
+                            } else if id == "oxidenet.install_hub" {
+                                if let Some(db) = &app.db {
+                                    match crate::services::oxidenet_service::OxideNetAdminService::install_hub_defaults(db) {
+                                        Ok(()) => {
+                                            app.refresh_data();
+                                            app.set_status("OxideNet hub defaults installed");
+                                        }
+                                        Err(error) => set_error(app, "Install OxideNet Hub", error),
+                                    }
+                                }
+                            } else if id == "oxidenet.generate_nodelist"
+                                && let Some(db) = &app.db
+                            {
+                                match crate::services::oxidenet_service::OxideNetAdminService::generate_nodelist(db) {
+                                    Ok(count) => {
+                                        app.refresh_data();
+                                        app.set_status(format!("OxideNet nodelist generated with {count} entries"));
+                                    }
+                                    Err(error) => set_error(app, "Generate OxideNet Nodelist", error),
                                 }
                             }
                         }
@@ -806,6 +919,34 @@ fn apply_ui_action(app: &mut App, action: UiAction) {
         }
         UiAction::Quit => app.should_quit = true,
     }
+}
+
+fn form_submit_mutates(title: &str) -> bool {
+    matches!(
+        title,
+        "Send Message"
+            | "Broadcast Message"
+            | "Reset Password"
+            | "Set Security Level"
+            | "Set Config Value"
+    )
+}
+
+fn confirm_submit_mutates(title: &str) -> bool {
+    !matches!(title, "Quit Sysop TUI" | "Active Nodes")
+}
+
+fn block_readonly_action(app: &mut App, title: &str) {
+    app.users_screen.cancel_pending_action();
+    app.doors_screen.cancel_pending_action();
+    app.messages_screen.cancel_pending_action();
+    app.files_screen.cancel_pending_action();
+    app.oxidenet_screen.cancel_pending_action();
+    set_info_message(
+        app,
+        "Read Only",
+        &format!("{title} is unavailable while the sysop TUI is running in read-only mode."),
+    );
 }
 
 fn request_quit(app: &mut App) {
@@ -1026,6 +1167,31 @@ fn handle_form_submit(app: &mut App, form: crate::widgets::modal::FormModal) {
                 }
             }
         }
+        "Set Config Value" => {
+            if let Some(key_field) = form.fields.first()
+                && let Some(value_field) = form.fields.get(1)
+            {
+                match app
+                    .config_screen
+                    .set_value(&key_field.value, &value_field.value)
+                {
+                    Ok(()) => {
+                        if let Some(db) = &app.db {
+                            let _ = crate::services::audit_service::AuditService::record(
+                                db.db(),
+                                "config_value_set",
+                                None,
+                                None,
+                                &format!("key={}", key_field.value),
+                            );
+                        }
+                        app.refresh_data();
+                        app.set_status(format!("Config value {} updated", key_field.value));
+                    }
+                    Err(error) => set_error(app, "Set Config Value", error),
+                }
+            }
+        }
         _ => {}
     }
 }
@@ -1076,16 +1242,58 @@ fn handle_confirm_submit(app: &mut App, title: &str) {
                 }
             }
         }
-        "Enable User" | "Disable User" | "Grant Sysop" | "Revoke Sysop" => {
-            match app.users_screen.confirm_pending_action(&app.db) {
+        "Enable User"
+        | "Disable User"
+        | "Grant Sysop"
+        | "Revoke Sysop"
+        | "Set Status to active"
+        | "Set Status to locked"
+        | "Set Status to disabled"
+        | "Update Security Level" => match app.users_screen.confirm_pending_action(&app.db) {
+            Ok(()) => app.refresh_data(),
+            Err(error) => set_error(app, title, error),
+        },
+        "Enable Door" | "Disable Door" | "Add Door" | "Update Door" => {
+            match app.doors_screen.confirm_pending_action(&app.db) {
                 Ok(()) => app.refresh_data(),
                 Err(error) => set_error(app, title, error),
             }
         }
-        "Enable Door" | "Disable Door" => match app.doors_screen.confirm_pending_action(&app.db) {
-            Ok(()) => app.refresh_data(),
+        "Enable Message Area" | "Disable Message Area" => {
+            match app.messages_screen.confirm_pending_action(&app.db) {
+                Ok(()) => app.refresh_data(),
+                Err(error) => set_error(app, title, error),
+            }
+        }
+        "Enable File Area"
+        | "Disable File Area"
+        | "Approve File Entry"
+        | "Unapprove File Entry" => match app.files_screen.confirm_pending_action(&app.db) {
+            Ok(Some(message)) => {
+                app.refresh_data();
+                app.set_status(message);
+            }
+            Ok(None) => app.refresh_data(),
             Err(error) => set_error(app, title, error),
         },
+        "Install OxideNet Hub"
+        | "Approve OxideNet Application"
+        | "Reject OxideNet Application"
+        | "Hold OxideNet Application"
+        | "Suspend OxideNet Node"
+        | "Activate OxideNet Node"
+        | "Rotate OxideNet Password"
+        | "Issue OxideNet Token"
+        | "Generate OxideNet Nodelist" => {
+            match app.oxidenet_screen.confirm_pending_action(&app.db) {
+                Ok(Some(message)) => {
+                    app.refresh_data();
+                    app.set_status(message);
+                }
+                Ok(None) => app.refresh_data(),
+                Err(error) => set_error(app, title, error),
+            }
+        }
         _ => {}
     }
 }
@@ -1294,6 +1502,92 @@ mod tests {
     #[test]
     fn confirming_quit_modal_sets_should_quit() {
         let mut app = App::new(AppConfig::default());
+        handle_ui_event(&mut app, UiEvent::Quit);
+
+        handle_ui_event(&mut app, UiEvent::Confirm);
+
+        assert!(app.should_quit);
+        assert!(app.modal.is_none());
+    }
+
+    #[test]
+    fn readonly_dashboard_does_not_open_node_message_forms() {
+        let mut app = App::new(AppConfig {
+            readonly: true,
+            ..AppConfig::default()
+        });
+
+        handle_ui_event(
+            &mut app,
+            UiEvent::Key(KeyEvent::new(KeyCode::Char('m'), KeyModifiers::NONE)),
+        );
+        assert!(app.modal.is_none());
+
+        handle_ui_event(
+            &mut app,
+            UiEvent::Key(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE)),
+        );
+        assert!(app.modal.is_none());
+    }
+
+    #[test]
+    fn readonly_blocks_mutating_form_submission() {
+        let mut app = App::new(AppConfig {
+            readonly: true,
+            ..AppConfig::default()
+        });
+        app.modal = Some(ModalKind::Form(FormModal {
+            title: "Broadcast Message".to_string(),
+            fields: vec![FormField {
+                label: "Message".to_string(),
+                value: "hello".to_string(),
+                is_password: false,
+            }],
+            active_field: 0,
+        }));
+
+        handle_ui_event(&mut app, UiEvent::Confirm);
+
+        match app.modal {
+            Some(ModalKind::Info(ref modal)) => {
+                assert_eq!(modal.title, "Read Only");
+                assert!(modal.message.contains("Broadcast Message"));
+            }
+            _ => panic!("expected read-only info modal"),
+        }
+    }
+
+    #[test]
+    fn readonly_blocks_mutating_confirm_submission() {
+        let mut app = App::new(AppConfig {
+            readonly: true,
+            ..AppConfig::default()
+        });
+        app.modal = Some(ModalKind::Confirm(ConfirmModal {
+            title: "Delete Message".to_string(),
+            message: "Delete?".to_string(),
+            detail: None,
+            confirm_label: "Delete".to_string(),
+            cancel_label: "Cancel".to_string(),
+        }));
+
+        handle_ui_event(&mut app, UiEvent::Confirm);
+
+        match app.modal {
+            Some(ModalKind::Info(ref modal)) => {
+                assert_eq!(modal.title, "Read Only");
+                assert!(modal.message.contains("Delete Message"));
+            }
+            _ => panic!("expected read-only info modal"),
+        }
+    }
+
+    #[test]
+    fn readonly_allows_quit_confirmation() {
+        let mut app = App::new(AppConfig {
+            readonly: true,
+            ..AppConfig::default()
+        });
         handle_ui_event(&mut app, UiEvent::Quit);
 
         handle_ui_event(&mut app, UiEvent::Confirm);

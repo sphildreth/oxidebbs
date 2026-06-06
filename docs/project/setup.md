@@ -3,10 +3,10 @@
 OxideBBS includes an interactive setup command for creating a new local board
 configuration.
 
-Run it from the repository root:
+Run it from the directory where you want the board files created:
 
 ```bash
-cargo run -p oxidebbs-server -- setup
+oxidebbs-server setup
 ```
 
 By default the wizard writes:
@@ -18,14 +18,14 @@ config/oxidebbs.toml
 Use `--output` to choose another config path:
 
 ```bash
-cargo run -p oxidebbs-server -- setup --output config/my-bbs.toml
+oxidebbs-server setup --output config/my-bbs.toml
 ```
 
 Use the global `--data` option when setup should initialize a database path
 other than the generated config default:
 
 ```bash
-cargo run -p oxidebbs-server -- --data /srv/oxidebbs/oxidebbs.ddb setup
+oxidebbs-server --data /srv/oxidebbs/oxidebbs.ddb setup
 ```
 
 `--data` can also point at a directory. Directory paths, including paths written
@@ -48,7 +48,7 @@ The wizard asks for:
 Press Enter at a prompt to accept the value shown in brackets.
 
 Setup writes the TOML config, creates required directories, installs the bundled
-ANSI/screen assets when requested, initializes a schema `4` DecentDB database,
+ANSI/screen assets when requested, initializes a schema `8` DecentDB database,
 creates the initial sysop account, and creates the
 default `general` local message area. The generated sysop account is real data,
 so a setup-created database is not an empty restore target for `db import`.
@@ -68,7 +68,7 @@ rotation, and override precedence.
 After setup, `serve` can use the generated file directly:
 
 ```bash
-cargo run -p oxidebbs-server -- --config config/oxidebbs.toml serve
+oxidebbs-server --config config/oxidebbs.toml serve
 ```
 
 ## Created Paths
@@ -89,13 +89,13 @@ The command will not overwrite an existing output file unless `--force` is
 provided:
 
 ```bash
-cargo run -p oxidebbs-server -- setup --force
+oxidebbs-server setup --force
 ```
 
 For unattended setup, provide the required values as flags:
 
 ```bash
-cargo run -p oxidebbs-server -- setup \
+oxidebbs-server setup \
   --board-name "My BBS" \
   --sysop-alias sysop \
   --sysop-password "change-this" \
@@ -114,21 +114,21 @@ Use `--enable-example-door` when a generated config should enable the bundled
 Validate the generated config:
 
 ```bash
-cargo run -p oxidebbs-server -- --config config/oxidebbs.toml check
+oxidebbs-server --config config/oxidebbs.toml check
 ```
 
 The same validation is also available as:
 
 ```bash
-cargo run -p oxidebbs-server -- --config config/oxidebbs.toml config check
+oxidebbs-server --config config/oxidebbs.toml config check
 ```
 
 Then inspect local sysop commands:
 
 ```bash
-cargo run -p oxidebbs-server -- --config config/oxidebbs.toml users list
-cargo run -p oxidebbs-server -- --config config/oxidebbs.toml nodes list
-cargo run -p oxidebbs-server -- --config config/oxidebbs.toml db stats
+oxidebbs-server --config config/oxidebbs.toml users list
+oxidebbs-server --config config/oxidebbs.toml nodes list
+oxidebbs-server --config config/oxidebbs.toml db stats
 ```
 
 The setup command may include a sample door definition and installs the bundled
@@ -142,9 +142,9 @@ DOOR packages and does not bundle third-party doors.
 Sysops validating doors should use commands like:
 
 ```bash
-cargo run -p oxidebbs-server -- --config config/oxidebbs.toml doors check oxide-check
-cargo run -p oxidebbs-server -- --config config/oxidebbs.toml doors dropfile oxide-check --user sysop --node 1 --format DORINFO1.DEF
-cargo run -p oxidebbs-server -- --config config/oxidebbs.toml doors test oxide-check --user sysop --dry-run
+oxidebbs-server --config config/oxidebbs.toml doors check oxide-check
+oxidebbs-server --config config/oxidebbs.toml doors dropfile oxide-check --user sysop --node 1 --format DORINFO1.DEF
+oxidebbs-server --config config/oxidebbs.toml doors test oxide-check --user sysop --dry-run
 ```
 
 Dry-run verifies drop-file generation without requiring DOSEMU2.
@@ -173,7 +173,7 @@ test -d /dev/pts && ls -ld /dev/pts
 4. Run:
 
 ```bash
-cargo run -p oxidebbs-server -- --config config/oxidebbs.toml check
+oxidebbs-server --config config/oxidebbs.toml check
 ```
 
 5. Start `serve`, connect as a caller, and launch the test door from the `Doors`

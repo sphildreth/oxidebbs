@@ -5,8 +5,10 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use crate::input::{ScreenId, UiEvent};
 use crate::screens::common::UiAction;
 use crate::theme::Theme;
+use crate::widgets::modal::{FormField, FormModal, ModalKind};
 use std::fs;
 use std::path::PathBuf;
+use std::process::Command;
 
 pub struct ConfigScreen {
     pub theme: Theme,
@@ -54,9 +56,49 @@ impl ConfigScreen {
             UiEvent::Key(key) if key.code == KeyCode::Esc => {
                 return UiAction::Navigate(ScreenId::Dashboard);
             }
+            UiEvent::Key(key) if key.code == KeyCode::Char('r') => {
+                self.refresh();
+            }
+            UiEvent::Key(key) if key.code == KeyCode::Char('e') && !_readonly => {
+                self.status = launch_editor(&self.config_path);
+            }
+            UiEvent::Key(key) if key.code == KeyCode::Char('s') && !_readonly => {
+                return UiAction::OpenModal(ModalKind::Form(FormModal {
+                    title: "Set Config Value".to_string(),
+                    fields: vec![
+                        FormField {
+                            label: "Key".to_string(),
+                            value: String::new(),
+                            is_password: false,
+                        },
+                        FormField {
+                            label: "Value".to_string(),
+                            value: String::new(),
+                            is_password: false,
+                        },
+                    ],
+                    active_field: 0,
+                }));
+            }
             _ => {}
         }
         UiAction::None
+    }
+
+    pub fn set_value(&mut self, key: &str, value: &str) -> Result<(), crate::SysopError> {
+        let contents = fs::read_to_string(&self.config_path)?;
+        let mut root = contents
+            .parse::<toml::Value>()
+            .map_err(|error| crate::SysopError::Message(format!("config parse failed: {error}")))?;
+        set_dotted_value(&mut root, key, parse_config_value(value))?;
+        fs::write(
+            &self.config_path,
+            toml::to_string_pretty(&root).map_err(|error| {
+                crate::SysopError::Message(format!("config write failed: {error}"))
+            })?,
+        )?;
+        self.refresh();
+        Ok(())
     }
 
     pub fn render(&self, frame: &mut Frame, area: Rect) {
@@ -87,6 +129,14 @@ impl ConfigScreen {
                 Span::styled(value, self.theme.normal_style()),
             ])
         }));
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled("Actions: ", self.theme.label_style()),
+            Span::styled(
+                "R Reload | S Set Value | E Editor | Esc Back",
+                self.theme.muted_style(),
+            ),
+        ]));
 
         Paragraph::new(lines)
             .style(self.theme.normal_style())
@@ -98,6 +148,60 @@ impl ConfigScreen {
                     .title_style(self.theme.title_style()),
             )
             .render(area, frame.buffer_mut());
+    }
+}
+
+fn parse_config_value(value: &str) -> toml::Value {
+    if let Ok(parsed) = value.parse::<bool>() {
+        toml::Value::Boolean(parsed)
+    } else if let Ok(parsed) = value.parse::<i64>() {
+        toml::Value::Integer(parsed)
+    } else {
+        toml::Value::String(value.to_string())
+    }
+}
+
+fn set_dotted_value(
+    root: &mut toml::Value,
+    key: &str,
+    value: toml::Value,
+) -> Result<(), crate::SysopError> {
+    let parts = key
+        .split('.')
+        .filter(|part| !part.trim().is_empty())
+        .collect::<Vec<_>>();
+    if parts.is_empty() {
+        return Err(crate::SysopError::Message(
+            "config key must not be blank".to_string(),
+        ));
+    }
+    let mut current = root;
+    for part in &parts[..parts.len() - 1] {
+        let table = current.as_table_mut().ok_or_else(|| {
+            crate::SysopError::Message(format!("config path {part:?} is not a table"))
+        })?;
+        current = table
+            .entry((*part).to_string())
+            .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
+    }
+    let table = current.as_table_mut().ok_or_else(|| {
+        crate::SysopError::Message("config target parent is not a table".to_string())
+    })?;
+    table.insert(parts[parts.len() - 1].to_string(), value);
+    Ok(())
+}
+
+fn launch_editor(path: &std::path::Path) -> String {
+    let editor = std::env::var("EDITOR").unwrap_or_default();
+    if editor.trim().is_empty() {
+        return format!(
+            "Editor launch skipped for {}: EDITOR is not set",
+            path.display()
+        );
+    }
+    match Command::new(editor).arg(path).status() {
+        Ok(status) => format!("Editor exited with {status} for {}", path.display()),
+        Err(error) => format!("Editor launch failed: {error}"),
     }
 }
 

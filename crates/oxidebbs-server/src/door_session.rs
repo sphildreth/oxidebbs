@@ -29,14 +29,15 @@ use oxidebbs_core::door::DoorDefinition;
 use oxidebbs_core::user::User;
 use oxidebbs_db::{
     AuditEventRecord, DoorDefinitionRecord, DoorRunFinish, DoorRunRecord, OxideDb,
-    find_door_by_key, finish_door_run, insert_audit_event, insert_door_definition, insert_door_run,
-    list_door_definitions, update_door_definition,
+    find_active_door_run_by_door_id, find_door_by_key, finish_door_run, insert_audit_event,
+    insert_door_definition, insert_door_run, list_door_definitions, update_door_definition,
 };
 #[cfg(test)]
 use oxidebbs_door::DoorRunner;
 use oxidebbs_door::{
     DoorCaller, DoorRunPlan, DoorRunRequest, cleanup_node_runtime_dir, node_runtime_dir,
     prepare_door_run, prepare_node_runtime_dir, runner_supports_dosemu2_cli,
+    sync_door_runtime_outputs,
 };
 use oxidebbs_telnet::Transport;
 use oxidebbs_term::encode_cp437;
@@ -265,6 +266,12 @@ impl<'a> DoorService<'a> {
         if !door.enabled {
             return Err(format!("Door {} is disabled.", door.key));
         }
+        if let Some(message) = self
+            .exclusive_door_unavailable_message(door)
+            .map_err(|error| format!("Door {} exclusive status check failed: {error}", door.key))?
+        {
+            return Err(message);
+        }
         if !(1..=240).contains(&door.time_limit_minutes) {
             return Err(format!(
                 "Door {} time limit must be between 1 and 240 minutes.",
@@ -366,6 +373,7 @@ impl<'a> DoorService<'a> {
     ) -> ServeResult<DoorExecutionSummary> {
         self.validate_door(door, node_number)
             .map_err(ServeError::Runtime)?;
+        self.ensure_exclusive_door_available(door)?;
         let mut runtime_guard =
             DoorRuntimeDirectoryGuard::prepare(&self.config.paths.runtime, node_number)?;
         let request = self.build_request(user, node_number, door)?;
@@ -433,6 +441,7 @@ impl<'a> DoorService<'a> {
     ) -> ServeResult<DoorExecutionSummary> {
         self.validate_door(door, node_number)
             .map_err(ServeError::Runtime)?;
+        self.ensure_exclusive_door_available(door)?;
         let _runtime_guard =
             DoorRuntimeDirectoryGuard::prepare(&self.config.paths.runtime, node_number)?;
         let request = self.build_request(user, node_number, door)?;
@@ -584,7 +593,29 @@ impl<'a> DoorService<'a> {
             );
         }
 
-        let finish_note = door_finish_note(&bridge, &runner_logs);
+        let mut finish_note = door_finish_note(&bridge, &runner_logs);
+        match sync_door_runtime_outputs(
+            &request.runtime_dir,
+            &request.door.working_dir,
+            &request.door.drop_file,
+        ) {
+            Ok(()) => {
+                finish_note.push_str("; runtime_outputs_synced=true");
+            }
+            Err(error) => {
+                let sync_error = format!("runtime output sync failed: {error}");
+                warn!(
+                    door = %door.key,
+                    run_id = %run_id,
+                    node = %node_number,
+                    runtime_dir = %request.runtime_dir.display(),
+                    working_dir = %request.door.working_dir,
+                    "{sync_error}"
+                );
+                finish_note.push_str("; runtime_outputs_synced=false; ");
+                finish_note.push_str(&sync_error);
+            }
+        }
         self.finish_run(
             &run_id,
             door,
@@ -672,6 +703,32 @@ impl<'a> DoorService<'a> {
             node_number,
             runtime_dir: node_runtime_dir(&self.config.paths.runtime, node_number),
         })
+    }
+
+    fn ensure_exclusive_door_available(&self, door: &DoorDefinitionRecord) -> ServeResult<()> {
+        if let Some(message) = self.exclusive_door_unavailable_message(door)? {
+            return Err(ServeError::Runtime(message));
+        }
+
+        Ok(())
+    }
+
+    fn exclusive_door_unavailable_message(
+        &self,
+        door: &DoorDefinitionRecord,
+    ) -> ServeResult<Option<String>> {
+        if !door.exclusive {
+            return Ok(None);
+        }
+
+        let active_run = find_active_door_run_by_door_id(self.db.db(), &door.id)
+            .map_err(ServeError::Database)?;
+        Ok(active_run.map(|active_run| {
+            format!(
+                "Door {} is exclusive and is already running on node {} as run {}.",
+                door.key, active_run.node_number, active_run.id
+            )
+        }))
     }
 
     fn insert_started_run(
@@ -809,6 +866,7 @@ impl<'a> DoorService<'a> {
             exclusive: door.exclusive,
             time_limit_minutes: i64::from(door.time_limit_minutes),
             enabled: self.config.doors.enabled && door.enabled,
+            min_security_level: i64::from(door.min_security_level),
         }
     }
 }
@@ -1243,7 +1301,7 @@ where
 fn supported_drop_file(drop_file: &str) -> bool {
     matches!(
         drop_file.to_ascii_uppercase().as_str(),
-        "DOOR.SYS" | "DORINFO1.DEF"
+        "DOOR.SYS" | "DORINFO1.DEF" | "CHAIN.TXT" | "DOORFILE.SR" | "PCBOARD.SYS" | "CALLINFO.BBS"
     )
 }
 
@@ -1351,6 +1409,7 @@ fn door_to_core(door: &DoorDefinitionRecord) -> ServeResult<DoorDefinition> {
             ServeError::Runtime(format!("door time limit is out of range: {error}"))
         })?,
         enabled: door.enabled,
+        min_security_level: door.min_security_level as i32,
     })
 }
 
@@ -1483,9 +1542,10 @@ mod tests {
 
     use super::*;
     use crate::config::{
-        AuditConfig, AuthConfig, BoardConfig, DatabaseConfig, DoorDefConfig, DoorsConfig,
-        FlowConfig, FtnConfig, LoggingConfig, MenuConfig, NodesConfig, PathsConfig, ScreenConfig,
-        SysopConfig, TelnetConfig, TerminalConfig,
+        AdminWebConfig, AuditConfig, AuthConfig, BoardConfig, DatabaseConfig, DoorDefConfig,
+        DoorsConfig, FileTransfersConfig, FlowConfig, FtnConfig, LoggingConfig, MenuConfig,
+        NetworkConfig, NodesConfig, PathsConfig, ScreenConfig, SerialConfig, SysopConfig,
+        TelnetConfig, TerminalConfig,
     };
 
     const USER_ID: &str = "00000000-0000-4000-8000-000000000701";
@@ -1547,9 +1607,15 @@ mod tests {
                     exclusive: false,
                     time_limit_minutes: 1,
                     enabled: true,
+                    min_security_level: 0,
                 }],
             },
+            network: NetworkConfig::default(),
             ftn: FtnConfig::default(),
+            serial: SerialConfig::default(),
+            file_transfers: FileTransfersConfig::default(),
+            admin_web: AdminWebConfig::default(),
+            web_terminal: crate::config::WebTerminalConfig::default(),
         }
     }
 
@@ -1616,6 +1682,7 @@ mod tests {
             exclusive: false,
             time_limit_minutes: 1,
             enabled: true,
+            min_security_level: 0,
         };
         let doors = vec![door];
         let menu = render_door_menu(&doors);
@@ -1648,6 +1715,7 @@ mod tests {
             exclusive: false,
             time_limit_minutes: 1,
             enabled: true,
+            min_security_level: 0,
         };
         let mut user = test_user();
         user.id = "not-a-uuid".to_string();
@@ -1829,10 +1897,23 @@ mod tests {
         door.drop_file = "BAD.TXT".to_string();
         assert!(service.validate_door(&door, 1).is_err());
 
-        door.drop_file = "DOOR.SYS".to_string();
         door.command = "OXIDECHK.EXE".to_string();
-        assert!(service.validate_door(&door, 1).is_ok());
+        for drop_file in [
+            "DOOR.SYS",
+            "DORINFO1.DEF",
+            "CHAIN.TXT",
+            "DOORFILE.SR",
+            "PCBOARD.SYS",
+            "CALLINFO.BBS",
+        ] {
+            door.drop_file = drop_file.to_string();
+            assert!(
+                service.validate_door(&door, 1).is_ok(),
+                "{drop_file} should validate"
+            );
+        }
 
+        door.drop_file = "DOOR.SYS".to_string();
         door.command = "LORD.EXE /N1".to_string();
         assert!(service.validate_door(&door, 1).is_ok());
 
@@ -1907,6 +1988,90 @@ mod tests {
         assert_eq!(run.bytes_out, 0);
 
         let _ = fs::remove_dir_all(runtime);
+    }
+
+    #[test]
+    fn exclusive_door_blocks_second_unfinished_run() {
+        let runtime = temp_dir("exclusive-block-runtime");
+        let working_dir = temp_dir("exclusive-block-working");
+        let config = test_config(runtime.clone(), working_dir.clone());
+        let db = OxideDb::open_memory().expect("open db");
+        insert_test_user(&db);
+        let service = DoorService::new(&db, &config);
+        let mut door = service
+            .list_enabled_doors()
+            .expect("list doors")
+            .pop()
+            .expect("door");
+        door.exclusive = true;
+        insert_door_run(
+            db.db(),
+            &DoorRunRecord {
+                id: "00000000-0000-4000-8000-000000000901".to_string(),
+                door_id: door.id.clone(),
+                user_id: USER_ID.to_string(),
+                node_number: 2,
+                started_at: "2026-01-01T00:00:00.000000Z".to_string(),
+                ended_at: None,
+                exit_code: None,
+                timed_out: false,
+                disconnect_forced: false,
+                bytes_in: 0,
+                bytes_out: 0,
+            },
+        )
+        .expect("insert active run");
+
+        let result = service.execute_with_runner(&DryRunDoorRunner, &test_user(), 1, &door, false);
+
+        let error = result.expect_err("exclusive run should block");
+        assert!(error.to_string().contains("already running on node 2"));
+        assert!(!runtime.join("node-001").exists());
+
+        let _ = fs::remove_dir_all(runtime);
+        let _ = fs::remove_dir_all(working_dir);
+    }
+
+    #[test]
+    fn exclusive_door_allows_finished_run_history() {
+        let runtime = temp_dir("exclusive-finished-runtime");
+        let working_dir = temp_dir("exclusive-finished-working");
+        let config = test_config(runtime.clone(), working_dir.clone());
+        let db = OxideDb::open_memory().expect("open db");
+        insert_test_user(&db);
+        let service = DoorService::new(&db, &config);
+        let mut door = service
+            .list_enabled_doors()
+            .expect("list doors")
+            .pop()
+            .expect("door");
+        door.exclusive = true;
+        insert_door_run(
+            db.db(),
+            &DoorRunRecord {
+                id: "00000000-0000-4000-8000-000000000902".to_string(),
+                door_id: door.id.clone(),
+                user_id: USER_ID.to_string(),
+                node_number: 2,
+                started_at: "2026-01-01T00:00:00.000000Z".to_string(),
+                ended_at: Some("2026-01-01T00:01:00.000000Z".to_string()),
+                exit_code: Some(0),
+                timed_out: false,
+                disconnect_forced: false,
+                bytes_in: 0,
+                bytes_out: 0,
+            },
+        )
+        .expect("insert finished run");
+
+        let summary = service
+            .execute_with_runner(&DryRunDoorRunner, &test_user(), 1, &door, false)
+            .expect("finished history should not block");
+
+        assert_eq!(summary.exit_code, Some(0));
+
+        let _ = fs::remove_dir_all(runtime);
+        let _ = fs::remove_dir_all(working_dir);
     }
 
     #[test]

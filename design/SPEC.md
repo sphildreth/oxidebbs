@@ -13,6 +13,7 @@ It should ship as one primary server binary with internal crates for domain boun
 - `oxidebbs-db`
 - `oxidebbs-door`
 - `oxidebbs-sysop`
+- `oxidebbs-network`
 
 This keeps the system easy to run while keeping the codebase clean.
 
@@ -48,6 +49,15 @@ Door Runner
 DOS Runtime
 ```
 
+Local DOS doors run from per-node runtime directories. OxideBBS stages the
+configured door directory into the runtime directory, writes the requested drop
+file there, launches the door, then syncs door-owned output files back to the
+configured door directory before cleaning the runtime directory. Generated
+drop/runtime files such as `DOOR.SYS`, `DORINFO1.DEF`, `OXNODE.TXT`,
+`OXDOSEMU2.CONF`, and `OXCOM1.PTY` are excluded from sync-back. Persistent DOS
+disk images are a future compatibility option and should require exclusive-door
+semantics when mutable state is shared.
+
 ## 3. Core concepts
 
 ### Board
@@ -64,7 +74,7 @@ A live caller interaction. A session has a transport, user context, terminal sta
 
 ### Transport
 
-The I/O abstraction used by callers. v1 supports telnet. v2 may support serial/modem.
+The I/O abstraction used by callers. v1 supports telnet. v1.2 supports serial/modem through ADR 0019.
 
 ### Menu
 
@@ -92,21 +102,26 @@ pub trait Transport {
 
 Implementations:
 
-- `TelnetTransport` for v1
-- `SerialTransport` later
+- `TcpTransport` for telnet callers
+- `SerialTransport` for enabled serial/modem devices
 - `LoopbackTransport` for tests
 
-The `serve` runtime binds the configured telnet address, opens DecentDB before
-accepting callers, verifies the schema marker and core DecentDB tables, assigns
-node slots up to the configured node and connection limits, records
-session/audit lifecycle rows, and closes sessions on caller disconnect, logoff,
-or idle timeout. Startup must fail before listening if required database reads or
-required startup audit writes fail.
+The `serve` runtime binds the configured telnet address, opens enabled serial
+devices, opens DecentDB before accepting callers, verifies the schema marker and
+core DecentDB tables, assigns node slots up to the configured node and
+connection limits, records session/audit lifecycle rows, and closes sessions on
+caller disconnect, logoff, or idle timeout. Startup must fail before listening
+if required database reads, required startup audit writes, or configured serial
+line-state requirements fail.
 
 The telnet transport reads from the socket into an internal 4096-byte buffer and
 serves caller input one byte at a time to the parser. Telnet negotiation replies
 are batched and flushed before caller-visible output, before blocking for more
 input when replies are pending, and before hangup.
+
+Serial caller sessions skip telnet negotiation and parse input as raw caller
+bytes. File-transfer payloads use telnet IAC escaping only on telnet transports;
+serial transfers use the raw serial byte stream.
 
 ## 5. ANSI/CP437 design
 
@@ -123,6 +138,45 @@ The terminal layer should support:
 - Width-aware menus, prompts, status bars, line wrapping, and paging
 - Safe line editor for caller input
 - Output paging
+
+The named caller terminal profiles are:
+
+| Profile | Purpose | Width x height | Charset | ANSI/control policy |
+| --- | --- | --- | --- | --- |
+| `ansi80` | Modern BBS/ANSI callers such as SyncTERM | 80 x 25 | CP437 | ANSI and color allowed |
+| `plain` | Generic telnet clients and unknown callers | 80 x 25 | ASCII | No ANSI required |
+| `c64` | C64, C64 Ultimate, and C64 terminal application callers | 40 x 25 | PETSCII-friendly ASCII fallback | No ANSI unless explicitly overridden |
+
+The `c64` profile is a caller compatibility profile. OxideBBS remains a modern
+Rust BBS server; it is not a Commodore 64 executable, does not require a
+`mos-c64-none` build target, and does not introduce a C64 thin-client
+architecture.
+
+The C64 profile must keep the login flow, main menu, message list, message
+reader, file list, prompts, help text, and status lines usable at 40 columns.
+Menus and generated caller text should wrap or truncate at the active profile
+width instead of assuming 80 columns. ANSI/CP437 art must have an ASCII,
+40-column, or C64-safe fallback path for basic navigation.
+
+PETSCII translation is not complete yet. The terminal abstraction must keep the
+charset field explicit and route C64 callers through ASCII/PETSCII-friendly
+fallback assets until full PETSCII encode/decode support is implemented.
+
+Plain and C64 profiles must avoid advanced ANSI escape sequences for screen
+clear, cursor movement, color, and box drawing unless a sysop deliberately
+configures an ANSI-capable profile. Output line endings are normalized to CRLF
+for caller output. Caller input must normalize CR, LF, CRLF, telnet CR-NUL, and
+common backspace/delete bytes (`0x08` and `0x7f`).
+
+Terminal profiles may define optional output pacing, expressed in bytes per
+second. Pacing exists for slower clients and may be disabled for the default
+plain/ANSI profiles.
+
+When terminal detection is unreliable, onboarding or account settings should
+offer manual terminal profile selection: ANSI / 80-column, plain ASCII, and C64
+/ 40-column / PETSCII-friendly. Persisted user preference requires a user
+profile/schema field and is future work unless that storage exists in the
+active release.
 
 The default caller profile may be 80x25, but 40-column callers are a supported
 target, not an edge case. Screen assets should either have width-specific
@@ -155,7 +209,9 @@ Initial storage domains:
 - door_runs
 - audit_events
 - system_config
-- network_config
+- network_profiles, network_links, network_areas, network_packets,
+  network_messages, network_seen_by, network_path, network_duplicate_log,
+  network_poll_log, network_area_subscriptions, and network_nodelist
 
 Implemented DecentDB tables must use DecentDB-native types where the domain is
 known. Entity IDs use `UUID`, lifecycle fields use `TIMESTAMPTZ`, caller peer IP
@@ -175,7 +231,8 @@ Do not introduce SQLite, PostgreSQL, MySQL, Redis, or an ORM.
 
 Use a deliberate write model to avoid chaotic concurrent writes from many sessions.
 
-Longer term, the preferred pattern is:
+The v1.2 write foundation includes a single-writer service for session,
+message, and network work that must be serialized:
 
 ```text
 Session tasks
@@ -187,12 +244,11 @@ single DbWriter service
 DecentDB transaction
 ```
 
-The current v1 implementation uses direct repository writes through the shared
-DecentDB wrapper and keeps multi-row restore operations inside explicit
-transactions. This is acceptable for the current local telnet scope because the
-repository layer owns the SQL boundary and the CI suite exercises the active
-write paths. A single `DbWriter` service remains the next scaling step if
-write contention or transaction serialization becomes a practical issue.
+`DbWriter` accepts bounded queued closures, runs each closure in a DecentDB
+transaction, preserves submission order, reports queue backpressure, rolls back
+failed writes, and drains accepted work during shutdown. Direct repository APIs
+remain available for setup, import/restore, isolated CLI commands, and focused
+tests where the caller owns transaction boundaries.
 
 ## 8. Door runner design
 
@@ -239,7 +295,9 @@ boundary.
 Generated drop files use the active board configuration for board and sysop
 identity. `DORINFO1.DEF` maps the caller's user-profile real name into its
 first-name and last-name fields because that format has no separate alias field.
-`DOOR.SYS` includes both alias and real name.
+It uses the legacy 12-line layout with sysop first/last names, caller first/last
+names, ANSI flag, security level, and minutes remaining. `DOOR.SYS` includes
+both alias and real name.
 
 The live caller door bridge is DOSEMU2-specific. Door runner values must resolve
 to a DOSEMU2-compatible binary such as `dosemu`; DOSBox/DOSBox-Staging is not a
@@ -343,9 +401,10 @@ The runtime sends `terminal.welcome_screen` from the configured ANSI asset path
 on connect. ANSI callers receive the configured asset; plain text callers first
 probe sibling `.asc` and `.txt` assets before falling back to stripped ANSI
 text. The runtime then uses `flow.login_screen`, `flow.post_login_screens`, and
-`flow.main_menu` for caller screen routing. The `terminal.logoff_screen` field
-remains configuration metadata for future dedicated logoff rendering; logoff
-currently sends a plain goodbye line.
+`flow.main_menu` for caller screen routing. Normal caller logoff renders
+`terminal.logoff_screen`: ANSI callers receive the configured ANSI asset, plain
+callers first probe sibling `.asc` and `.txt` assets, and missing assets log
+context before falling back to a plain goodbye line.
 
 ## 10. Users and authentication
 
@@ -382,10 +441,13 @@ The server exposes CLI-first local sysop command groups:
 - `messages` for local area administration and message moderation
 - `doors` for configured door inspection, checks, dry-run testing, drop-file
   generation, run history, and runtime cleanup
+- `files` for local file-area administration, file import/safe removal, and
+  transfer-history inspection
 - `ansi` for screen listing, validation, preview, conversion, and inspection
 - `db` for DecentDB initialization, doctor/stats, backup, verify, read-only JSON
   export, and JSON import restore
-- `logs`, `audit`, and `config` for local troubleshooting
+- `logs`, `audit`, `config`, and `net` for local troubleshooting and deferred
+  network operations
 
 ### Logging
 
@@ -423,15 +485,26 @@ standard formatter fields plus event fields such as caller address, node,
 session, menu key, user id/alias, audit event type, door key/name, message area,
 message id, and outcome fields when applicable.
 
-All sysop control is local in v1. There is no remote admin API or remote
-interactive interface in this phase.
+All mutating sysop control is local in v1.2. `[admin_web]` configuration exists
+and is disabled by default. When explicitly enabled, it may expose direct
+loopback/LAN HTTP monitoring, browser-terminal, and sysop-authenticated
+read-only JSON API views. Public/WAN exposure should be placed behind a
+TLS-terminating reverse proxy.
+The `[admin_web]` listener is plain HTTP only; OxideBBS does not implement
+native HTTPS/TLS for this surface. HTTPS deployments must terminate TLS in a
+local reverse proxy such as Caddy, nginx, or Traefik and forward plain HTTP to
+the OxideBBS listener.
+Remote mutation attempts are guarded by session authentication, CSRF, replay
+nonce/timestamp checks, rate limits, origin checks, and audit logging, but are
+blocked by read-only mode.
 
 When a live control socket is unavailable, node disconnect/message/broadcast
 commands preserve the previous audit intent behavior and report that live delivery
 was not available. `db import --format json <path>` is now a full restore into a
 schema-only database with schema checks and transactional insertion.
-`db compact` is explicitly unsupported in this release because DecentDB does not
-expose a safe compaction API; the command returns a clear error.
+`db compact --output <path> [--overwrite]` writes a verified compacted DecentDB
+output file and refuses to write to the active database path. Replacing the
+active database is a manual offline operator step.
 
 The local control socket is Unix-domain only in this phase and lives at
 `runtime/oxidebbs-control.sock`. The protocol uses one newline-delimited JSON
@@ -456,12 +529,39 @@ the control socket is reachable.
 Remote callers must never see Ratatui output; Ratatui remains local sysop/admin
 UI only.
 
+Web browser callers use an optional raw terminal surface exposed from the same
+`[admin_web]` listener:
+
+- `GET /terminal` serves a full-browser caller terminal page.
+- `GET /terminal/ws` carries raw websocket bytes to/from the same caller session
+  transport pipeline used by telnet/raw callers with `telnet_protocol = false`
+  and transport `"websocket"`.
+- `GET /terminal/zmodem.js` serves browser-side zmodem transfer support.
+
+`[web_terminal].enabled` controls whether these routes are mounted. It defaults
+to `true`, so `OxideBBS` accepts browser callers on `/terminal` out of the box
+when `[admin_web].enabled = true`. Browser callers authenticate at the normal BBS
+login prompt, then follow the same menu and session flow as any other caller.
+Browser ZMODEM transfers remain on the same websocket stream and the same server
+transfer stack. XMODEM downloads are manually started by caller terminals and
+negotiate CRC mode when the receiver sends `C`, falling back to classic checksum
+mode when the receiver sends `NAK`.
+
 ## 13. FTN/OxideNet boundary
 
-FTN/OxideNet support starts with core domain types for FTN addresses,
-echomail-area mappings, netmail messages, duplicate-detection keys, and packet
-import/export boundaries. Packet parsing, bundling, compression, and transport
-remain future infrastructure behind this boundary.
+FTN/OxideNet support starts with `oxidebbs-network` protocol-neutral types for
+FTN-style addresses, network profiles and links, echomail-area mappings,
+netmail messages, local/network message envelopes, duplicate-detection keys,
+queue states, and packet import/export boundaries. `oxidebbs-core` re-exports
+those types during the v1.2 transition.
+
+Legacy FTN packet and kludge primitives live in `oxidebbs-ftn`; BinkP frame
+primitives live in `oxidebbs-binkp`; OxideNet profile data lives in
+`oxidebbs-oxidenet`. ZIP packet extraction is handled inside `oxidebbs-ftn`
+with a strict top-level `.pkt` policy. Toss/scan workflows, outbound bundle
+compression, ARJ extraction, nodelist processing, AreaFix, BinkP sessions, and
+OxideNet onboarding are implemented behind those crate boundaries and exposed
+through CLI and local sysop TUI service surfaces.
 
 ## 14. Observability
 
@@ -514,3 +614,25 @@ Required test categories:
 - Door runner dry-run tests
 - DecentDB repository integration tests
 - Session disconnect cleanup tests
+
+## 17. Caller menu help
+
+In any configured BBS menu, `?` is reserved for contextual help. If the menu
+defines `help_screen`, the runtime displays that screen. Otherwise, it generates
+a command list from the live menu entries, filtering commands the caller cannot
+access by security level.
+
+`R` redisplays the current menu screen only when the active menu does not define
+its own `R` command. Configured menu commands take precedence over the global
+redisplay fallback.
+
+Caller screen payloads support byte-level OxideBBS display-code expansion
+without decoding ANSI/CP437 art as Unicode. Display files and prompts may use
+`@CODE@` values, including `@NODE@`, `@NODES@`, `@BBS@`, `@SYSOP@`,
+`@USER@`, and `@SECURITY@`, with optional width formatting such as
+`@NODE:03@`.
+
+`@@` emits a literal at-sign. Unknown or malformed display-code sequences are
+left unchanged. Legacy bundled node markers such as `001 / 004`, `NNN / TTT`,
+and `NODE 001` remain supported as compatibility shims, but new bundled and
+sysop-authored art should use display codes.

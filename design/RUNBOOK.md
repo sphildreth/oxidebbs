@@ -51,13 +51,13 @@ cargo run -p oxidebbs-server -- status
 cargo run -p oxidebbs-server -- nodes list
 ```
 
-`oxidebbs-server setup` and `db init` create schema `4`. When an existing
-DecentDB uses supported older schema versions `2` or `3`, startup runs the
+`oxidebbs-server setup` and `db init` create schema `8`. When an existing
+DecentDB uses supported older schema versions `2` through `7`, startup runs the
 upgrade before serving callers. The migration chain preserves local users,
-messages, replies, sessions, doors, runs, and audit rows while adding
-`message_areas.enabled`, `users.alias_normalized`, and persistent
-`auth_attempts`. Renamed pre-upgrade tables remain as `oxidebbs_schema*_*`
-archives and are not used by runtime queries. Databases with a future marker,
+messages, replies, sessions, doors, runs, audit rows, shared network rows, file
+areas, and OxideNet registry rows while adding the intervening schema
+foundations. Renamed pre-upgrade tables remain as `oxidebbs_schema*_*` archives
+and are not used by runtime queries. Databases with a future marker,
 missing marker, or unmarked existing tables are refused with a clear error and
 should be opened only with compatible OxideBBS software.
 
@@ -125,6 +125,33 @@ oxidebbs-server nodes show 1
 oxidebbs-server nodes watch
 ```
 
+When `[admin_web]` is enabled, monitoring systems can use the loopback HTTP
+health route. It runs doctor checks and returns `200` with `healthy = true` when
+there are no doctor failures, or `503` with `healthy = false` when doctor
+reports failures:
+
+```bash
+curl -fsS http://127.0.0.1:8080/health
+curl -fsS http://127.0.0.1:8080/healthz
+curl -fsS http://127.0.0.1:8080/healtz
+```
+
+OxideBBS does not serve HTTPS/TLS on `[admin_web]`. Keep the listener bound to
+loopback and terminate HTTPS in a local reverse proxy such as Caddy:
+
+```caddyfile
+monitor.example.com {
+    reverse_proxy 127.0.0.1:8080
+}
+```
+
+Monitoring web requests are written to the configured text or JSON logs as
+activity lines. Each line includes method, path without query string, response
+status, elapsed milliseconds, remote address when available, and authenticated
+user ID when a logged-in session is present. Request bodies, query strings,
+cookies, CSRF tokens, replay headers, and other header values are intentionally
+omitted.
+
 Useful local-only status checks:
 
 ```bash
@@ -140,7 +167,8 @@ door through the server-side bridge. Before launch, verify:
 - the door working directory exists
 - the configured runner executable, usually `dosemu`, exists on `PATH` or at
   the configured path
-- the drop-file format is `DOOR.SYS` or `DORINFO1.DEF`
+- the drop-file format is `DOOR.SYS`, `DORINFO1.DEF`, `CHAIN.TXT`,
+  `DOORFILE.SR`, `PCBOARD.SYS`, or `CALLINFO.BBS`
 - the runtime directory is writable
 - the time limit is greater than zero
 
@@ -224,7 +252,7 @@ Use the DecentDB-aware sysop command boundary:
 oxidebbs-server db backup backups/oxidebbs.ddb
 oxidebbs-server db export --format json > backups/oxidebbs.json
 oxidebbs-server db import --format json backups/oxidebbs.json
-oxidebbs-server db compact
+oxidebbs-server db compact --output backups/oxidebbs-compacted.ddb
 ```
 
 `db import --format json` requires a schema-initialized, schema-only target:
@@ -238,12 +266,16 @@ oxidebbs-server db compact
 `db import --format json` is implemented as a full restore (not merge), preserving
 UUIDs with full foreign-key-aware insertion order and transactionality.
 
-`db compact` is intentionally unsupported in this release because DecentDB does
-not expose a safe compaction API contract.
+`db compact --output <path> [--overwrite]` writes and verifies a separate
+compacted DecentDB file. It refuses to write to the active database path; stop
+the server before manually replacing the active database with the compacted
+output.
 
 Audit retention is configured with `[audit].retention_days` and defaults to
 `365`. Runtime inserts do not auto-delete old audit rows; scheduled maintenance
-should call the DecentDB repository purge helper or a future CLI wrapper.
+should call `oxidebbs-server audit purge-retention` or
+`oxidebbs-server audit purge-before <timestamp>`. Use `--dry-run` before a live
+purge and `--json` when automation needs stable counts.
 
 ## Load-test note
 

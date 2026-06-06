@@ -2,7 +2,8 @@
 
 ## Product intent
 
-OxideBBS should eventually support FTN-style shared message networks.
+OxideBBS is adding FTN-style shared message-network support through the v1.2
+release plan.
 
 Possible network branding: **OxideNet**.
 
@@ -15,23 +16,24 @@ Examples:
 - FidoNet
 - fsxNet
 - RetroNet-style networks
-- Future OxideNet
+- OxideNet
 
-## Future data concepts
+## Current foundation
 
-- Network
-- Zone
-- Net
-- Node
-- Point
-- Network address
-- Echomail area
-- Netmail message
-- Seen-by/path metadata
-- Duplicate hash
-- Packet import job
-- Packet export job
-- Poll schedule
+The shared network foundation now lives in `oxidebbs-network` and the
+schema-backed runtime state lives in DecentDB `network_*` tables.
+
+Implemented foundation concepts:
+
+- network profiles and links
+- zone/net/node/point FTN-style addresses
+- echomail area mappings
+- netmail and network message envelopes
+- seen-by/path metadata tables
+- duplicate detection keys and logs
+- packet import/export boundaries
+- queue state enums
+- poll logs and schedules
 
 ## Suggested milestones
 
@@ -51,7 +53,7 @@ Examples:
 
 ### Transport
 
-- BinkP polling
+- BinkP polling for FTN/FidoNet mail exchange
 - Archive bundling
 - Inbound/outbound queues
 

@@ -8,6 +8,11 @@ members = [
     "crates/oxidebbs-db",
     "crates/oxidebbs-door",
     "crates/oxidebbs-sysop",
+    "crates/oxidebbs-network",
+    "crates/oxidebbs-transfer",
+    "crates/oxidebbs-ftn",
+    "crates/oxidebbs-binkp",
+    "crates/oxidebbs-oxidenet",
 ]
 
 [workspace.package]
@@ -25,6 +30,7 @@ rand_core = { version = "0.6", features = ["getrandom"] }
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+axum = { version = "0.8.9", features = ["ws"] }
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
@@ -34,3 +40,10 @@ toml = "0.8"
 nix = { version = "0.31.3", features = ["term", "fs", "user"] }
 crossterm = "0.28"
 fuzzy-matcher = "0.3"
+sha2 = "0.11.0"
+hex = "0.4"
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+serialport = { version = "4", default-features = false }
+tower-cookies = "0.10"
+tower-sessions = "0.13"
+time = "0.3"

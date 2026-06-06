@@ -1,9 +1,9 @@
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Write as FmtWrite;
 use std::future::Future;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use argon2::password_hash::{PasswordHash, PasswordHasher, SaltString};
 use argon2::{Algorithm, Argon2, Params, PasswordVerifier as Argon2PasswordVerifier, Version};
@@ -24,23 +24,31 @@ use oxidebbs_core::message::{
 };
 use oxidebbs_core::user::{User, UserStatus};
 use oxidebbs_db::{
-    AuditEventRecord, MessageAreaRecord, MessageRecord, OxideDb, SessionRecord, UserInsertError,
-    UserRecord, clear_auth_attempt, end_session, find_user_by_alias_ci, insert_audit_event,
-    insert_message, insert_message_area, insert_session, insert_user_if_alias_available,
-    is_auth_scope_locked, list_audit_events, list_auth_attempts, list_door_definitions,
-    list_door_runs, list_message_areas, list_messages, list_recent_sessions,
+    AuditEventRecord, FileAreaRecord, FileEntryRecord, FileTransferRecord, MessageAreaRecord,
+    MessageRecord, OxideDb, SessionRecord, UserInsertError, UserRecord, clear_auth_attempt,
+    end_session, find_file_entry_by_storage_name, find_user_by_alias_ci,
+    increment_file_entry_download_count, insert_audit_event, insert_file_entry,
+    insert_file_transfer, insert_message, insert_message_area, insert_session,
+    insert_user_if_alias_available, is_auth_scope_locked, list_audit_events, list_auth_attempts,
+    list_door_definitions, list_door_runs, list_message_areas, list_messages, list_recent_sessions,
     list_user_aliases_by_ids, list_users, list_visible_messages_in_area, normalize_alias,
     record_auth_failure, update_session_user, update_user_login,
 };
 use oxidebbs_telnet::telnet::{
-    DO, IAC, SB, SE, TELOPT_ECHO, TELOPT_SUPPRESS_GO_AHEAD, TELOPT_TTYPE_SEND, WILL,
+    DO, IAC, SB, SE, TELOPT_ECHO, TELOPT_NAWS, TELOPT_SUPPRESS_GO_AHEAD, TELOPT_TERMINAL_TYPE,
+    TELOPT_TTYPE_SEND, TelnetCommand, TelnetEvent, TelnetParser, WILL,
 };
 use oxidebbs_telnet::{
-    TELOPT_NAWS, TELOPT_TERMINAL_TYPE, TcpTransport, TelnetCommand, TelnetEvent, TelnetParser,
-    Transport, TransportError,
+    SerialFlowControl, SerialParity, SerialPortConfig, SerialTransport, TcpTransport, Transport,
+    TransportError,
 };
 use oxidebbs_term::{
-    LoadedScreen, ScreenAsset as TermScreenAsset, TerminalCapabilities, encode_cp437,
+    LoadedScreen, ScreenAsset as TermScreenAsset, TerminalCapabilities, TerminalProfile,
+    encode_cp437,
+};
+use oxidebbs_transfer::adapter::TransportAdapter;
+use oxidebbs_transfer::{
+    TransferError, TransferProtocol, sanitize_filename, validate_path_within_base,
 };
 
 use crate::config::{Argon2Config, AuthConfig, OxideConfig};
@@ -79,9 +87,51 @@ const CP437_INPUT_REJECT_LINE: &str = "This BBS only accepts CP437-compatible te
 const DUMMY_PASSWORD_HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$b3hpZGViYnMtZHVtbXktYXV0aC1zYWx0$CNvsc4yCQyC6gccREXpHZ6l9604svk9VP98AyAVSMtY";
 const PROMPT_TERMINATOR: &str = "\r\n";
 const MAIN_MENU_POST_LOGIN: &str = "Please choose from the menu.\r\n";
+const ACCESS_DENIED_MESSAGE: &str = "Access denied. Return to menu.\r\n";
 const TERMINAL_CAPABILITY_NEGOTIATION_TIMEOUT: Duration = Duration::from_millis(300);
 #[cfg(unix)]
 const STALE_NODE_SWEEP_INTERVAL: Duration = Duration::from_secs(30);
+
+#[derive(Debug, Clone)]
+struct ScreenRenderContext {
+    node_number: u16,
+    node_count: u16,
+    board_name: String,
+    sysop_name: String,
+    caller_alias: Option<String>,
+    security_level: Option<i32>,
+}
+
+fn server_start_audit_details(config: &OxideConfig) -> String {
+    let binkp_listener = config
+        .network
+        .binkp_listener
+        .as_ref()
+        .filter(|listener| config.network.enabled && listener.enabled);
+    match (
+        config.telnet.enabled,
+        config.admin_web.enabled,
+        binkp_listener,
+    ) {
+        (true, true, _) => format!(
+            "serving {} on {} with {} node(s); admin web status on {}",
+            config.board.name, config.telnet.bind, config.nodes.count, config.admin_web.bind
+        ),
+        (true, false, _) => format!(
+            "serving {} on {} with {} node(s)",
+            config.board.name, config.telnet.bind, config.nodes.count
+        ),
+        (false, true, _) => format!(
+            "serving {} admin web status on {} with telnet disabled",
+            config.board.name, config.admin_web.bind
+        ),
+        (false, false, Some(listener)) => format!(
+            "serving {} BinkP listener on {} with telnet disabled",
+            config.board.name, listener.bind
+        ),
+        (false, false, None) => format!("{} service disabled", config.board.name),
+    }
+}
 
 pub async fn run(config: &OxideConfig, config_path: &Path) -> ServeResult<()> {
     run_until_shutdown(config, config_path, wait_for_shutdown_signal()).await
@@ -104,8 +154,19 @@ pub(crate) async fn run_until_shutdown<S>(
 where
     S: Future<Output = ServeResult<()>> + Send,
 {
-    if !config.telnet.enabled {
-        info!(bind = %config.telnet.bind, "telnet disabled; service not started");
+    let binkp_listener_enabled = config
+        .network
+        .binkp_listener
+        .as_ref()
+        .is_some_and(|listener| config.network.enabled && listener.enabled);
+    let serial_enabled = config.serial.enabled && !config.serial.devices.is_empty();
+
+    if !config.telnet.enabled
+        && !config.admin_web.enabled
+        && !binkp_listener_enabled
+        && !serial_enabled
+    {
+        info!(bind = %config.telnet.bind, "caller, admin web, and BinkP listeners disabled; service not started");
         return Ok(());
     }
 
@@ -151,6 +212,14 @@ where
         .cloned()
         .ok_or_else(|| ServeError::Config(format!("missing main menu {main_menu_id:?}")))?;
     let menus = Arc::new(resolved_menus);
+    let caller_resources = caller_resources(
+        Arc::clone(&db),
+        Arc::clone(&shared_config),
+        Arc::clone(&login_menu),
+        Arc::clone(&main_menu),
+        Arc::clone(&menus),
+        Arc::clone(&runtime),
+    );
 
     let control_listener =
         match start_control_listener(&config.paths.runtime, Arc::clone(&runtime)).await {
@@ -184,89 +253,138 @@ where
         Option<tokio::task::JoinHandle<()>>,
     ) = (None, None);
 
-    let listener = TcpListener::bind(&config.telnet.bind).await?;
+    let telnet_listener = if config.telnet.enabled {
+        Some(TcpListener::bind(&config.telnet.bind).await?)
+    } else {
+        None
+    };
+
+    let admin_web_handle = if config.admin_web.enabled {
+        Some(
+            crate::admin_web::start_admin_web(
+                Arc::clone(&shared_config),
+                Arc::clone(&db),
+                Arc::clone(&runtime),
+                if config.web_terminal.enabled {
+                    Some(caller_resources.clone())
+                } else {
+                    None
+                },
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+
+    let binkp_listener_handle = if config.network.enabled && config.network.binkp_listener.is_some()
+    {
+        match crate::binkp_listener::start_binkp_listener(
+            Arc::clone(&shared_config),
+            Arc::clone(&db),
+        )
+        .await
+        {
+            Ok(handle) => Some(handle),
+            Err(error) => {
+                warn!(%error, "BinkP listener failed to start");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let serial_handles = if serial_enabled {
+        start_serial_callers(
+            Arc::clone(&shared_config),
+            Arc::clone(&db),
+            Arc::clone(&runtime),
+            caller_resources.clone(),
+        )?
+    } else {
+        Vec::new()
+    };
+
     insert_required_startup_audit_event(
         db.as_ref(),
         "server_start",
         None,
         None,
-        format!(
-            "serving {} on {} with {} node(s)",
-            config.board.name, config.telnet.bind, config.nodes.count
-        ),
+        server_start_audit_details(config),
     )?;
-
-    info!(bind = %config.telnet.bind, "listening for telnet callers");
 
     let mut shutdown = Box::pin(shutdown_signal);
     let mut accept_error = None;
 
-    loop {
-        tokio::select! {
-            accept = listener.accept() => {
-                let (stream, peer_addr) = match accept {
-                    Ok(accepted) => accepted,
-                    Err(error) => {
-                        accept_error = Some(ServeError::Network(error));
-                        break;
-                    }
-                };
-                let peer = CallerPeer {
-                    address: peer_addr.to_string(),
-                    ip: peer_addr.ip().to_string(),
-                    port: i64::from(peer_addr.port()),
-                };
+    if let Some(listener) = telnet_listener {
+        info!(bind = %config.telnet.bind, "listening for telnet callers");
 
-                if let Some(allocation) = runtime.try_allocate_node() {
-                    info!(
-                        node = %allocation.node_number,
-                        remote = %peer.address,
-                        remote_ip = %peer.ip,
-                        remote_port = peer.port,
-                        "caller connection accepted"
-                    );
-                    emit_audit_event_with_runtime(
-                        db.as_ref(),
-                        "node_assigned",
-                        None,
-                        Some(i64::from(allocation.node_number)),
-                        format!("node {} assigned to {}", allocation.node_number, peer.address),
-                        Some(runtime.as_ref()),
-                    );
-                    let resources = CallerResources {
-                        db: Arc::clone(&db),
-                        config: Arc::clone(&shared_config),
-                        login_menu: Arc::clone(&login_menu),
-                        main_menu: Arc::clone(&main_menu),
-                        menus: Arc::clone(&menus),
-                        runtime: Arc::clone(&runtime),
+        loop {
+            tokio::select! {
+                accept = listener.accept() => {
+                    let (stream, peer_addr) = match accept {
+                        Ok(accepted) => accepted,
+                        Err(error) => {
+                            accept_error = Some(ServeError::Network(error));
+                            break;
+                        }
+                    };
+                    let peer = CallerPeer {
+                        address: peer_addr.to_string(),
+                        ip: Some(peer_addr.ip().to_string()),
+                        port: i64::from(peer_addr.port()),
                     };
 
-                    tokio::spawn(async move {
-                        if let Err(error) = handle_caller(allocation, stream, peer, resources).await {
-                            warn!("caller session ended with error: {error}");
-                        }
-                    });
-                } else {
-                    warn!(
-                        remote = %peer.address,
-                        remote_ip = %peer.ip,
-                        remote_port = peer.port,
-                        "caller rejected because no node is available"
-                    );
-                    tokio::spawn(async move {
-                        if let Err(error) = reject_connection(stream).await {
-                            warn!("failed to reject caller: {error}");
-                        }
-                    });
+                    if let Some(allocation) = runtime.try_allocate_node() {
+                        info!(
+                            node = %allocation.node_number,
+                            remote = %peer.address,
+                            remote_ip = %peer.ip.as_deref().unwrap_or("-"),
+                            remote_port = peer.port,
+                            "caller connection accepted"
+                        );
+                        emit_audit_event_with_runtime(
+                            db.as_ref(),
+                            "node_assigned",
+                            None,
+                            Some(i64::from(allocation.node_number)),
+                            format!("node {} assigned to {}", allocation.node_number, peer.address),
+                            Some(runtime.as_ref()),
+                        );
+                        let resources = caller_resources.clone();
+                        tokio::spawn(async move {
+                            if let Err(error) = handle_caller(allocation, stream, peer, resources).await
+                            {
+                                warn!("caller session ended with error: {error}");
+                            }
+                        });
+                    } else {
+                        warn!(
+                            remote = %peer.address,
+                            remote_ip = %peer.ip.as_deref().unwrap_or("-"),
+                            remote_port = peer.port,
+                            "caller rejected because no node is available"
+                        );
+                        tokio::spawn(async move {
+                            if let Err(error) = reject_connection(stream).await {
+                                warn!("failed to reject caller: {error}");
+                            }
+                        });
+                    }
+                }
+                shutdown_result = &mut shutdown => {
+                    if let Err(error) = shutdown_result {
+                        accept_error = Some(error);
+                    }
+                    break;
                 }
             }
-            shutdown_result = &mut shutdown => {
-                if let Err(error) = shutdown_result {
-                    accept_error = Some(error);
-                }
-                break;
-            }
+        }
+    } else {
+        info!("telnet disabled; waiting for shutdown with enabled background listeners");
+        if let Err(error) = (&mut shutdown).await {
+            accept_error = Some(error);
         }
     }
 
@@ -309,6 +427,15 @@ where
     if let Some(handle) = control_listener {
         handle.abort();
     }
+    if let Some(handle) = admin_web_handle {
+        handle.abort();
+    }
+    if let Some(handle) = binkp_listener_handle {
+        handle.abort();
+    }
+    for handle in serial_handles {
+        handle.abort();
+    }
 
     emit_audit_event_with_runtime(
         db.as_ref(),
@@ -336,6 +463,88 @@ async fn reject_connection(mut stream: TcpStream) -> ServeResult<()> {
     Ok(())
 }
 
+fn start_serial_callers(
+    config: Arc<OxideConfig>,
+    _db: Arc<OxideDb>,
+    runtime: Arc<ServerRuntime>,
+    resources: CallerResources,
+) -> ServeResult<Vec<tokio::task::JoinHandle<()>>> {
+    let mut handles = Vec::new();
+    for device in &config.serial.devices {
+        let serial_config = serial_port_config_from_device(device)?;
+        let transport = SerialTransport::open(serial_config)
+            .map_err(|error| ServeError::Runtime(error.to_string()))?;
+        let Some(allocation) = runtime.try_allocate_node() else {
+            warn!(
+                device = %device.name,
+                path = %device.path,
+                "serial caller device could not start because no node is available"
+            );
+            continue;
+        };
+        let peer = CallerPeer {
+            address: format!("serial:{}", device.name),
+            ip: None,
+            port: 0,
+        };
+        info!(
+            node = %allocation.node_number,
+            device = %device.name,
+            path = %device.path,
+            "serial caller device opened"
+        );
+        let resources = resources.clone();
+        handles.push(tokio::spawn(async move {
+            if let Err(error) =
+                handle_raw_caller_transport(allocation, transport, "serial", peer, resources).await
+            {
+                warn!("serial caller session ended with error: {error}");
+            }
+        }));
+    }
+    Ok(handles)
+}
+
+fn serial_port_config_from_device(
+    device: &crate::config::SerialDeviceConfig,
+) -> ServeResult<SerialPortConfig> {
+    Ok(SerialPortConfig {
+        path: device.path.clone(),
+        baud_rate: device.baud_rate,
+        data_bits: device.data_bits,
+        parity: serial_parity_from_config(&device.parity)?,
+        stop_bits: device.stop_bits,
+        flow_control: serial_flow_control_from_config(&device.flow_control)?,
+        init_strings: device.init_strings.clone(),
+        answer_string: device.answer_string.clone(),
+        require_carrier_detect: device.require_carrier_detect,
+        drop_dtr_on_hangup: device.drop_dtr_on_hangup,
+        read_timeout_ms: device.read_timeout_ms,
+    })
+}
+
+fn serial_flow_control_from_config(value: &str) -> ServeResult<SerialFlowControl> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "none" => Ok(SerialFlowControl::None),
+        "rtscts" | "rts_cts" | "hardware" => Ok(SerialFlowControl::RtsCts),
+        "xonxoff" | "xon_xoff" | "software" => Ok(SerialFlowControl::XonXoff),
+        other => Err(ServeError::Config(format!(
+            "serial flow_control must be one of none, rtscts, or xonxoff, got {other:?}"
+        ))),
+    }
+}
+
+fn serial_parity_from_config(value: &str) -> ServeResult<SerialParity> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "none" => Ok(SerialParity::None),
+        "odd" => Ok(SerialParity::Odd),
+        "even" => Ok(SerialParity::Even),
+        other => Err(ServeError::Config(format!(
+            "serial parity must be one of none, odd, or even, got {other:?}"
+        ))),
+    }
+}
+
 #[cfg(unix)]
 fn start_stale_node_sweeper(
     runtime: Arc<ServerRuntime>,
@@ -356,7 +565,8 @@ fn start_stale_node_sweeper(
     })
 }
 
-struct CallerResources {
+#[derive(Clone)]
+pub(crate) struct CallerResources {
     db: Arc<OxideDb>,
     config: Arc<OxideConfig>,
     login_menu: Arc<Menu>,
@@ -365,9 +575,85 @@ struct CallerResources {
     runtime: Arc<ServerRuntime>,
 }
 
+#[derive(Clone)]
+pub(crate) struct CallerPeer {
+    pub(crate) address: String,
+    pub(crate) ip: Option<String>,
+    pub(crate) port: i64,
+}
+
+pub(crate) fn caller_resources(
+    db: Arc<OxideDb>,
+    config: Arc<OxideConfig>,
+    login_menu: Arc<Menu>,
+    main_menu: Arc<Menu>,
+    menus: Arc<HashMap<String, Arc<Menu>>>,
+    runtime: Arc<ServerRuntime>,
+) -> CallerResources {
+    CallerResources {
+        db,
+        config,
+        login_menu,
+        main_menu,
+        menus,
+        runtime,
+    }
+}
+
 async fn handle_caller(
     allocation: NodeAllocation,
     stream: TcpStream,
+    peer: CallerPeer,
+    resources: CallerResources,
+) -> ServeResult<()> {
+    let transport = TcpTransport::new(stream);
+    handle_caller_transport(allocation, transport, "telnet", true, None, peer, resources).await
+}
+
+pub(crate) async fn handle_raw_caller_transport<T: Transport>(
+    allocation: NodeAllocation,
+    transport: T,
+    transport_name: &'static str,
+    peer: CallerPeer,
+    resources: CallerResources,
+) -> ServeResult<()> {
+    handle_raw_caller_transport_with_capabilities(
+        allocation,
+        transport,
+        transport_name,
+        None,
+        peer,
+        resources,
+    )
+    .await
+}
+
+pub(crate) async fn handle_raw_caller_transport_with_capabilities<T: Transport>(
+    allocation: NodeAllocation,
+    transport: T,
+    transport_name: &'static str,
+    raw_capabilities: Option<TerminalCapabilities>,
+    peer: CallerPeer,
+    resources: CallerResources,
+) -> ServeResult<()> {
+    handle_caller_transport(
+        allocation,
+        transport,
+        transport_name,
+        false,
+        raw_capabilities,
+        peer,
+        resources,
+    )
+    .await
+}
+
+async fn handle_caller_transport<T: Transport>(
+    allocation: NodeAllocation,
+    mut transport: T,
+    transport_name: &'static str,
+    telnet_protocol: bool,
+    raw_capabilities: Option<TerminalCapabilities>,
     peer: CallerPeer,
     resources: CallerResources,
 ) -> ServeResult<()> {
@@ -383,8 +669,13 @@ async fn handle_caller(
     let node_number = i64::from(node_number_u16);
     let session_id = generated_uuid(&db)?;
     let connected_at = current_timestamp(&db)?;
-    let mut transport = TcpTransport::new(stream);
-    let mut input = InputSession::default();
+    let remote_ip_for_log = peer.ip.as_deref().unwrap_or("-");
+    let auth_remote_scope = peer.ip.as_deref().unwrap_or(&peer.address);
+    let mut input = if telnet_protocol {
+        InputSession::default()
+    } else {
+        InputSession::raw()
+    };
     let idle_timeout = Duration::from_secs(config.telnet.idle_timeout_seconds);
     let mut authenticated_user: Option<User> = None;
 
@@ -394,10 +685,14 @@ async fn handle_caller(
             id: session_id.clone(),
             node_number,
             user_id: None,
-            transport: "telnet".to_string(),
+            transport: transport_name.to_string(),
             remote_address: peer.address.clone(),
-            remote_ip: Some(peer.ip.clone()),
-            remote_port: Some(peer.port),
+            remote_ip: peer.ip.clone(),
+            remote_port: if telnet_protocol {
+                Some(peer.port)
+            } else {
+                None
+            },
             started_at: connected_at.clone(),
             ended_at: None,
             disconnect_reason: None,
@@ -426,7 +721,7 @@ async fn handle_caller(
         node = %node_number,
         session_id = %session_id,
         remote = %peer.address,
-        remote_ip = %peer.ip,
+        remote_ip = %remote_ip_for_log,
         remote_port = peer.port,
         "caller session opened"
     );
@@ -441,17 +736,26 @@ async fn handle_caller(
         Some(runtime.as_ref()),
     );
 
-    let mut capabilities = negotiate_terminal_capabilities(
-        &mut transport,
-        &mut input,
-        TERMINAL_CAPABILITY_NEGOTIATION_TIMEOUT,
-    )
-    .await?;
+    let fallback_capabilities = config
+        .terminal
+        .default_capabilities()
+        .map_err(|error| ServeError::Config(error.to_string()))?;
+    let mut capabilities = if telnet_protocol {
+        negotiate_terminal_capabilities(
+            &mut transport,
+            &mut input,
+            TERMINAL_CAPABILITY_NEGOTIATION_TIMEOUT,
+            fallback_capabilities,
+        )
+        .await?
+    } else {
+        raw_capabilities.unwrap_or(fallback_capabilities)
+    };
     debug!(
         node = %node_number,
         session_id = %session_id,
         remote = %peer.address,
-        remote_ip = %peer.ip,
+        remote_ip = %remote_ip_for_log,
         remote_port = peer.port,
         supports_ansi = capabilities.supports_ansi,
         terminal_width = capabilities.width,
@@ -466,14 +770,30 @@ async fn handle_caller(
     }
 
     runtime.mark_node_login(node_number_u16);
+    let mut screen_context = ScreenRenderContext {
+        node_number: node_number_u16,
+        node_count: config.nodes.count,
+        board_name: config.board.name.clone(),
+        sysop_name: config.board.sysop_name.clone(),
+        caller_alias: None,
+        security_level: None,
+    };
     send_terminal_asset(
         &mut transport,
         &config.terminal.welcome_screen,
         &config,
         capabilities,
+        &screen_context,
     )
     .await?;
-    send_login_flow(&mut transport, &config, &login_menu, &mut capabilities).await?;
+    send_login_flow(
+        &mut transport,
+        &config,
+        &login_menu,
+        &mut capabilities,
+        &screen_context,
+    )
+    .await?;
 
     let mut in_main_menu = false;
     let mut disconnect_reason = "caller_disconnected".to_string();
@@ -544,8 +864,48 @@ async fn handle_caller(
                     "caller selected menu key"
                 );
 
+                let user_security = if in_main_menu {
+                    authenticated_user.as_ref().map(|user| user.security_level)
+                } else {
+                    None
+                };
+                if key == "?" {
+                    send_menu_help(
+                        &mut transport,
+                        &config,
+                        &current_menu,
+                        &mut capabilities,
+                        user_security,
+                        &screen_context,
+                    )
+                    .await?;
+                    send_menu_prompt(&mut transport, &current_menu, &screen_context).await?;
+                    continue;
+                }
+                if key == "R" && current_menu.route_entry("R").is_none() {
+                    send_screen(
+                        &mut transport,
+                        &config,
+                        &current_menu.screen.asset,
+                        &mut capabilities,
+                        &screen_context,
+                    )
+                    .await?;
+                    send_menu_prompt(&mut transport, &current_menu, &screen_context).await?;
+                    continue;
+                }
+
                 if !in_main_menu {
-                    match current_menu.route(&key) {
+                    let route = current_menu.route(&key);
+                    if route.is_some()
+                        && let Some(entry) = current_menu.route_entry(&key)
+                        && entry.min_security_level > 0
+                    {
+                        send_text(&mut transport, ACCESS_DENIED_MESSAGE).await?;
+                        send_menu_prompt(&mut transport, &current_menu, &screen_context).await?;
+                        continue;
+                    }
+                    match route {
                         Some(MenuAction::Login) => {
                             debug!(node = %node_number, "caller selected login flow");
                             let mut auth_state = AuthFlowState {
@@ -553,7 +913,7 @@ async fn handle_caller(
                                 config: &config,
                                 runtime: runtime.as_ref(),
                                 node_number,
-                                remote_ip: &peer.ip,
+                                remote_ip: auth_remote_scope,
                                 session_id: &session_id,
                                 authenticated_user: &mut authenticated_user,
                                 idle_timeout,
@@ -569,12 +929,15 @@ async fn handle_caller(
                                             Some(user.id.clone()),
                                             Some(user.alias.clone()),
                                         );
+                                        screen_context.caller_alias = Some(user.alias.clone());
+                                        screen_context.security_level = Some(user.security_level);
                                     }
                                     current_menu = Arc::clone(&main_menu);
                                     show_post_login_screens(
                                         &mut transport,
                                         &config,
                                         &mut capabilities,
+                                        &screen_context,
                                     )
                                     .await?;
                                     send_main_menu(
@@ -582,13 +945,19 @@ async fn handle_caller(
                                         &config,
                                         &main_menu,
                                         &mut capabilities,
+                                        &screen_context,
                                     )
                                     .await?;
                                     runtime.mark_node_main_menu(node_number_u16);
                                     in_main_menu = true;
                                 }
                                 AuthFlowResult::Retry => {
-                                    send_menu_prompt(&mut transport, &current_menu).await?;
+                                    send_menu_prompt(
+                                        &mut transport,
+                                        &current_menu,
+                                        &screen_context,
+                                    )
+                                    .await?;
                                 }
                                 AuthFlowResult::Exit => break,
                             }
@@ -600,7 +969,7 @@ async fn handle_caller(
                                 config: &config,
                                 runtime: runtime.as_ref(),
                                 node_number,
-                                remote_ip: &peer.ip,
+                                remote_ip: auth_remote_scope,
                                 session_id: &session_id,
                                 authenticated_user: &mut authenticated_user,
                                 idle_timeout,
@@ -616,12 +985,15 @@ async fn handle_caller(
                                             Some(user.id.clone()),
                                             Some(user.alias.clone()),
                                         );
+                                        screen_context.caller_alias = Some(user.alias.clone());
+                                        screen_context.security_level = Some(user.security_level);
                                     }
                                     current_menu = Arc::clone(&main_menu);
                                     show_post_login_screens(
                                         &mut transport,
                                         &config,
                                         &mut capabilities,
+                                        &screen_context,
                                     )
                                     .await?;
                                     send_main_menu(
@@ -629,13 +1001,19 @@ async fn handle_caller(
                                         &config,
                                         &main_menu,
                                         &mut capabilities,
+                                        &screen_context,
                                     )
                                     .await?;
                                     runtime.mark_node_main_menu(node_number_u16);
                                     in_main_menu = true;
                                 }
                                 AuthFlowResult::Retry => {
-                                    send_menu_prompt(&mut transport, &current_menu).await?;
+                                    send_menu_prompt(
+                                        &mut transport,
+                                        &current_menu,
+                                        &screen_context,
+                                    )
+                                    .await?;
                                 }
                                 AuthFlowResult::Exit => break,
                             }
@@ -643,30 +1021,55 @@ async fn handle_caller(
                         Some(MenuAction::Logoff) => {
                             debug!(node = %node_number, "caller selected login-menu logoff");
                             disconnect_reason = "caller_logoff".to_string();
-                            send_text(&mut transport, "Goodbye.\r\n").await?;
+                            send_logoff_screen(
+                                &mut transport,
+                                &config,
+                                capabilities,
+                                &screen_context,
+                            )
+                            .await;
                             break;
                         }
                         Some(MenuAction::Submenu { menu_id }) => {
                             debug!(node = %node_number, submenu = %menu_id, "caller selected submenu");
                             if let Some(submenu) = resolve_submenu(&menus, &menu_id) {
                                 current_menu = Arc::clone(&submenu);
-                                send_menu_prompt(&mut transport, &current_menu).await?;
+                                send_menu_prompt(&mut transport, &current_menu, &screen_context)
+                                    .await?;
                             } else {
                                 send_text(
                                     &mut transport,
                                     "Configured submenu menu is missing.\r\n",
                                 )
                                 .await?;
-                                send_menu_prompt(&mut transport, &current_menu).await?;
+                                send_menu_prompt(&mut transport, &current_menu, &screen_context)
+                                    .await?;
                             }
                         }
                         _ => {
                             send_text(&mut transport, "Select Login, New User, or Goodbye.\r\n")
                                 .await?;
-                            send_menu_prompt(&mut transport, &current_menu).await?;
+                            send_menu_prompt(&mut transport, &current_menu, &screen_context)
+                                .await?;
                         }
                     }
                 } else {
+                    let entry = current_menu.route_entry(&key);
+                    let user_security = authenticated_user.as_ref().map(|user| user.security_level);
+                    let denied = match (entry, user_security) {
+                        (Some(entry), Some(level)) => level < entry.min_security_level,
+                        (Some(entry), None) => entry.min_security_level > 0,
+                        (None, _) => false,
+                    };
+                    if denied {
+                        debug!(
+                            node = %node_number,
+                            "caller denied by menu item min_security_level"
+                        );
+                        send_text(&mut transport, ACCESS_DENIED_MESSAGE).await?;
+                        send_menu_prompt(&mut transport, &current_menu, &screen_context).await?;
+                        continue;
+                    }
                     match current_menu.route(&key) {
                         Some(MenuAction::Doors) => {
                             debug!(node = %node_number, "caller selected doors");
@@ -688,7 +1091,12 @@ async fn handle_caller(
                             {
                                 MenuFlowResult::Continue => {
                                     runtime.mark_node_main_menu(node_number_u16);
-                                    send_menu_prompt(&mut transport, &current_menu).await?;
+                                    send_menu_prompt(
+                                        &mut transport,
+                                        &current_menu,
+                                        &screen_context,
+                                    )
+                                    .await?;
                                 }
                                 MenuFlowResult::Exit => break,
                             }
@@ -713,50 +1121,99 @@ async fn handle_caller(
                             {
                                 MenuFlowResult::Continue => {
                                     runtime.mark_node_main_menu(node_number_u16);
-                                    send_menu_prompt(&mut transport, &current_menu).await?;
+                                    send_menu_prompt(
+                                        &mut transport,
+                                        &current_menu,
+                                        &screen_context,
+                                    )
+                                    .await?;
                                 }
                                 MenuFlowResult::Exit => {
                                     break;
                                 }
                             }
                         }
+                        Some(MenuAction::Files) => {
+                            debug!(node = %node_number, "caller selected files");
+                            match run_files_flow(
+                                authenticated_user.as_ref(),
+                                &mut transport,
+                                &mut input,
+                                db.as_ref(),
+                                config.as_ref(),
+                                telnet_protocol,
+                                idle_timeout,
+                                &mut disconnect_reason,
+                                node_number_u16,
+                            )
+                            .await?
+                            {
+                                MenuFlowResult::Continue => {
+                                    runtime.mark_node_main_menu(node_number_u16);
+                                    send_menu_prompt(
+                                        &mut transport,
+                                        &current_menu,
+                                        &screen_context,
+                                    )
+                                    .await?;
+                                }
+                                MenuFlowResult::Exit => break,
+                            }
+                        }
                         Some(MenuAction::NewUser) => {
                             debug!(node = %node_number, "authenticated caller selected new-user action");
                             send_text(&mut transport, "Already signed in. Return to menu.\r\n")
                                 .await?;
-                            send_menu_prompt(&mut transport, &current_menu).await?;
+                            send_menu_prompt(&mut transport, &current_menu, &screen_context)
+                                .await?;
                         }
                         Some(MenuAction::Logoff) => {
                             debug!(node = %node_number, "caller selected main-menu logoff");
                             disconnect_reason = "caller_logoff".to_string();
-                            send_text(&mut transport, "Goodbye.\r\n").await?;
+                            send_logoff_screen(
+                                &mut transport,
+                                &config,
+                                capabilities,
+                                &screen_context,
+                            )
+                            .await;
                             break;
                         }
                         Some(MenuAction::ShowScreen { screen }) => {
                             debug!(node = %node_number, screen = %screen.asset, "caller selected show-screen action");
-                            send_screen(&mut transport, &config, &screen.asset, &mut capabilities)
+                            send_screen(
+                                &mut transport,
+                                &config,
+                                &screen.asset,
+                                &mut capabilities,
+                                &screen_context,
+                            )
+                            .await?;
+                            send_menu_prompt(&mut transport, &current_menu, &screen_context)
                                 .await?;
-                            send_menu_prompt(&mut transport, &current_menu).await?;
                         }
                         Some(MenuAction::Submenu { menu_id }) => {
                             debug!(node = %node_number, submenu = %menu_id, "caller selected submenu");
                             if let Some(submenu) = resolve_submenu(&menus, &menu_id) {
                                 current_menu = Arc::clone(&submenu);
-                                send_menu_prompt(&mut transport, &current_menu).await?;
+                                send_menu_prompt(&mut transport, &current_menu, &screen_context)
+                                    .await?;
                             } else {
                                 send_text(
                                     &mut transport,
                                     "Configured submenu menu is missing.\r\n",
                                 )
                                 .await?;
-                                send_menu_prompt(&mut transport, &current_menu).await?;
+                                send_menu_prompt(&mut transport, &current_menu, &screen_context)
+                                    .await?;
                             }
                         }
                         Some(MenuAction::Login) => {
                             debug!(node = %node_number, "authenticated caller selected login action");
                             send_text(&mut transport, "Already signed in. Return to menu.\r\n")
                                 .await?;
-                            send_menu_prompt(&mut transport, &current_menu).await?;
+                            send_menu_prompt(&mut transport, &current_menu, &screen_context)
+                                .await?;
                         }
                         Some(MenuAction::Noop) => {
                             debug!(node = %node_number, "caller selected noop action");
@@ -769,14 +1226,23 @@ async fn handle_caller(
                                 "caller selected unknown menu key"
                             );
                             send_text(&mut transport, "Unknown option.\r\n").await?;
-                            send_menu_prompt(&mut transport, &current_menu).await?;
+                            send_menu_prompt(&mut transport, &current_menu, &screen_context)
+                                .await?;
                         }
                     }
                 }
             }
-            TelnetEvent::WindowSize { columns, .. } => {
+            TelnetEvent::WindowSize { columns, rows } => {
                 if columns > 0 {
                     capabilities.width = columns;
+                    if capabilities.supports_ansi && columns <= 40 {
+                        capabilities.profile = TerminalProfile::Ansi40;
+                    } else if capabilities.supports_ansi {
+                        capabilities.profile = TerminalProfile::Ansi80;
+                    }
+                }
+                if rows > 0 {
+                    capabilities.height = rows;
                 }
             }
             TelnetEvent::Negotiation { .. }
@@ -791,7 +1257,7 @@ async fn handle_caller(
         warn!("failed to flush pending negotiation replies: {error}");
     }
     if let Err(error) = transport.hangup().await {
-        warn!("failed to hang up telnet transport: {error}");
+        warn!("failed to hang up caller transport: {error}");
     }
 
     let ended_at = current_timestamp(&db)?;
@@ -860,8 +1326,9 @@ async fn negotiate_terminal_capabilities<T: Transport>(
     transport: &mut T,
     input: &mut InputSession,
     negotiation_timeout: Duration,
+    fallback_capabilities: TerminalCapabilities,
 ) -> ServeResult<TerminalCapabilities> {
-    let mut capabilities = TerminalCapabilities::plain_text();
+    let mut capabilities = fallback_capabilities;
     let mut terminal_type_evaluated = false;
     let mut naws_seen = false;
     transport.write_all(&terminal_capability_requests()).await?;
@@ -943,11 +1410,19 @@ async fn apply_capability_event<T: Transport>(
                 .await?;
         }
         TelnetEvent::TerminalType(terminal_type) => {
-            capabilities.supports_ansi = terminal_type_supports_ansi(&terminal_type);
+            apply_terminal_type(capabilities, &terminal_type, *naws_seen);
             *terminal_type_evaluated = true;
         }
-        TelnetEvent::WindowSize { columns, .. } if columns > 0 => {
+        TelnetEvent::WindowSize { columns, rows } if columns > 0 => {
             capabilities.width = columns;
+            if rows > 0 {
+                capabilities.height = rows;
+            }
+            if capabilities.supports_ansi && columns <= 40 {
+                capabilities.profile = TerminalProfile::Ansi40;
+            } else if capabilities.supports_ansi {
+                capabilities.profile = TerminalProfile::Ansi80;
+            }
             *naws_seen = true;
         }
         TelnetEvent::Data(_) => return Ok(true),
@@ -960,17 +1435,50 @@ async fn apply_capability_event<T: Transport>(
     Ok(*terminal_type_evaluated && *naws_seen)
 }
 
-fn terminal_type_supports_ansi(terminal_type: &[u8]) -> bool {
+fn terminal_type_capabilities(terminal_type: &[u8]) -> TerminalCapabilities {
     let terminal_type = String::from_utf8_lossy(terminal_type);
     let normalized = terminal_type.trim().to_ascii_lowercase();
 
-    normalized.contains("syncterm")
+    if normalized.contains("c64")
+        || normalized.contains("commodore 64")
+        || normalized.contains("c64 ultimate")
+        || normalized.contains("ultimate 64")
+        || normalized.contains("petscii")
+        || normalized.contains("cgterm")
+    {
+        return TerminalCapabilities::c64();
+    }
+
+    if normalized.contains("syncterm")
         || normalized == "ansi"
         || normalized.contains("ansi.sys")
         || normalized.contains("ansi-bbs")
         || normalized.contains("bbs-ansi")
         || normalized == "pc-ansi"
         || normalized.contains("pcansi")
+    {
+        TerminalCapabilities::ansi_80()
+    } else {
+        TerminalCapabilities::plain_text()
+    }
+}
+
+fn apply_terminal_type(
+    capabilities: &mut TerminalCapabilities,
+    terminal_type: &[u8],
+    naws_seen: bool,
+) {
+    let detected = terminal_type_capabilities(terminal_type);
+    let reported_width = capabilities.width;
+    let reported_height = capabilities.height;
+    *capabilities = detected;
+    if naws_seen {
+        capabilities.width = reported_width;
+        capabilities.height = reported_height;
+        if capabilities.profile == TerminalProfile::Ansi80 && reported_width <= 40 {
+            capabilities.profile = TerminalProfile::Ansi40;
+        }
+    }
 }
 
 struct AuthFlowState<'a> {
@@ -1002,8 +1510,8 @@ struct DoorFlowState<'a> {
     node_number: u16,
 }
 
-async fn run_login_flow(
-    transport: &mut TcpTransport,
+async fn run_login_flow<T: Transport>(
+    transport: &mut T,
     input: &mut InputSession,
     state: &mut AuthFlowState<'_>,
 ) -> ServeResult<AuthFlowResult> {
@@ -1200,8 +1708,8 @@ async fn run_login_flow(
     Ok(AuthFlowResult::Success)
 }
 
-async fn run_new_user_flow(
-    transport: &mut TcpTransport,
+async fn run_new_user_flow<T: Transport>(
+    transport: &mut T,
     input: &mut InputSession,
     state: &mut AuthFlowState<'_>,
 ) -> ServeResult<AuthFlowResult> {
@@ -1470,7 +1978,7 @@ async fn run_new_user_flow(
 
 async fn run_doors_flow(
     authenticated_user: Option<&User>,
-    transport: &mut TcpTransport,
+    transport: &mut impl Transport,
     input: &mut InputSession,
     state: &mut DoorFlowState<'_>,
 ) -> ServeResult<MenuFlowResult> {
@@ -1530,6 +2038,18 @@ async fn run_doors_flow(
             "caller selected door"
         );
 
+        if door_access_denied(user.security_level, door.min_security_level) {
+            debug!(
+                node = %state.node_number,
+                user_level = user.security_level,
+                door_level = door.min_security_level,
+                door_key = %door.key,
+                "caller denied by door min_security_level"
+            );
+            send_text(transport, ACCESS_DENIED_MESSAGE).await?;
+            continue;
+        }
+
         if let Err(message) = service.validate_door(door, state.node_number) {
             warn!(
                 door = %door.key,
@@ -1587,6 +2107,10 @@ async fn run_doors_flow(
     }
 }
 
+fn door_access_denied(user_security_level: i32, door_min_security_level: i64) -> bool {
+    user_security_level < door_min_security_level as i32
+}
+
 fn door_summary_text(summary: &DoorExecutionSummary) -> String {
     let run_id = summary
         .run_id
@@ -1629,7 +2153,7 @@ fn door_summary_text(summary: &DoorExecutionSummary) -> String {
 
 async fn run_messages_flow(
     authenticated_user: Option<&User>,
-    transport: &mut TcpTransport,
+    transport: &mut impl Transport,
     input: &mut InputSession,
     state: &mut MessageFlowState<'_>,
 ) -> ServeResult<MenuFlowResult> {
@@ -1967,9 +2491,821 @@ async fn run_messages_flow(
     }
 }
 
-async fn ensure_default_message_area(
+#[allow(clippy::too_many_arguments)]
+async fn run_files_flow<T: Transport>(
+    authenticated_user: Option<&User>,
+    transport: &mut T,
+    input: &mut InputSession,
     db: &OxideDb,
-    transport: &mut TcpTransport,
+    config: &OxideConfig,
+    telnet_protocol: bool,
+    idle_timeout: Duration,
+    disconnect_reason: &mut String,
+    node_number: u16,
+) -> ServeResult<MenuFlowResult> {
+    let Some(user) = authenticated_user else {
+        send_text(transport, "You must be signed in to use file areas.\r\n").await?;
+        return Ok(MenuFlowResult::Continue);
+    };
+
+    if !config.file_transfers.enabled {
+        send_text(transport, "File transfers are disabled.\r\n").await?;
+        return Ok(MenuFlowResult::Continue);
+    }
+
+    let file_areas = oxidebbs_db::list_file_areas(db.db())?
+        .into_iter()
+        .filter(|area| area.enabled)
+        .collect::<Vec<_>>();
+
+    if file_areas.is_empty() {
+        send_text(transport, "No file areas are configured.\r\n").await?;
+        return Ok(MenuFlowResult::Continue);
+    }
+
+    loop {
+        send_text(transport, "\r\nFile areas:\r\n").await?;
+        for (index, area) in file_areas.iter().enumerate() {
+            let accessible = user.security_level >= area.read_security_level as i32;
+            let marker = if accessible { " " } else { "*" };
+            send_text(
+                transport,
+                &format!(
+                    "{}[{}] {} - {}\r\n",
+                    marker,
+                    index + 1,
+                    area.key,
+                    area.description
+                ),
+            )
+            .await?;
+        }
+
+        let selection = match prompt_for_line(
+            transport,
+            input,
+            idle_timeout,
+            true,
+            false,
+            "Area number (blank to return): ",
+        )
+        .await?
+        {
+            PromptLineResult::Value(value) => value,
+            PromptLineResult::Disconnected => {
+                *disconnect_reason = "caller_dropped_during_files".to_string();
+                return Ok(MenuFlowResult::Exit);
+            }
+            PromptLineResult::IdleTimeout => {
+                *disconnect_reason = "idle_timeout".to_string();
+                send_text(transport, "Idle timeout. Goodbye.\r\n").await?;
+                return Ok(MenuFlowResult::Exit);
+            }
+            PromptLineResult::Rejected => {
+                send_text(transport, CP437_INPUT_REJECT_LINE).await?;
+                continue;
+            }
+        };
+
+        let trimmed = selection.trim();
+        if trimmed.is_empty() {
+            return Ok(MenuFlowResult::Continue);
+        }
+
+        let area_index = match trimmed.parse::<usize>() {
+            Ok(n) if n >= 1 && n <= file_areas.len() => n - 1,
+            _ => {
+                send_text(transport, "Invalid selection.\r\n").await?;
+                continue;
+            }
+        };
+
+        let area = &file_areas[area_index];
+        if user.security_level < area.read_security_level as i32 {
+            send_text(transport, "Access denied. Security level too low.\r\n").await?;
+            continue;
+        }
+
+        loop {
+            let files = approved_files_for_area(db, area)?;
+            send_text(transport, &format!("\r\nFiles in {}:\r\n", area.name)).await?;
+            if files.is_empty() {
+                send_text(transport, "No approved files in this area.\r\n").await?;
+            } else {
+                for (index, file) in files.iter().enumerate() {
+                    send_text(
+                        transport,
+                        &format!(
+                            "[{}] {} ({} bytes)\r\n",
+                            index + 1,
+                            file.display_name,
+                            file.size_bytes
+                        ),
+                    )
+                    .await?;
+                }
+            }
+
+            let action = match prompt_for_line(
+                transport,
+                input,
+                idle_timeout,
+                true,
+                false,
+                "Files: D)ownload U)pload R)eturn: ",
+            )
+            .await?
+            {
+                PromptLineResult::Value(value) => value.trim().to_ascii_uppercase(),
+                PromptLineResult::Disconnected => {
+                    *disconnect_reason = "caller_dropped_during_files".to_string();
+                    return Ok(MenuFlowResult::Exit);
+                }
+                PromptLineResult::IdleTimeout => {
+                    *disconnect_reason = "idle_timeout".to_string();
+                    send_text(transport, "Idle timeout. Goodbye.\r\n").await?;
+                    return Ok(MenuFlowResult::Exit);
+                }
+                PromptLineResult::Rejected => {
+                    send_text(transport, CP437_INPUT_REJECT_LINE).await?;
+                    continue;
+                }
+            };
+
+            if action.is_empty() || action == "R" {
+                break;
+            }
+
+            match action.as_str() {
+                "D" => {
+                    if files.is_empty() {
+                        send_text(transport, "No files are available for download.\r\n").await?;
+                        continue;
+                    }
+                    run_file_download(
+                        user,
+                        transport,
+                        input,
+                        db,
+                        area,
+                        &files,
+                        telnet_protocol,
+                        idle_timeout,
+                        disconnect_reason,
+                        node_number,
+                    )
+                    .await?;
+                }
+                "U" => {
+                    run_file_upload(
+                        user,
+                        transport,
+                        input,
+                        db,
+                        config,
+                        area,
+                        telnet_protocol,
+                        idle_timeout,
+                        disconnect_reason,
+                        node_number,
+                    )
+                    .await?;
+                }
+                _ => {
+                    send_text(transport, "Unknown file command.\r\n").await?;
+                }
+            }
+        }
+    }
+}
+
+fn approved_files_for_area(
+    db: &OxideDb,
+    area: &FileAreaRecord,
+) -> ServeResult<Vec<FileEntryRecord>> {
+    Ok(oxidebbs_db::list_file_entries(db.db())?
+        .into_iter()
+        .filter(|entry| entry.approved && entry.area_id == area.id)
+        .collect::<Vec<_>>())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_file_download<T: Transport>(
+    user: &User,
+    transport: &mut T,
+    input: &mut InputSession,
+    db: &OxideDb,
+    area: &FileAreaRecord,
+    files: &[FileEntryRecord],
+    telnet_protocol: bool,
+    idle_timeout: Duration,
+    disconnect_reason: &mut String,
+    node_number: u16,
+) -> ServeResult<()> {
+    if user.security_level < area.download_security_level as i32 {
+        send_text(
+            transport,
+            "Access denied. Security level too low for download.\r\n",
+        )
+        .await?;
+        return Ok(());
+    }
+
+    let file_selection = match prompt_for_line(
+        transport,
+        input,
+        idle_timeout,
+        true,
+        false,
+        "File number (blank to return): ",
+    )
+    .await?
+    {
+        PromptLineResult::Value(value) => value,
+        PromptLineResult::Disconnected => {
+            *disconnect_reason = "caller_dropped_during_files".to_string();
+            return Ok(());
+        }
+        PromptLineResult::IdleTimeout => {
+            *disconnect_reason = "idle_timeout".to_string();
+            send_text(transport, "Idle timeout. Goodbye.\r\n").await?;
+            return Ok(());
+        }
+        PromptLineResult::Rejected => {
+            send_text(transport, CP437_INPUT_REJECT_LINE).await?;
+            return Ok(());
+        }
+    };
+    let file_trimmed = file_selection.trim();
+    if file_trimmed.is_empty() {
+        return Ok(());
+    }
+    let file_index = match file_trimmed.parse::<usize>() {
+        Ok(n) if n >= 1 && n <= files.len() => n - 1,
+        _ => {
+            send_text(transport, "Invalid selection.\r\n").await?;
+            return Ok(());
+        }
+    };
+    let protocol = match prompt_transfer_protocol(transport, input, idle_timeout).await? {
+        Some(protocol) => protocol,
+        None => return Ok(()),
+    };
+
+    let file = &files[file_index];
+    let file_path = file_entry_path(area, file);
+    if !file_path.exists() {
+        send_text(transport, "File not found on disk.\r\n").await?;
+        return Ok(());
+    }
+    let file_bytes = match std::fs::read(&file_path) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            send_text(transport, "Cannot read file.\r\n").await?;
+            return Ok(());
+        }
+    };
+
+    send_text(
+        transport,
+        &format!(
+            "\r\nSending {} ({} bytes) via {}...\r\n",
+            file.display_name,
+            file.size_bytes,
+            transfer_protocol_label(protocol)
+        ),
+    )
+    .await?;
+    if protocol == TransferProtocol::XmodemCrc {
+        send_text(
+            transport,
+            "Start XMODEM receive in your terminal now. CRC is used when the terminal requests it.\r\n",
+        )
+        .await?;
+    }
+
+    let started_at = current_timestamp(db)?;
+    let started = Instant::now();
+    let transfer_result = {
+        let mut adapter = if telnet_protocol {
+            TransportAdapter::new_telnet(&mut *transport)
+        } else {
+            TransportAdapter::new_raw(&mut *transport)
+        };
+        match protocol {
+            TransferProtocol::Zmodem => oxidebbs_transfer::zmodem::send_zmodem_file(
+                &mut adapter,
+                &file.display_name,
+                &file_bytes,
+            )
+            .await
+            .map(|stats| stats.retries),
+            TransferProtocol::XmodemCrc => {
+                oxidebbs_transfer::xmodem::send_xmodem_crc(&mut adapter, &file_bytes)
+                    .await
+                    .map(|()| 0)
+            }
+        }
+    };
+    if protocol == TransferProtocol::Zmodem && transfer_result.is_ok() {
+        drain_zmodem_finish_sequence(transport, input).await?;
+    }
+    let ended_at = current_timestamp(db)?;
+    let duration_ms = elapsed_millis(started);
+
+    match transfer_result {
+        Ok(retry_count) => {
+            increment_file_entry_download_count(db.db(), &file.id)?;
+            record_file_transfer(
+                db,
+                FileTransferInput {
+                    node_number,
+                    user_id: &user.id,
+                    area_id: Some(&area.id),
+                    file_entry_id: Some(&file.id),
+                    direction: "download",
+                    protocol,
+                    requested_name: Some(&file.display_name),
+                    storage_name: Some(&file.storage_name),
+                    declared_size_bytes: Some(file.size_bytes),
+                    transferred_payload_bytes: file_bytes.len() as i64,
+                    committed_size_bytes: Some(file_bytes.len() as i64),
+                    started_at,
+                    ended_at: Some(ended_at),
+                    duration_ms: Some(duration_ms),
+                    outcome: "success",
+                    error: None,
+                    retry_count: i64::from(retry_count),
+                },
+            )?;
+            send_text(transport, "\r\nTransfer complete.\r\n").await?;
+            debug!(node = %node_number, user_id = %user.id, file_id = %file.id, "caller downloaded file");
+        }
+        Err(error) => {
+            record_file_transfer(
+                db,
+                FileTransferInput {
+                    node_number,
+                    user_id: &user.id,
+                    area_id: Some(&area.id),
+                    file_entry_id: Some(&file.id),
+                    direction: "download",
+                    protocol,
+                    requested_name: Some(&file.display_name),
+                    storage_name: Some(&file.storage_name),
+                    declared_size_bytes: Some(file.size_bytes),
+                    transferred_payload_bytes: 0,
+                    committed_size_bytes: None,
+                    started_at,
+                    ended_at: Some(ended_at),
+                    duration_ms: Some(duration_ms),
+                    outcome: transfer_error_outcome(&error),
+                    error: Some(&error),
+                    retry_count: 0,
+                },
+            )?;
+            send_text(transport, &format!("\r\nTransfer failed: {error}\r\n")).await?;
+            debug!(node = %node_number, user_id = %user.id, file_id = %file.id, %error, "file transfer failed");
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_file_upload<T: Transport>(
+    user: &User,
+    transport: &mut T,
+    input: &mut InputSession,
+    db: &OxideDb,
+    config: &OxideConfig,
+    area: &FileAreaRecord,
+    telnet_protocol: bool,
+    idle_timeout: Duration,
+    disconnect_reason: &mut String,
+    node_number: u16,
+) -> ServeResult<()> {
+    if user.security_level < area.upload_security_level as i32 {
+        send_text(
+            transport,
+            "Access denied. Security level too low for upload.\r\n",
+        )
+        .await?;
+        return Ok(());
+    }
+    let protocol = match prompt_transfer_protocol(transport, input, idle_timeout).await? {
+        Some(protocol) => protocol,
+        None => return Ok(()),
+    };
+    let upload_limit = upload_limit_bytes(area, config);
+
+    let mut xmodem_name = None;
+    let mut declared_size = None;
+    if protocol == TransferProtocol::XmodemCrc {
+        let filename = prompt_required_value(
+            transport,
+            input,
+            idle_timeout,
+            "Upload filename: ",
+            disconnect_reason,
+        )
+        .await?;
+        let Some(filename) = filename else {
+            return Ok(());
+        };
+        let safe_name = match sanitize_filename(filename.trim()) {
+            Ok(name) => name,
+            Err(_) => {
+                send_text(transport, "Invalid upload filename.\r\n").await?;
+                return Ok(());
+            }
+        };
+        let declared = prompt_for_line(
+            transport,
+            input,
+            idle_timeout,
+            true,
+            false,
+            "Declared size bytes (blank if unknown): ",
+        )
+        .await?;
+        if let PromptLineResult::Value(value) = declared {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                match trimmed.parse::<u64>() {
+                    Ok(size) => declared_size = Some(size),
+                    Err(_) => {
+                        send_text(transport, "Invalid declared size.\r\n").await?;
+                        return Ok(());
+                    }
+                }
+            }
+        }
+        xmodem_name = Some(safe_name);
+    }
+
+    send_text(
+        transport,
+        &format!(
+            "\r\nReady to receive via {}...\r\n",
+            transfer_protocol_label(protocol)
+        ),
+    )
+    .await?;
+
+    let started_at = current_timestamp(db)?;
+    let started = Instant::now();
+    let transfer_result = {
+        let mut adapter = if telnet_protocol {
+            TransportAdapter::new_telnet(&mut *transport)
+        } else {
+            TransportAdapter::new_raw(&mut *transport)
+        };
+        match protocol {
+            TransferProtocol::Zmodem => {
+                oxidebbs_transfer::zmodem::receive_zmodem_file(&mut adapter, upload_limit)
+                    .await
+                    .map(|file| (file.filename, file.payload, None, 0))
+            }
+            TransferProtocol::XmodemCrc => {
+                let result = if let Some(size) = declared_size {
+                    oxidebbs_transfer::xmodem::receive_xmodem_crc_with_size(
+                        &mut adapter,
+                        size as usize,
+                    )
+                    .await
+                } else {
+                    oxidebbs_transfer::xmodem::receive_xmodem_crc(&mut adapter).await
+                };
+                result.map(|payload| {
+                    (
+                        xmodem_name
+                            .clone()
+                            .unwrap_or_else(|| "upload.bin".to_string()),
+                        payload,
+                        declared_size,
+                        0,
+                    )
+                })
+            }
+        }
+    };
+    if protocol == TransferProtocol::Zmodem && transfer_result.is_ok() {
+        drain_zmodem_finish_sequence(transport, input).await?;
+    }
+    let ended_at = current_timestamp(db)?;
+    let duration_ms = elapsed_millis(started);
+
+    match transfer_result {
+        Ok((requested_name, payload, declared_size, retry_count)) => {
+            if let Some(limit) = upload_limit
+                && payload.len() as u64 > limit
+            {
+                send_text(transport, "Upload exceeds configured size limit.\r\n").await?;
+                record_file_transfer(
+                    db,
+                    FileTransferInput {
+                        node_number,
+                        user_id: &user.id,
+                        area_id: Some(&area.id),
+                        file_entry_id: None,
+                        direction: "upload",
+                        protocol,
+                        requested_name: Some(&requested_name),
+                        storage_name: None,
+                        declared_size_bytes: declared_size.map(|size| size as i64),
+                        transferred_payload_bytes: payload.len() as i64,
+                        committed_size_bytes: None,
+                        started_at,
+                        ended_at: Some(ended_at),
+                        duration_ms: Some(duration_ms),
+                        outcome: "failed",
+                        error: Some(&TransferError::QuotaDenied),
+                        retry_count,
+                    },
+                )?;
+                return Ok(());
+            }
+            let safe_name = match sanitize_filename(&requested_name) {
+                Ok(name) => name,
+                Err(_) => {
+                    send_text(transport, "Invalid upload filename.\r\n").await?;
+                    return Ok(());
+                }
+            };
+            let entry_seed = generated_uuid(db)?;
+            let storage_name = storage_name_for_upload(&safe_name, &entry_seed);
+            let root = PathBuf::from(&area.root_path);
+            std::fs::create_dir_all(&root)?;
+            let destination = root.join(&storage_name);
+            validate_path_within_base(&root, &destination)
+                .map_err(|error| ServeError::Runtime(error.to_string()))?;
+            std::fs::write(&destination, &payload)?;
+
+            let size_bytes = i64::try_from(payload.len())
+                .map_err(|_| ServeError::Runtime("uploaded file is too large".to_string()))?;
+            let crc = oxidebbs_transfer::zmodem::crc32_iso_hdlc(&payload);
+            let entry = FileEntryRecord {
+                id: entry_seed,
+                area_id: area.id.clone(),
+                storage_name: storage_name.clone(),
+                display_name: safe_name.clone(),
+                original_name: Some(requested_name.clone()),
+                size_bytes,
+                content_crc32: Some(format!("{crc:08X}")),
+                description: "Caller upload pending sysop review".to_string(),
+                uploader_user_id: Some(user.id.clone()),
+                download_count: 0,
+                approved: false,
+                created_at: current_timestamp(db)?,
+                updated_at: current_timestamp(db)?,
+            };
+            insert_file_entry(db.db(), &entry)?;
+            let stored_entry =
+                find_file_entry_by_storage_name(db.db(), &area.id, &storage_name)?.unwrap_or(entry);
+            record_file_transfer(
+                db,
+                FileTransferInput {
+                    node_number,
+                    user_id: &user.id,
+                    area_id: Some(&area.id),
+                    file_entry_id: Some(&stored_entry.id),
+                    direction: "upload",
+                    protocol,
+                    requested_name: Some(&requested_name),
+                    storage_name: Some(&storage_name),
+                    declared_size_bytes: declared_size.map(|size| size as i64),
+                    transferred_payload_bytes: size_bytes,
+                    committed_size_bytes: Some(size_bytes),
+                    started_at,
+                    ended_at: Some(ended_at),
+                    duration_ms: Some(duration_ms),
+                    outcome: "success",
+                    error: None,
+                    retry_count,
+                },
+            )?;
+            send_text(
+                transport,
+                "\r\nUpload complete. File is pending sysop review.\r\n",
+            )
+            .await?;
+        }
+        Err(error) => {
+            record_file_transfer(
+                db,
+                FileTransferInput {
+                    node_number,
+                    user_id: &user.id,
+                    area_id: Some(&area.id),
+                    file_entry_id: None,
+                    direction: "upload",
+                    protocol,
+                    requested_name: xmodem_name.as_deref(),
+                    storage_name: None,
+                    declared_size_bytes: declared_size.map(|size| size as i64),
+                    transferred_payload_bytes: 0,
+                    committed_size_bytes: None,
+                    started_at,
+                    ended_at: Some(ended_at),
+                    duration_ms: Some(duration_ms),
+                    outcome: transfer_error_outcome(&error),
+                    error: Some(&error),
+                    retry_count: 0,
+                },
+            )?;
+            send_text(transport, &format!("\r\nUpload failed: {error}\r\n")).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn prompt_transfer_protocol<T: Transport>(
+    transport: &mut T,
+    input: &mut InputSession,
+    idle_timeout: Duration,
+) -> ServeResult<Option<TransferProtocol>> {
+    let protocol = match prompt_for_line(
+        transport,
+        input,
+        idle_timeout,
+        true,
+        false,
+        "Protocol: Z) ZMODEM  X) XMODEM  blank to return: ",
+    )
+    .await?
+    {
+        PromptLineResult::Value(value) => value.trim().to_ascii_uppercase(),
+        PromptLineResult::Disconnected | PromptLineResult::IdleTimeout => return Ok(None),
+        PromptLineResult::Rejected => {
+            send_text(transport, CP437_INPUT_REJECT_LINE).await?;
+            return Ok(None);
+        }
+    };
+
+    match protocol.as_str() {
+        "" => Ok(None),
+        "Z" => Ok(Some(TransferProtocol::Zmodem)),
+        "X" => Ok(Some(TransferProtocol::XmodemCrc)),
+        _ => {
+            send_text(transport, "Unsupported transfer protocol.\r\n").await?;
+            Ok(None)
+        }
+    }
+}
+
+async fn prompt_required_value<T: Transport>(
+    transport: &mut T,
+    input: &mut InputSession,
+    idle_timeout: Duration,
+    prompt: &str,
+    disconnect_reason: &mut String,
+) -> ServeResult<Option<String>> {
+    match prompt_for_line(transport, input, idle_timeout, false, false, prompt).await? {
+        PromptLineResult::Value(value) => Ok(Some(value)),
+        PromptLineResult::Disconnected => {
+            *disconnect_reason = "caller_dropped_during_files".to_string();
+            Ok(None)
+        }
+        PromptLineResult::IdleTimeout => {
+            *disconnect_reason = "idle_timeout".to_string();
+            send_text(transport, "Idle timeout. Goodbye.\r\n").await?;
+            Ok(None)
+        }
+        PromptLineResult::Rejected => {
+            send_text(transport, CP437_INPUT_REJECT_LINE).await?;
+            Ok(None)
+        }
+    }
+}
+
+fn file_entry_path(area: &FileAreaRecord, file: &FileEntryRecord) -> PathBuf {
+    let root = Path::new(&area.root_path);
+    let current = root.join(&file.storage_name);
+    if current.exists() {
+        current
+    } else {
+        root.join("files").join(&file.id).join(&file.storage_name)
+    }
+}
+
+fn upload_limit_bytes(area: &FileAreaRecord, config: &OxideConfig) -> Option<u64> {
+    let global = u64::try_from(config.file_transfers.max_upload_bytes)
+        .ok()
+        .filter(|value| *value > 0);
+    let area_limit = area
+        .max_upload_bytes
+        .and_then(|value| u64::try_from(value).ok());
+    match (area_limit, global) {
+        (Some(area), Some(global)) => Some(area.min(global)),
+        (Some(area), None) => Some(area),
+        (None, Some(global)) => Some(global),
+        (None, None) => None,
+    }
+}
+
+fn storage_name_for_upload(filename: &str, id: &str) -> String {
+    Path::new(filename)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .filter(|extension| {
+            !extension.is_empty()
+                && extension
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric())
+        })
+        .map_or_else(|| id.to_string(), |extension| format!("{id}.{extension}"))
+}
+
+fn elapsed_millis(started: Instant) -> i64 {
+    i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX)
+}
+
+fn transfer_protocol_label(protocol: TransferProtocol) -> &'static str {
+    match protocol {
+        TransferProtocol::Zmodem => "ZMODEM",
+        TransferProtocol::XmodemCrc => "XMODEM",
+    }
+}
+
+fn transfer_protocol_db_value(protocol: TransferProtocol) -> &'static str {
+    match protocol {
+        TransferProtocol::Zmodem => "zmodem",
+        TransferProtocol::XmodemCrc => "xmodem_crc",
+    }
+}
+
+fn transfer_error_outcome(error: &TransferError) -> &'static str {
+    match error {
+        TransferError::Canceled => "cancelled",
+        _ => "failed",
+    }
+}
+
+fn transfer_error_code(error: &TransferError) -> &'static str {
+    match error {
+        TransferError::ProtocolError => "protocol_error",
+        TransferError::Timeout => "timeout",
+        TransferError::Transport => "transport",
+        TransferError::IoError(_) => "io_error",
+        TransferError::SecurityDenied => "security_denied",
+        TransferError::QuotaDenied => "quota_denied",
+        TransferError::Canceled => "cancelled",
+        TransferError::Unsupported => "unsupported",
+        TransferError::PathInvalid => "path_invalid",
+    }
+}
+
+struct FileTransferInput<'a> {
+    node_number: u16,
+    user_id: &'a str,
+    area_id: Option<&'a str>,
+    file_entry_id: Option<&'a str>,
+    direction: &'a str,
+    protocol: TransferProtocol,
+    requested_name: Option<&'a str>,
+    storage_name: Option<&'a str>,
+    declared_size_bytes: Option<i64>,
+    transferred_payload_bytes: i64,
+    committed_size_bytes: Option<i64>,
+    started_at: String,
+    ended_at: Option<String>,
+    duration_ms: Option<i64>,
+    outcome: &'a str,
+    error: Option<&'a TransferError>,
+    retry_count: i64,
+}
+
+fn record_file_transfer(db: &OxideDb, input: FileTransferInput<'_>) -> ServeResult<()> {
+    insert_file_transfer(
+        db.db(),
+        &FileTransferRecord {
+            id: String::new(),
+            node_number: i64::from(input.node_number),
+            user_id: input.user_id.to_string(),
+            area_id: input.area_id.map(str::to_string),
+            file_entry_id: input.file_entry_id.map(str::to_string),
+            direction: input.direction.to_string(),
+            protocol: transfer_protocol_db_value(input.protocol).to_string(),
+            requested_name: input.requested_name.map(str::to_string),
+            storage_name: input.storage_name.map(str::to_string),
+            declared_size_bytes: input.declared_size_bytes,
+            transferred_payload_bytes: input.transferred_payload_bytes,
+            committed_size_bytes: input.committed_size_bytes,
+            started_at: input.started_at,
+            ended_at: input.ended_at,
+            duration_ms: input.duration_ms,
+            outcome: input.outcome.to_string(),
+            error_code: input.error.map(transfer_error_code).map(str::to_string),
+            error_message: input.error.map(ToString::to_string),
+            retry_count: input.retry_count,
+        },
+    )
+    .map_err(ServeError::Database)
+}
+
+async fn ensure_default_message_area<T: Transport>(
+    db: &OxideDb,
+    transport: &mut T,
 ) -> ServeResult<()> {
     if !list_message_areas(db.db())?.is_empty() {
         return Ok(());
@@ -2045,8 +3381,8 @@ async fn display_message<T: Transport>(
     .await
 }
 
-async fn prompt_for_message_index(
-    transport: &mut TcpTransport,
+async fn prompt_for_message_index<T: Transport>(
+    transport: &mut T,
     input: &mut InputSession,
     idle_timeout: Duration,
     disconnect_reason: &mut String,
@@ -2147,6 +3483,9 @@ fn message_record_from_message(message: &Message) -> MessageRecord {
         id: message.id.clone(),
         area_id: message.area_id.clone(),
         author_user_id: message.author_user_id.clone(),
+        author_kind: "local".to_string(),
+        author_display_name: String::new(),
+        author_network_address: None,
         to_user_id: message.to_user_id.clone(),
         subject: message.subject.clone(),
         body: message.body.clone(),
@@ -2439,51 +3778,67 @@ fn record_login_failure_scopes(
     Ok(())
 }
 
-async fn send_login_flow(
-    transport: &mut TcpTransport,
+async fn send_login_flow<T: Transport>(
+    transport: &mut T,
     config: &OxideConfig,
     login_menu: &Menu,
     capabilities: &mut TerminalCapabilities,
+    context: &ScreenRenderContext,
 ) -> ServeResult<()> {
-    send_screen(transport, config, &config.flow.login_screen, capabilities).await?;
-    send_menu_prompt(transport, login_menu).await
+    send_screen(
+        transport,
+        config,
+        &config.flow.login_screen,
+        capabilities,
+        context,
+    )
+    .await?;
+    send_menu_prompt(transport, login_menu, context).await
 }
 
-async fn send_main_menu(
-    transport: &mut TcpTransport,
+async fn send_main_menu<T: Transport>(
+    transport: &mut T,
     config: &OxideConfig,
     menu: &Menu,
     capabilities: &mut TerminalCapabilities,
+    context: &ScreenRenderContext,
 ) -> ServeResult<()> {
-    send_screen(transport, config, &menu.screen.asset, capabilities).await?;
-    send_menu_prompt(transport, menu).await
+    send_screen(transport, config, &menu.screen.asset, capabilities, context).await?;
+    send_menu_prompt(transport, menu, context).await
 }
 
-async fn send_menu_prompt(transport: &mut TcpTransport, menu: &Menu) -> ServeResult<()> {
+async fn send_menu_prompt<T: Transport>(
+    transport: &mut T,
+    menu: &Menu,
+    context: &ScreenRenderContext,
+) -> ServeResult<()> {
     let prompt = menu
         .description
         .clone()
         .unwrap_or_else(|| "Command? ".to_string());
-    send_text(transport, &prompt).await?;
+    let payload = expand_screen_runtime_tokens(encode_text(&prompt), context);
+    transport.write_all(&payload).await?;
     Ok(())
 }
 
-async fn show_post_login_screens(
-    transport: &mut TcpTransport,
+async fn show_post_login_screens<T: Transport>(
+    transport: &mut T,
     config: &OxideConfig,
     capabilities: &mut TerminalCapabilities,
+    context: &ScreenRenderContext,
 ) -> ServeResult<()> {
     for screen in &config.flow.post_login_screens {
-        send_screen(transport, config, screen, capabilities).await?;
+        send_screen(transport, config, screen, capabilities, context).await?;
     }
     send_text(transport, MAIN_MENU_POST_LOGIN).await
 }
 
-async fn send_terminal_asset(
-    transport: &mut TcpTransport,
+async fn send_terminal_asset<T: Transport>(
+    transport: &mut T,
     asset_name: &str,
     config: &OxideConfig,
     capabilities: TerminalCapabilities,
+    context: &ScreenRenderContext,
 ) -> ServeResult<()> {
     let payload =
         load_terminal_asset_payload(config, asset_name, capabilities).unwrap_or_else(|error| {
@@ -2495,8 +3850,29 @@ async fn send_terminal_asset(
             );
             fallback_screen_payload(asset_name, &error)
         });
+    let payload = expand_screen_runtime_tokens(payload, context);
     transport.write_all(&payload).await?;
     Ok(())
+}
+
+async fn send_logoff_screen<T: Transport>(
+    transport: &mut T,
+    config: &OxideConfig,
+    capabilities: TerminalCapabilities,
+    context: &ScreenRenderContext,
+) {
+    let asset_name = &config.terminal.logoff_screen;
+    let payload =
+        load_terminal_asset_payload(config, asset_name, capabilities).unwrap_or_else(|error| {
+            warn!(
+                asset = asset_name,
+                supports_ansi = capabilities.supports_ansi,
+                "failed to load configured logoff screen; falling back to plain goodbye: {error}"
+            );
+            normalize_caller_line_endings(&encode_text("Goodbye.\r\n"))
+        });
+    let payload = expand_screen_runtime_tokens(payload, context);
+    let _ = transport.write_all(&payload).await;
 }
 
 fn load_terminal_asset_payload(
@@ -2505,7 +3881,7 @@ fn load_terminal_asset_payload(
     capabilities: TerminalCapabilities,
 ) -> Result<Vec<u8>, String> {
     if !capabilities.supports_ansi
-        && let Some(payload) = load_plain_terminal_asset_payload(config, asset_name)?
+        && let Some(payload) = load_plain_terminal_asset_payload(config, asset_name, capabilities)?
     {
         return Ok(normalize_caller_line_endings(&payload));
     }
@@ -2530,8 +3906,9 @@ fn load_terminal_asset_payload(
 fn load_plain_terminal_asset_payload(
     config: &OxideConfig,
     asset_name: &str,
+    capabilities: TerminalCapabilities,
 ) -> Result<Option<Vec<u8>>, String> {
-    for candidate in plain_terminal_asset_candidates(asset_name) {
+    for candidate in plain_terminal_asset_candidates(asset_name, capabilities) {
         let asset_path = config.paths.ansi.join(&candidate);
         match std::fs::read(&asset_path) {
             Ok(bytes) => {
@@ -2551,9 +3928,31 @@ fn load_plain_terminal_asset_payload(
     Ok(None)
 }
 
-fn plain_terminal_asset_candidates(asset_name: &str) -> [String; 2] {
+fn plain_terminal_asset_candidates(
+    asset_name: &str,
+    capabilities: TerminalCapabilities,
+) -> Vec<String> {
     let asset_path = Path::new(asset_name);
-    [
+    let mut candidates = Vec::new();
+    if capabilities.width <= 40 {
+        candidates.push(
+            asset_path
+                .with_extension("")
+                .to_string_lossy()
+                .trim_end_matches('.')
+                .to_string()
+                + "-40.asc",
+        );
+        candidates.push(
+            asset_path
+                .with_extension("")
+                .to_string_lossy()
+                .trim_end_matches('.')
+                .to_string()
+                + "-40.txt",
+        );
+    }
+    candidates.extend([
         asset_path
             .with_extension("asc")
             .to_string_lossy()
@@ -2562,19 +3961,22 @@ fn plain_terminal_asset_candidates(asset_name: &str) -> [String; 2] {
             .with_extension("txt")
             .to_string_lossy()
             .into_owned(),
-    ]
+    ]);
+    candidates
 }
 
-async fn send_screen(
-    transport: &mut TcpTransport,
+async fn send_screen<T: Transport>(
+    transport: &mut T,
     config: &OxideConfig,
     screen_key: &str,
     capabilities: &mut TerminalCapabilities,
+    context: &ScreenRenderContext,
 ) -> ServeResult<()> {
     let payload = load_screen_payload(config, screen_key, *capabilities).unwrap_or_else(|error| {
         report_configured_asset_load_failure("screen", screen_key, *capabilities, &error);
         fallback_screen_payload(screen_key, &error)
     });
+    let payload = expand_screen_runtime_tokens(payload, context);
     transport.write_all(&payload).await?;
     Ok(())
 }
@@ -2610,7 +4012,9 @@ fn load_screen_payload(
     let term_screen = TermScreenAsset {
         ansi: screen_config.ansi.clone(),
         ansi_40: screen_config.ansi_40.clone(),
+        ascii_40: screen_config.ascii_40.clone(),
         ascii: screen_config.ascii.clone(),
+        text_40: screen_config.text_40.clone(),
         text: screen_config.text.clone(),
         pause: screen_config.pause,
     };
@@ -2628,6 +4032,203 @@ fn fallback_screen_payload(screen_key: &str, details: &str) -> Vec<u8> {
     let _ = write!(&mut message, "{details}");
     message.push_str(PROMPT_TERMINATOR);
     normalize_caller_line_endings(&encode_text(&message))
+}
+
+fn expand_screen_runtime_tokens(payload: Vec<u8>, context: &ScreenRenderContext) -> Vec<u8> {
+    let payload = expand_oxide_display_codes(&payload, context);
+    expand_legacy_screen_tokens(&payload, context)
+}
+
+fn expand_oxide_display_codes(payload: &[u8], context: &ScreenRenderContext) -> Vec<u8> {
+    const MAX_DISPLAY_CODE_LENGTH: usize = 48;
+
+    let mut output = Vec::with_capacity(payload.len());
+    let mut cursor = 0;
+    while cursor < payload.len() {
+        if payload[cursor] != b'@' {
+            output.push(payload[cursor]);
+            cursor += 1;
+            continue;
+        }
+
+        if payload.get(cursor + 1) == Some(&b'@') {
+            output.push(b'@');
+            cursor += 2;
+            continue;
+        }
+
+        let Some(relative_end) = payload[cursor + 1..]
+            .iter()
+            .take(MAX_DISPLAY_CODE_LENGTH + 1)
+            .position(|byte| *byte == b'@')
+        else {
+            output.push(payload[cursor]);
+            cursor += 1;
+            continue;
+        };
+        let end = cursor + 1 + relative_end;
+        let display_code = &payload[cursor + 1..end];
+
+        if display_code.len() <= MAX_DISPLAY_CODE_LENGTH
+            && let Some(expanded) = expand_display_code(display_code, context)
+        {
+            output.extend_from_slice(&expanded);
+            cursor = end + 1;
+            continue;
+        }
+
+        output.push(payload[cursor]);
+        cursor += 1;
+    }
+
+    output
+}
+
+fn expand_display_code(display_code: &[u8], context: &ScreenRenderContext) -> Option<Vec<u8>> {
+    if display_code.is_empty()
+        || !display_code
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'_' | b':' | b'-'))
+    {
+        return None;
+    }
+
+    let display_code = std::str::from_utf8(display_code).ok()?;
+    let (name, format) = display_code.split_once(':').unwrap_or((display_code, ""));
+    let value = display_code_value(&name.to_ascii_uppercase(), context)?;
+    format_display_code_value(encode_text(&value), format)
+}
+
+fn display_code_value(name: &str, context: &ScreenRenderContext) -> Option<String> {
+    match name {
+        "NODE" | "ND" => Some(context.node_number.to_string()),
+        "NODES" | "NT" => Some(context.node_count.to_string()),
+        "BBS" | "BN" => Some(context.board_name.clone()),
+        "SYSOP" | "SN" => Some(context.sysop_name.clone()),
+        "USER" | "ALIAS" | "UH" => Some(
+            context
+                .caller_alias
+                .clone()
+                .unwrap_or_else(|| "Guest".to_string()),
+        ),
+        "SECURITY" | "SEC" | "SL" => Some(context.security_level.unwrap_or_default().to_string()),
+        _ => None,
+    }
+}
+
+fn format_display_code_value(mut value: Vec<u8>, format: &str) -> Option<Vec<u8>> {
+    if format.is_empty() {
+        return Some(value);
+    }
+
+    let mut format = format;
+    let left_align = if let Some(stripped) = format.strip_prefix('-') {
+        format = stripped;
+        true
+    } else {
+        false
+    };
+    let zero_pad = if !left_align && format.len() > 1 {
+        if let Some(stripped) = format.strip_prefix('0') {
+            format = stripped;
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+    if format.is_empty() || !format.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+
+    let width = format.parse::<usize>().ok()?;
+    if width > 200 {
+        return None;
+    }
+    if value.len() > width {
+        value.truncate(width);
+    }
+    if value.len() < width {
+        let pad_byte = if zero_pad { b'0' } else { b' ' };
+        let mut padding = vec![pad_byte; width - value.len()];
+        if left_align {
+            value.append(&mut padding);
+        } else {
+            padding.extend_from_slice(&value);
+            value = padding;
+        }
+    }
+    Some(value)
+}
+
+fn expand_legacy_screen_tokens(payload: &[u8], context: &ScreenRenderContext) -> Vec<u8> {
+    let node_number = context.node_number.min(999);
+    let node_count = context.node_count.min(999);
+    let node_status = format!("{node_number:03} / {node_count:03}");
+    let node_badge = format!("NODE {node_number:03}");
+    let node_of_total = format!("Node: {} of {}", context.node_number, context.node_count);
+
+    let payload = replace_bytes_all(payload, b"NNN / TTT", node_status.as_bytes());
+    let payload = replace_bytes_all(&payload, b"001 / 004", node_status.as_bytes());
+    let payload = replace_bytes_all(&payload, b"NODE 001", node_badge.as_bytes());
+    let payload = replace_bytes_all(&payload, b"Node: 1 of 4", node_of_total.as_bytes());
+    replace_bytes_all(&payload, b"Node: N of T", node_of_total.as_bytes())
+}
+
+fn replace_bytes_all(payload: &[u8], needle: &[u8], replacement: &[u8]) -> Vec<u8> {
+    if needle.is_empty() {
+        return payload.to_vec();
+    }
+
+    let mut next = Vec::with_capacity(payload.len());
+    let mut cursor = 0;
+    while cursor < payload.len() {
+        if payload[cursor..].starts_with(needle) {
+            next.extend_from_slice(replacement);
+            cursor += needle.len();
+        } else {
+            next.push(payload[cursor]);
+            cursor += 1;
+        }
+    }
+    next
+}
+
+#[cfg(test)]
+mod display_code_tests {
+    use super::*;
+
+    fn display_context() -> ScreenRenderContext {
+        ScreenRenderContext {
+            node_number: 2,
+            node_count: 8,
+            board_name: "Blackboard".to_string(),
+            sysop_name: "CmdrTallen".to_string(),
+            caller_alias: Some("Cmdr".to_string()),
+            security_level: Some(10),
+        }
+    }
+
+    #[test]
+    fn expands_display_codes_with_width_formatting() {
+        let output = expand_screen_runtime_tokens(
+            b"Node @NODE:03@/@NT:03@ User @USER:-8@ Sec @SEC:03@".to_vec(),
+            &display_context(),
+        );
+
+        assert_eq!(output, b"Node 002/008 User Cmdr     Sec 010");
+    }
+
+    #[test]
+    fn preserves_literal_at_and_unknown_tokens() {
+        let output = expand_screen_runtime_tokens(
+            b"Email sysop@example.com @@ @NOPE@ @BBS@".to_vec(),
+            &display_context(),
+        );
+
+        assert_eq!(output, b"Email sysop@example.com @ @NOPE@ Blackboard");
+    }
 }
 
 fn normalize_caller_line_endings(bytes: &[u8]) -> Vec<u8> {
@@ -2651,6 +4252,7 @@ async fn send_text_buffered<T: Transport>(
     output: &mut Vec<u8>,
 ) -> ServeResult<()> {
     encode_text_into(message, output);
+    *output = normalize_caller_line_endings(output);
     transport.write_all(output).await?;
     output.clear();
     Ok(())
@@ -2670,8 +4272,8 @@ async fn send_text<T: Transport>(transport: &mut T, message: &str) -> ServeResul
     Ok(())
 }
 
-async fn process_runtime_commands(
-    transport: &mut TcpTransport,
+async fn process_runtime_commands<T: Transport>(
+    transport: &mut T,
     commands: RuntimeNodeCommands,
     disconnect_reason: &mut String,
 ) -> ServeResult<bool> {
@@ -2829,11 +4431,49 @@ async fn next_event<T: Transport>(
     }
 }
 
+async fn drain_zmodem_finish_sequence<T: Transport>(
+    transport: &mut T,
+    input: &mut InputSession,
+) -> ServeResult<()> {
+    let mut bytes = Vec::with_capacity(2);
+    for _ in 0..2 {
+        match timeout(Duration::from_millis(100), transport.read_byte()).await {
+            Ok(Ok(Some(byte))) => bytes.push(byte),
+            Ok(Ok(None)) => {
+                input.pending_inputs.push_back(CallerInput::Disconnected);
+                break;
+            }
+            Ok(Err(error)) => return Err(error.into()),
+            Err(_) => break,
+        }
+    }
+
+    if bytes == b"OO" {
+        return Ok(());
+    }
+
+    for byte in bytes {
+        queue_input_byte(input, byte);
+    }
+    Ok(())
+}
+
+fn queue_input_byte(input: &mut InputSession, byte: u8) {
+    let mut reply = Vec::new();
+    if let Some(event) = parse_next_event(input, &mut reply, byte) {
+        input.pending_inputs.push_back(CallerInput::Event(event));
+    }
+}
+
 fn parse_next_event(
     input: &mut InputSession,
     reply: &mut Vec<u8>,
     byte: u8,
 ) -> Option<TelnetEvent> {
+    if input.raw {
+        return Some(TelnetEvent::Data(byte));
+    }
+
     if !reply.is_empty() {
         reply.clear();
     }
@@ -2874,12 +4514,67 @@ struct InputSession {
     parser: TelnetParser,
     pending_inputs: VecDeque<CallerInput>,
     pending_replies: Vec<u8>,
+    raw: bool,
 }
 
-struct CallerPeer {
-    address: String,
-    ip: String,
-    port: i64,
+impl InputSession {
+    fn raw() -> Self {
+        Self {
+            raw: true,
+            ..Self::default()
+        }
+    }
+}
+
+async fn send_menu_help<T: Transport>(
+    transport: &mut T,
+    config: &crate::config::OxideConfig,
+    menu: &Menu,
+    capabilities: &mut oxidebbs_term::TerminalCapabilities,
+    user_security_level: Option<i32>,
+    context: &ScreenRenderContext,
+) -> ServeResult<()> {
+    if let Some(help_screen) = &menu.help_screen {
+        send_screen(transport, config, &help_screen.asset, capabilities, context).await?;
+        return Ok(());
+    }
+
+    let mut help = String::new();
+    let title = if menu.title.trim().is_empty() {
+        menu.id.as_str()
+    } else {
+        menu.title.as_str()
+    };
+    help.push_str("\r\n");
+    help.push_str(&title.to_ascii_uppercase());
+    help.push_str(" HELP\r\n\r\n");
+
+    for entry in menu
+        .entries
+        .iter()
+        .filter(|entry| entry.key.trim() != "?")
+        .filter(|entry| menu_entry_visible_to_security_level(entry, user_security_level))
+    {
+        help.push_str(&format!("[{}] {}\r\n", entry.key, entry.label));
+    }
+
+    help.push_str("[?] Help\r\n");
+    if menu.route_entry("R").is_none() {
+        help.push_str("[R] Redisplay screen\r\n");
+    }
+    help.push_str("\r\n");
+
+    send_text(transport, &help).await
+}
+
+fn menu_entry_visible_to_security_level(
+    entry: &oxidebbs_core::menu::MenuEntry,
+    user_security_level: Option<i32>,
+) -> bool {
+    match user_security_level {
+        Some(level) => level >= entry.min_security_level,
+        None => entry.min_security_level <= 0,
+    }
 }
 
 fn resolve_submenu(menus: &HashMap<String, Arc<Menu>>, menu_id: &str) -> Option<Arc<Menu>> {
@@ -3047,20 +4742,145 @@ async fn wait_for_shutdown_signal() -> ServeResult<()> {
 mod tests {
     use super::*;
     use std::collections::HashSet;
+    use std::future::Future;
     use std::net::SocketAddr;
     use std::path::{Path, PathBuf};
+    use std::pin::Pin;
     use std::time::{Duration as TestDuration, Instant, SystemTime, UNIX_EPOCH};
 
     use oxidebbs_db::insert_user;
     use oxidebbs_telnet::{
-        LoopbackTransport,
+        SerialHandle, SerialLoopback,
         telnet::{
             DO, IAC, SB, SE, TELOPT_ECHO, TELOPT_NAWS, TELOPT_SUPPRESS_GO_AHEAD,
             TELOPT_TERMINAL_TYPE, TELOPT_TTYPE_IS, WILL,
         },
+        transport::{LoopbackHandle, LoopbackTransport},
     };
+    use oxidebbs_transfer::{ByteTransport, TransferError, TransferRead};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::sync::oneshot;
+
+    struct LoopbackClientBytes {
+        handle: LoopbackHandle,
+    }
+
+    struct SerialClientBytes {
+        handle: SerialHandle,
+    }
+
+    impl ByteTransport for LoopbackClientBytes {
+        fn read_byte(
+            &mut self,
+            timeout_secs: u64,
+        ) -> Pin<Box<dyn Future<Output = Result<TransferRead, TransferError>> + Send + '_>>
+        {
+            Box::pin(async move {
+                match timeout(Duration::from_secs(timeout_secs), self.handle.read_byte()).await {
+                    Ok(Some(byte)) => Ok(TransferRead::Byte(byte)),
+                    Ok(None) => Ok(TransferRead::Closed),
+                    Err(_) => Ok(TransferRead::TimedOut),
+                }
+            })
+        }
+
+        fn write_all<'a>(
+            &'a mut self,
+            buf: &'a [u8],
+        ) -> Pin<Box<dyn Future<Output = Result<(), TransferError>> + Send + 'a>> {
+            Box::pin(async move {
+                self.handle
+                    .write_bytes(buf)
+                    .map_err(|_| TransferError::Transport)
+            })
+        }
+
+        fn flush(
+            &mut self,
+        ) -> Pin<Box<dyn Future<Output = Result<(), TransferError>> + Send + '_>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    impl ByteTransport for SerialClientBytes {
+        fn read_byte(
+            &mut self,
+            timeout_secs: u64,
+        ) -> Pin<Box<dyn Future<Output = Result<TransferRead, TransferError>> + Send + '_>>
+        {
+            Box::pin(async move {
+                match timeout(Duration::from_secs(timeout_secs), self.handle.read_byte()).await {
+                    Ok(Some(byte)) => Ok(TransferRead::Byte(byte)),
+                    Ok(None) => Ok(TransferRead::Closed),
+                    Err(_) => Ok(TransferRead::TimedOut),
+                }
+            })
+        }
+
+        fn write_all<'a>(
+            &'a mut self,
+            buf: &'a [u8],
+        ) -> Pin<Box<dyn Future<Output = Result<(), TransferError>> + Send + 'a>> {
+            Box::pin(async move {
+                self.handle
+                    .write_bytes(buf)
+                    .map_err(|_| TransferError::Transport)
+            })
+        }
+
+        fn flush(
+            &mut self,
+        ) -> Pin<Box<dyn Future<Output = Result<(), TransferError>> + Send + '_>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    #[tokio::test]
+    async fn xmodem_crc_transfer_over_serial_loopback_round_trips() {
+        let (serial, handle) = SerialLoopback::new();
+        let server = tokio::spawn(async move {
+            let mut adapter = TransportAdapter::new_raw(serial);
+            oxidebbs_transfer::xmodem::send_xmodem_crc(&mut adapter, b"serial-xmodem")
+                .await
+                .expect("send xmodem over serial");
+        });
+        let client = tokio::spawn(async move {
+            let mut adapter = SerialClientBytes { handle };
+            oxidebbs_transfer::xmodem::receive_xmodem_crc_with_size(&mut adapter, 13)
+                .await
+                .expect("receive xmodem over serial")
+        });
+
+        server.await.expect("server task");
+        let payload = client.await.expect("client task");
+        assert_eq!(payload, b"serial-xmodem");
+    }
+
+    #[tokio::test]
+    async fn zmodem_transfer_over_serial_loopback_round_trips() {
+        let (serial, handle) = SerialLoopback::new();
+        let server = tokio::spawn(async move {
+            let mut adapter = TransportAdapter::new_raw(serial);
+            oxidebbs_transfer::zmodem::send_zmodem_file(
+                &mut adapter,
+                "serial-zmodem.bin",
+                b"serial-zmodem",
+            )
+            .await
+            .expect("send zmodem over serial");
+        });
+        let client = tokio::spawn(async move {
+            let mut adapter = SerialClientBytes { handle };
+            oxidebbs_transfer::zmodem::receive_zmodem_file(&mut adapter, Some(1024))
+                .await
+                .expect("receive zmodem over serial")
+        });
+
+        server.await.expect("server task");
+        let file = client.await.expect("client task");
+        assert_eq!(file.filename, "serial-zmodem.bin");
+        assert_eq!(file.payload, b"serial-zmodem");
+    }
 
     #[test]
     fn normalize_key_uppercases_ascii() {
@@ -3077,15 +4897,29 @@ mod tests {
 
     #[test]
     fn terminal_type_supports_only_explicit_ansi_clients() {
-        assert!(terminal_type_supports_ansi(b"SyncTERM"));
-        assert!(terminal_type_supports_ansi(b"ANSI"));
-        assert!(terminal_type_supports_ansi(b"ANSI-BBS"));
-        assert!(terminal_type_supports_ansi(b"BBS-ANSI"));
-        assert!(terminal_type_supports_ansi(b"ANSI.SYS"));
-        assert!(terminal_type_supports_ansi(b"PC-ANSI"));
-        assert!(terminal_type_supports_ansi(b"pcansi"));
-        assert!(!terminal_type_supports_ansi(b"xterm-256color"));
-        assert!(!terminal_type_supports_ansi(b"vt100"));
+        assert!(terminal_type_capabilities(b"SyncTERM").supports_ansi);
+        assert!(terminal_type_capabilities(b"ANSI").supports_ansi);
+        assert!(terminal_type_capabilities(b"ANSI-BBS").supports_ansi);
+        assert!(terminal_type_capabilities(b"BBS-ANSI").supports_ansi);
+        assert!(terminal_type_capabilities(b"ANSI.SYS").supports_ansi);
+        assert!(terminal_type_capabilities(b"PC-ANSI").supports_ansi);
+        assert!(terminal_type_capabilities(b"pcansi").supports_ansi);
+        assert!(!terminal_type_capabilities(b"xterm-256color").supports_ansi);
+        assert!(!terminal_type_capabilities(b"vt100").supports_ansi);
+        assert!(!terminal_type_capabilities(b"C64 Ultimate").supports_ansi);
+    }
+
+    #[test]
+    fn terminal_type_detects_c64_profile_without_ansi() {
+        for terminal_type in [b"C64".as_slice(), b"C64 Ultimate", b"PETSCII", b"CGTerm"] {
+            let capabilities = terminal_type_capabilities(terminal_type);
+
+            assert_eq!(capabilities.profile, TerminalProfile::C64);
+            assert_eq!(capabilities.width, 40);
+            assert_eq!(capabilities.height, 25);
+            assert!(!capabilities.supports_ansi);
+            assert!(!capabilities.supports_color);
+        }
     }
 
     #[tokio::test]
@@ -3093,10 +4927,14 @@ mod tests {
         let (mut transport, mut client) = LoopbackTransport::new();
         let mut input = InputSession::default();
 
-        let capabilities =
-            negotiate_terminal_capabilities(&mut transport, &mut input, Duration::from_millis(5))
-                .await
-                .expect("negotiate capabilities");
+        let capabilities = negotiate_terminal_capabilities(
+            &mut transport,
+            &mut input,
+            Duration::from_millis(5),
+            TerminalCapabilities::plain_text(),
+        )
+        .await
+        .expect("negotiate capabilities");
         let request = client.read_output_bytes();
 
         assert_eq!(
@@ -3160,10 +4998,14 @@ mod tests {
             ])
             .expect("write negotiation frames");
 
-        let capabilities =
-            negotiate_terminal_capabilities(&mut transport, &mut input, Duration::from_millis(20))
-                .await
-                .expect("negotiate capabilities");
+        let capabilities = negotiate_terminal_capabilities(
+            &mut transport,
+            &mut input,
+            Duration::from_millis(20),
+            TerminalCapabilities::plain_text(),
+        )
+        .await
+        .expect("negotiate capabilities");
 
         assert!(capabilities.supports_ansi);
         assert_eq!(capabilities.width, 40);
@@ -3213,10 +5055,14 @@ mod tests {
             ])
             .expect("write negotiation frames");
 
-        let capabilities =
-            negotiate_terminal_capabilities(&mut transport, &mut input, Duration::from_millis(20))
-                .await
-                .expect("negotiate capabilities");
+        let capabilities = negotiate_terminal_capabilities(
+            &mut transport,
+            &mut input,
+            Duration::from_millis(20),
+            TerminalCapabilities::plain_text(),
+        )
+        .await
+        .expect("negotiate capabilities");
         let payload = load_screen_payload(&config, &config.flow.login_screen, capabilities)
             .expect("load login screen");
 
@@ -3252,18 +5098,85 @@ mod tests {
             ])
             .expect("write negotiation frames");
 
-        let capabilities =
-            negotiate_terminal_capabilities(&mut transport, &mut input, Duration::from_millis(20))
-                .await
-                .expect("negotiate capabilities");
+        let capabilities = negotiate_terminal_capabilities(
+            &mut transport,
+            &mut input,
+            Duration::from_millis(20),
+            TerminalCapabilities::plain_text(),
+        )
+        .await
+        .expect("negotiate capabilities");
         let payload = load_screen_payload(&config, &config.flow.login_screen, capabilities)
             .expect("load login screen");
 
         assert!(!capabilities.supports_ansi);
         assert_eq!(capabilities.width, 40);
-        assert_eq!(payload, b"ASCII\r\n");
+        assert_eq!(payload, b"ASCII40\r\n");
 
         let _ = std::fs::remove_dir_all(base_dir);
+    }
+
+    #[tokio::test]
+    async fn capability_negotiation_detects_c64_terminal_type() {
+        let (mut transport, client) = LoopbackTransport::new();
+        let mut input = InputSession::default();
+        client
+            .write_bytes(&[
+                IAC,
+                WILL,
+                TELOPT_TERMINAL_TYPE,
+                IAC,
+                SB,
+                TELOPT_TERMINAL_TYPE,
+                TELOPT_TTYPE_IS,
+                b'C',
+                b'6',
+                b'4',
+                b' ',
+                b'U',
+                b'l',
+                b't',
+                b'i',
+                b'm',
+                b'a',
+                b't',
+                b'e',
+                IAC,
+                SE,
+            ])
+            .expect("write C64 terminal type");
+
+        let capabilities = negotiate_terminal_capabilities(
+            &mut transport,
+            &mut input,
+            Duration::from_millis(20),
+            TerminalCapabilities::plain_text(),
+        )
+        .await
+        .expect("negotiate capabilities");
+
+        assert_eq!(capabilities.profile, TerminalProfile::C64);
+        assert_eq!(capabilities.width, 40);
+        assert!(!capabilities.supports_ansi);
+    }
+
+    #[tokio::test]
+    async fn capability_negotiation_can_default_to_c64_profile() {
+        let (mut transport, _client) = LoopbackTransport::new();
+        let mut input = InputSession::default();
+
+        let capabilities = negotiate_terminal_capabilities(
+            &mut transport,
+            &mut input,
+            Duration::from_millis(5),
+            TerminalCapabilities::c64(),
+        )
+        .await
+        .expect("negotiate capabilities");
+
+        assert_eq!(capabilities.profile, TerminalProfile::C64);
+        assert_eq!(capabilities.width, 40);
+        assert!(!capabilities.supports_ansi);
     }
 
     #[tokio::test]
@@ -3309,6 +5222,7 @@ mod tests {
             &mut transport,
             &mut input,
             TestDuration::from_millis(120),
+            TerminalCapabilities::plain_text(),
         )
         .await
         .expect("negotiate capabilities");
@@ -3331,6 +5245,7 @@ mod tests {
             &mut transport,
             &mut input,
             TestDuration::from_millis(60),
+            TerminalCapabilities::plain_text(),
         )
         .await
         .expect("negotiate capabilities");
@@ -3384,6 +5299,7 @@ mod tests {
             screen: oxidebbs_core::menu::ScreenAsset {
                 asset: "submenu".to_string(),
             },
+            help_screen: None,
             entries: Vec::new(),
             pre_menu_screens: Vec::new(),
         });
@@ -3492,6 +5408,13 @@ mod tests {
     }
 
     #[test]
+    fn door_access_gate_uses_door_min_security_level() {
+        assert!(door_access_denied(10, 50));
+        assert!(!door_access_denied(50, 50));
+        assert!(!door_access_denied(255, 50));
+    }
+
+    #[test]
     fn terminal_asset_payload_loads_from_ansi_path() {
         let base_dir = temp_dir("terminal-asset");
         let db_path = base_dir.join("oxidebbs.ddb");
@@ -3535,6 +5458,36 @@ mod tests {
     }
 
     #[test]
+    fn c64_terminal_asset_payload_prefers_40_column_plain_asset() {
+        let base_dir = temp_dir("terminal-asset-c64");
+        let db_path = base_dir.join("oxidebbs.ddb");
+        let bind_addr = free_loopback_addr();
+        let config = smoke_config(bind_addr, &base_dir, &db_path);
+        std::fs::create_dir_all(&config.paths.ansi).expect("create ANSI dir");
+        std::fs::write(
+            config.paths.ansi.join("welcome.ans"),
+            b"\x1b[1mANSI welcome\r\n",
+        )
+        .expect("write ANSI welcome");
+        std::fs::write(
+            config.paths.ansi.join("welcome.asc"),
+            b"Wide plain welcome\r\n",
+        )
+        .expect("write wide plain welcome");
+        std::fs::write(config.paths.ansi.join("welcome-40.asc"), b"C64 welcome\r\n")
+            .expect("write C64 welcome");
+
+        let payload =
+            load_terminal_asset_payload(&config, "welcome.ans", TerminalCapabilities::c64())
+                .expect("load C64 welcome");
+
+        assert_eq!(payload, b"C64 welcome\r\n");
+        assert!(!payload.windows(2).any(|window| window == b"\x1b["));
+
+        let _ = std::fs::remove_dir_all(base_dir);
+    }
+
+    #[test]
     fn terminal_asset_payload_normalizes_bare_lf_for_telnet_callers() {
         let base_dir = temp_dir("terminal-asset-line-endings");
         let db_path = base_dir.join("oxidebbs.ddb");
@@ -3566,6 +5519,75 @@ mod tests {
     }
 
     #[test]
+    fn logoff_terminal_asset_payload_selects_ansi_or_plain_sibling() {
+        let base_dir = temp_dir("logoff-terminal-asset");
+        let db_path = base_dir.join("oxidebbs.ddb");
+        let bind_addr = free_loopback_addr();
+        let config = smoke_config(bind_addr, &base_dir, &db_path);
+        std::fs::create_dir_all(&config.paths.ansi).expect("create ANSI dir");
+        std::fs::write(config.paths.ansi.join("logoff.ans"), b"\x1b[1mANSI bye\r\n")
+            .expect("write ANSI logoff");
+        std::fs::write(config.paths.ansi.join("logoff.asc"), b"Plain bye\r\n")
+            .expect("write plain logoff");
+
+        let ansi_payload =
+            load_terminal_asset_payload(&config, "logoff.ans", TerminalCapabilities::ansi_80())
+                .expect("load ANSI logoff");
+        assert_eq!(ansi_payload, b"\x1b[1mANSI bye\r\n");
+
+        let plain_payload =
+            load_terminal_asset_payload(&config, "logoff.ans", TerminalCapabilities::plain_text())
+                .expect("load plain logoff");
+        assert_eq!(plain_payload, b"Plain bye\r\n");
+
+        let _ = std::fs::remove_dir_all(base_dir);
+    }
+
+    #[tokio::test]
+    async fn logoff_screen_falls_back_to_goodbye_when_asset_is_missing() {
+        let base_dir = temp_dir("logoff-terminal-missing");
+        let db_path = base_dir.join("oxidebbs.ddb");
+        let bind_addr = free_loopback_addr();
+        let config = smoke_config(bind_addr, &base_dir, &db_path);
+
+        let output = capture_logoff_output(config, TerminalCapabilities::plain_text()).await;
+
+        assert_eq!(output, "Goodbye.\r\n");
+        let _ = std::fs::remove_dir_all(base_dir);
+    }
+
+    #[tokio::test]
+    async fn logoff_screen_is_safe_when_caller_disconnects_early() {
+        let base_dir = temp_dir("logoff-terminal-early-disconnect");
+        let db_path = base_dir.join("oxidebbs.ddb");
+        let bind_addr = free_loopback_addr();
+        let config = smoke_config(bind_addr, &base_dir, &db_path);
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("listener addr");
+        let client = TcpStream::connect(addr).await.expect("connect");
+        let (stream, _) = listener.accept().await.expect("accept");
+        drop(client);
+        let mut transport = TcpTransport::new(stream);
+
+        send_logoff_screen(
+            &mut transport,
+            &config,
+            TerminalCapabilities::plain_text(),
+            &ScreenRenderContext {
+                node_number: 1,
+                node_count: 1,
+                board_name: "Test".to_string(),
+                sysop_name: "Sysop".to_string(),
+                caller_alias: None,
+                security_level: None,
+            },
+        )
+        .await;
+
+        let _ = std::fs::remove_dir_all(base_dir);
+    }
+
+    #[test]
     fn screen_payload_normalizes_bare_lf_for_telnet_callers() {
         let base_dir = temp_dir("screen-payload-line-endings");
         let db_path = base_dir.join("oxidebbs.ddb");
@@ -3576,7 +5598,9 @@ mod tests {
             crate::config::ScreenConfig {
                 ansi: Some("line-endings/screen.ans".to_string()),
                 ansi_40: None,
+                ascii_40: None,
                 ascii: Some("line-endings/screen.asc".to_string()),
+                text_40: None,
                 text: None,
                 pause: false,
             },
@@ -3657,6 +5681,17 @@ mod tests {
     #[test]
     fn generated_output_replaces_unencodable_text_with_question_mark() {
         assert_eq!(encode_text("Diagnostic 🚀"), b"Diagnostic ?");
+    }
+
+    #[tokio::test]
+    async fn send_text_normalizes_bare_lf_to_crlf() {
+        let (mut transport, mut client) = LoopbackTransport::new();
+
+        send_text(&mut transport, "One\nTwo\n")
+            .await
+            .expect("send text");
+
+        assert_eq!(client.read_output_bytes(), b"One\r\nTwo\r\n");
     }
 
     #[test]
@@ -3764,6 +5799,248 @@ mod tests {
         }
 
         let _ = std::fs::remove_dir_all(base_dir);
+    }
+
+    #[tokio::test]
+    async fn file_flow_zmodem_download_persists_history() {
+        let (base_dir, config, db, user, area) = file_flow_fixture("zmodem-download");
+        let entry = insert_approved_file(&db, &area, b"download\xffpayload");
+        let (mut transport, handle) = LoopbackTransport::new();
+        let (flow_done_tx, flow_done_rx) = oneshot::channel();
+
+        let client_task = tokio::spawn(async move {
+            let mut handle = handle;
+            loopback_read_until(&mut handle, "Area number").await;
+            handle.write_bytes(b"1\r").expect("select file area");
+            loopback_read_until(&mut handle, "Files: D)ownload").await;
+            handle.write_bytes(b"D\r").expect("select download");
+            loopback_read_until(&mut handle, "File number").await;
+            handle.write_bytes(b"1\r").expect("select file");
+            loopback_read_until(&mut handle, "Protocol:").await;
+            handle.write_bytes(b"Z\r").expect("select zmodem");
+            loopback_read_until(&mut handle, "via ZMODEM").await;
+
+            let mut client = LoopbackClientBytes { handle };
+            let received = oxidebbs_transfer::zmodem::receive_zmodem_file(&mut client, Some(4096))
+                .await
+                .expect("receive zmodem download");
+            let mut handle = client.handle;
+            loopback_read_until(&mut handle, "Files: D)ownload").await;
+            handle.write_bytes(b"R\r").expect("leave file area");
+            loopback_read_until(&mut handle, "Area number").await;
+            handle.write_bytes(b"\r").expect("leave file menu");
+            let _ = flow_done_rx.await;
+            received
+        });
+
+        let mut input = InputSession::raw();
+        let mut disconnect_reason = "test".to_string();
+        let flow = async {
+            let result = timeout(
+                Duration::from_secs(5),
+                run_files_flow(
+                    Some(&user),
+                    &mut transport,
+                    &mut input,
+                    &db,
+                    &config,
+                    false,
+                    Duration::from_secs(1),
+                    &mut disconnect_reason,
+                    1,
+                ),
+            )
+            .await;
+            let _ = flow_done_tx.send(());
+            result
+        };
+        let (flow_result, client_result) = tokio::join!(flow, client_task);
+        let received = client_result.expect("client task");
+        flow_result.expect("file flow timeout").expect("file flow");
+
+        assert_eq!(received.filename, entry.display_name);
+        assert_eq!(received.payload, b"download\xffpayload");
+        let updated = oxidebbs_db::find_file_entry_by_id(db.db(), &entry.id)
+            .expect("find updated file")
+            .expect("updated file");
+        assert_eq!(updated.download_count, 1);
+        let transfers = oxidebbs_db::list_file_transfers(db.db()).expect("list transfers");
+        assert!(transfers.iter().any(|transfer| {
+            transfer.direction == "download"
+                && transfer.protocol == "zmodem"
+                && transfer.outcome == "success"
+                && transfer.file_entry_id.as_deref() == Some(entry.id.as_str())
+        }));
+
+        let _ = std::fs::remove_dir_all(base_dir);
+    }
+
+    #[tokio::test]
+    async fn file_flow_zmodem_upload_persists_pending_entry_and_history() {
+        let (base_dir, config, db, user, area) = file_flow_fixture("zmodem-upload");
+        let (mut transport, handle) = LoopbackTransport::new();
+        let (flow_done_tx, flow_done_rx) = oneshot::channel();
+
+        let client_task = tokio::spawn(async move {
+            let mut handle = handle;
+            loopback_read_until(&mut handle, "Area number").await;
+            handle.write_bytes(b"1\r").expect("select file area");
+            loopback_read_until(&mut handle, "Files: D)ownload").await;
+            handle.write_bytes(b"U\r").expect("select upload");
+            loopback_read_until(&mut handle, "Protocol:").await;
+            handle.write_bytes(b"Z\r").expect("select zmodem");
+            loopback_read_until(&mut handle, "Ready to receive via ZMODEM").await;
+
+            let mut client = LoopbackClientBytes { handle };
+            oxidebbs_transfer::zmodem::send_zmodem_file(
+                &mut client,
+                "caller-upload.bin",
+                b"uploaded payload",
+            )
+            .await
+            .expect("send upload");
+            let mut handle = client.handle;
+            loopback_read_until(&mut handle, "Files: D)ownload").await;
+            handle.write_bytes(b"R\r").expect("leave file area");
+            loopback_read_until(&mut handle, "Area number").await;
+            handle.write_bytes(b"\r").expect("leave file menu");
+            let _ = flow_done_rx.await;
+        });
+
+        let mut input = InputSession::raw();
+        let mut disconnect_reason = "test".to_string();
+        let flow = async {
+            let result = timeout(
+                Duration::from_secs(5),
+                run_files_flow(
+                    Some(&user),
+                    &mut transport,
+                    &mut input,
+                    &db,
+                    &config,
+                    false,
+                    Duration::from_secs(1),
+                    &mut disconnect_reason,
+                    1,
+                ),
+            )
+            .await;
+            let _ = flow_done_tx.send(());
+            result
+        };
+        let (flow_result, client_result) = tokio::join!(flow, client_task);
+        client_result.expect("client task");
+        flow_result.expect("file flow timeout").expect("file flow");
+
+        let entries = oxidebbs_db::list_file_entries(db.db()).expect("list file entries");
+        let upload = entries
+            .iter()
+            .find(|entry| entry.original_name.as_deref() == Some("caller-upload.bin"))
+            .expect("uploaded entry");
+        assert!(!upload.approved);
+        assert_eq!(upload.size_bytes, 16);
+        assert_eq!(upload.uploader_user_id.as_deref(), Some(user.id.as_str()));
+        let stored = Path::new(&area.root_path).join(&upload.storage_name);
+        assert_eq!(
+            std::fs::read(stored).expect("read uploaded file"),
+            b"uploaded payload"
+        );
+        let transfers = oxidebbs_db::list_file_transfers(db.db()).expect("list transfers");
+        assert!(transfers.iter().any(|transfer| {
+            transfer.direction == "upload"
+                && transfer.protocol == "zmodem"
+                && transfer.outcome == "success"
+                && transfer.file_entry_id.as_deref() == Some(upload.id.as_str())
+        }));
+
+        let _ = std::fs::remove_dir_all(base_dir);
+    }
+
+    #[tokio::test]
+    async fn serial_loopback_login_menu_and_logoff_records_session() {
+        let base_dir = temp_dir("serial-loopback-session");
+        let db_path = base_dir.join("oxidebbs.ddb");
+        let config_path = base_dir.join("oxidebbs.toml");
+        let mut config = sysop_submenu_smoke_config(free_loopback_addr(), &base_dir, &db_path);
+        config.terminal.clear_screen_on_connect = false;
+        write_sysop_submenu_smoke_screens(&config);
+        let db = Arc::new(OxideDb::open_or_create(&db_path).expect("open db"));
+        seed_login_user(&db, &config, "SerialUser", "secret");
+        let runtime = Arc::new(ServerRuntime::new("serial smoke".to_string(), 1, 1, 60));
+        let allocation = runtime.try_allocate_node().expect("allocate serial node");
+        let mut menus = HashMap::new();
+        for menu_id in config.menus.keys() {
+            let menu = config.core_menu(menu_id).expect("core menu");
+            menus.insert(menu_id.clone(), Arc::new(menu));
+        }
+        let login_menu = menus
+            .get(&config.flow.login_menu)
+            .expect("login menu")
+            .clone();
+        let main_menu = menus
+            .get(&config.flow.main_menu)
+            .expect("main menu")
+            .clone();
+        let resources = CallerResources {
+            db: Arc::clone(&db),
+            config: Arc::new(config),
+            login_menu,
+            main_menu,
+            menus: Arc::new(menus),
+            runtime,
+        };
+        let (transport, mut client) = SerialLoopback::new();
+        let server = tokio::spawn(async move {
+            handle_caller_transport(
+                allocation,
+                transport,
+                "serial",
+                false,
+                None,
+                CallerPeer {
+                    address: "serial:test".to_string(),
+                    ip: None,
+                    port: 0,
+                },
+                resources,
+            )
+            .await
+        });
+
+        client
+            .write_bytes(b"L\rSerialUser\rsecret\rL\r")
+            .expect("write serial login flow");
+        let output = serial_read_until(&mut client, "Goodbye.").await;
+        assert!(output.contains("Login successful. Welcome back."));
+        timeout(Duration::from_secs(5), server)
+            .await
+            .expect("serial server timeout")
+            .expect("serial join")
+            .expect("serial session");
+
+        let sessions = oxidebbs_db::list_recent_sessions(db.db(), 10).expect("sessions");
+        assert!(sessions.iter().any(|session| {
+            session.transport == "serial"
+                && session.disconnect_reason.as_deref() == Some("caller_logoff")
+        }));
+
+        let _ = config_path;
+        let _ = std::fs::remove_dir_all(base_dir);
+    }
+
+    #[tokio::test]
+    async fn normal_level_caller_cannot_open_sysop_submenu() {
+        let output = run_sysop_submenu_access_smoke(10, false).await;
+
+        assert!(output.contains(ACCESS_DENIED_MESSAGE.trim()));
+    }
+
+    #[tokio::test]
+    async fn sysop_level_caller_can_open_sysop_submenu() {
+        let output = run_sysop_submenu_access_smoke(255, true).await;
+
+        assert!(output.contains("Sysop? "));
+        assert!(!output.contains(ACCESS_DENIED_MESSAGE.trim()));
     }
 
     #[cfg(unix)]
@@ -3934,6 +6211,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn read_line_input_treats_backspace_byte_as_delete() {
+        let (mut transport, client) = LoopbackTransport::new();
+        let mut input = InputSession::default();
+
+        client.write_bytes(b"AB\x08C\r").expect("write value");
+
+        let value = read_line_input(
+            &mut transport,
+            &mut input,
+            Duration::from_secs(1),
+            false,
+            false,
+        )
+        .await
+        .expect("read");
+
+        match value {
+            PromptLineResult::Value(value) => assert_eq!(value, "AC"),
+            other => panic!("expected value, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn read_line_input_treats_delete_byte_as_delete() {
+        let (mut transport, client) = LoopbackTransport::new();
+        let mut input = InputSession::default();
+
+        client.write_bytes(b"AB\x7fC\r").expect("write value");
+
+        let value = read_line_input(
+            &mut transport,
+            &mut input,
+            Duration::from_secs(1),
+            false,
+            false,
+        )
+        .await
+        .expect("read");
+
+        match value {
+            PromptLineResult::Value(value) => assert_eq!(value, "AC"),
+            other => panic!("expected value, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn menu_line_ending_drain_single_key_does_not_wait() {
         let (mut transport, client) = LoopbackTransport::new();
         let mut input = InputSession::default();
@@ -4065,6 +6388,49 @@ mod tests {
         assert!(missing.contains(INVALID_LOGIN_MESSAGE.trim()));
         assert!(wrong.contains(INVALID_LOGIN_MESSAGE.trim()));
         assert_eq!(failure_line(&missing), failure_line(&wrong));
+
+        let _ = std::fs::remove_dir_all(base_dir);
+    }
+
+    #[tokio::test]
+    async fn login_flow_runs_over_loopback_transport() {
+        let db = OxideDb::open_memory().expect("open db");
+        let base_dir = temp_dir("auth-loopback-transport");
+        let config = smoke_config(free_loopback_addr(), &base_dir, &base_dir.join("auth.ddb"));
+        seed_login_user(&db, &config, "Alice", "secret");
+
+        let (mut transport, mut client) = LoopbackTransport::new();
+        client
+            .write_bytes(b"Alice\rsecret\r")
+            .expect("write credentials");
+
+        let mut input = InputSession::default();
+        let mut authenticated_user = None;
+        let mut disconnect_reason = "test".to_string();
+        let runtime = ServerRuntime::new("test".to_string(), 1, 1, 60);
+        let mut state = AuthFlowState {
+            db: &db,
+            config: &config,
+            runtime: &runtime,
+            node_number: 1,
+            remote_ip: "127.0.0.1",
+            session_id: "00000000-0000-4000-8000-000000000779",
+            authenticated_user: &mut authenticated_user,
+            idle_timeout: Duration::from_secs(1),
+            disconnect_reason: &mut disconnect_reason,
+        };
+
+        let result = run_login_flow(&mut transport, &mut input, &mut state)
+            .await
+            .expect("login flow");
+        let output = String::from_utf8_lossy(&client.read_output_bytes()).into_owned();
+
+        assert!(matches!(result, AuthFlowResult::Success));
+        assert!(output.contains("Login successful. Welcome back."));
+        assert_eq!(
+            authenticated_user.as_ref().map(|user| user.alias.as_str()),
+            Some("Alice")
+        );
 
         let _ = std::fs::remove_dir_all(base_dir);
     }
@@ -4268,6 +6634,134 @@ mod tests {
     }
 
     fn seed_login_user(db: &OxideDb, config: &OxideConfig, alias: &str, password: &str) {
+        seed_login_user_with_level(db, config, alias, password, 10, false);
+    }
+
+    fn file_flow_fixture(name: &str) -> (PathBuf, OxideConfig, OxideDb, User, FileAreaRecord) {
+        let base_dir = temp_dir(name);
+        let db_path = base_dir.join("oxidebbs.ddb");
+        let mut config = smoke_config(free_loopback_addr(), &base_dir, &db_path);
+        config.file_transfers.enabled = true;
+        let db = OxideDb::open_or_create(&db_path).expect("open file flow db");
+        seed_login_user_with_level(&db, &config, "FileUser", "secret", 50, false);
+        let user_record = find_user_by_alias_ci(db.db(), "FileUser")
+            .expect("find file user")
+            .expect("file user exists");
+        let user = user_from_record(&user_record).expect("user from record");
+        let root = base_dir.join("file-area");
+        std::fs::create_dir_all(&root).expect("create file area root");
+        let area = FileAreaRecord {
+            id: String::new(),
+            key: "main".to_string(),
+            name: "Main Files".to_string(),
+            description: "Main file area".to_string(),
+            root_path: root.to_string_lossy().into_owned(),
+            read_security_level: 0,
+            download_security_level: 10,
+            upload_security_level: 10,
+            max_upload_bytes: Some(4096),
+            enabled: true,
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+        oxidebbs_db::insert_file_area(db.db(), &area).expect("insert file area");
+        let stored_area = oxidebbs_db::list_file_areas(db.db())
+            .expect("list file areas")
+            .into_iter()
+            .find(|area| area.key == "main")
+            .expect("stored area");
+        (base_dir, config, db, user, stored_area)
+    }
+
+    fn insert_approved_file(
+        db: &OxideDb,
+        area: &FileAreaRecord,
+        payload: &[u8],
+    ) -> FileEntryRecord {
+        let storage_name = "demo.bin".to_string();
+        std::fs::write(Path::new(&area.root_path).join(&storage_name), payload)
+            .expect("write fixture file");
+        let entry = FileEntryRecord {
+            id: String::new(),
+            area_id: area.id.clone(),
+            storage_name: storage_name.clone(),
+            display_name: "demo.bin".to_string(),
+            original_name: Some("demo.bin".to_string()),
+            size_bytes: payload.len() as i64,
+            content_crc32: None,
+            description: "Fixture file".to_string(),
+            uploader_user_id: None,
+            download_count: 0,
+            approved: true,
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+        oxidebbs_db::insert_file_entry(db.db(), &entry).expect("insert file entry");
+        find_file_entry_by_storage_name(db.db(), &area.id, &storage_name)
+            .expect("find fixture file")
+            .expect("fixture file exists")
+    }
+
+    async fn serial_read_until(client: &mut SerialHandle, needle: &str) -> String {
+        let mut output = Vec::new();
+        timeout(Duration::from_secs(5), async {
+            loop {
+                let Some(byte) = client.read_byte().await else {
+                    panic!(
+                        "serial closed before {needle:?}; output was {:?}",
+                        String::from_utf8_lossy(&output)
+                    );
+                };
+                output.push(byte);
+                if String::from_utf8_lossy(&output).contains(needle) {
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "timed out waiting for serial {needle:?}; output was {:?}",
+                String::from_utf8_lossy(&output)
+            )
+        });
+        String::from_utf8_lossy(&output).to_string()
+    }
+
+    async fn loopback_read_until(client: &mut LoopbackHandle, needle: &str) -> String {
+        let mut output = Vec::new();
+        timeout(Duration::from_secs(5), async {
+            loop {
+                let Some(byte) = client.read_byte().await else {
+                    panic!(
+                        "loopback closed before {needle:?}; output was {:?}",
+                        String::from_utf8_lossy(&output)
+                    );
+                };
+                output.push(byte);
+                if String::from_utf8_lossy(&output).contains(needle) {
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "timed out waiting for loopback {needle:?}; output was {:?}",
+                String::from_utf8_lossy(&output)
+            )
+        });
+        String::from_utf8_lossy(&output).to_string()
+    }
+
+    fn seed_login_user_with_level(
+        db: &OxideDb,
+        config: &OxideConfig,
+        alias: &str,
+        password: &str,
+        security_level: i64,
+        is_sysop: bool,
+    ) {
         let now = current_timestamp(db).expect("timestamp");
         let user = UserRecord {
             id: generated_uuid(db).expect("uuid"),
@@ -4275,8 +6769,8 @@ mod tests {
             real_name: format!("{alias} User"),
             email: None,
             password_hash: server_hash_password(password, &config.auth.argon2).expect("hash"),
-            security_level: 10,
-            is_sysop: false,
+            security_level,
+            is_sysop,
             created_at: now,
             last_login_at: None,
             total_calls: 0,
@@ -4439,6 +6933,102 @@ mod tests {
         (result, output)
     }
 
+    async fn capture_logoff_output(
+        config: OxideConfig,
+        capabilities: TerminalCapabilities,
+    ) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("listener addr");
+        let client_task = tokio::spawn(async move {
+            let mut client = TcpStream::connect(addr).await.expect("connect");
+            let mut output = Vec::new();
+            timeout(Duration::from_secs(2), client.read_to_end(&mut output))
+                .await
+                .expect("logoff read timeout")
+                .expect("read logoff output");
+            String::from_utf8_lossy(&output).to_string()
+        });
+        let (stream, _) = listener.accept().await.expect("accept");
+        let mut transport = TcpTransport::new(stream);
+
+        send_logoff_screen(
+            &mut transport,
+            &config,
+            capabilities,
+            &ScreenRenderContext {
+                node_number: 1,
+                node_count: 1,
+                board_name: "Test".to_string(),
+                sysop_name: "Sysop".to_string(),
+                caller_alias: None,
+                security_level: None,
+            },
+        )
+        .await;
+        drop(transport);
+
+        client_task.await.expect("client task")
+    }
+
+    async fn run_sysop_submenu_access_smoke(security_level: i64, is_sysop: bool) -> String {
+        let base_dir = temp_dir("sysop-submenu-access");
+        let db_path = base_dir.join("oxidebbs.ddb");
+        let config_path = base_dir.join("oxidebbs.toml");
+        let bind_addr = free_loopback_addr();
+        let config = sysop_submenu_smoke_config(bind_addr, &base_dir, &db_path);
+        write_sysop_submenu_smoke_screens(&config);
+        {
+            let db = OxideDb::open_or_create(&db_path).expect("open db");
+            seed_login_user_with_level(
+                &db,
+                &config,
+                "AccessUser",
+                "secret",
+                security_level,
+                is_sysop,
+            );
+        }
+
+        let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+        let server_config = config.clone();
+        let server_config_path = config_path.clone();
+        let server = tokio::spawn(async move {
+            run_until_shutdown(&server_config, &server_config_path, async move {
+                let _ = shutdown_rx.await;
+                Ok(())
+            })
+            .await
+        });
+
+        let mut client = connect_with_retry(bind_addr).await;
+        read_until(&mut client, "Login? ").await;
+        client.write_all(b"L\r").await.expect("select login");
+        read_until(&mut client, "Alias: ").await;
+        client.write_all(b"AccessUser\r").await.expect("alias");
+        read_until(&mut client, "Password: ").await;
+        client.write_all(b"secret\r").await.expect("password");
+        read_until(&mut client, "Command? ").await;
+        client.write_all(b"S\r").await.expect("select sysop");
+        let output = if security_level >= 255 {
+            read_until(&mut client, "Sysop? ").await
+        } else {
+            read_until(&mut client, "Command? ").await
+        };
+        client.write_all(b"L\r").await.expect("logoff");
+        read_until(&mut client, "Goodbye.").await;
+        drop(client);
+
+        shutdown_tx.send(()).expect("send shutdown");
+        timeout(Duration::from_secs(5), server)
+            .await
+            .expect("server shutdown timeout")
+            .expect("server join")
+            .expect("server result");
+
+        let _ = std::fs::remove_dir_all(base_dir);
+        output
+    }
+
     async fn read_until_any(client: &mut TcpStream, needles: &[&str]) -> String {
         let mut output = Vec::new();
         timeout(Duration::from_secs(5), async {
@@ -4493,7 +7083,9 @@ mod tests {
             crate::config::ScreenConfig {
                 ansi: Some("login/login.ans".to_string()),
                 ansi_40: Some("login/login-40.ans".to_string()),
+                ascii_40: Some("login/login-40.asc".to_string()),
                 ascii: Some("login/login.asc".to_string()),
+                text_40: Some("login/login-40.txt".to_string()),
                 text: Some("login/login.txt".to_string()),
                 pause: false,
             },
@@ -4503,6 +7095,8 @@ mod tests {
         std::fs::create_dir_all(&login_dir).expect("create login screen dir");
         std::fs::write(login_dir.join("login.ans"), b"ANSI80\r\n").expect("write 80-col ANSI");
         std::fs::write(login_dir.join("login-40.ans"), b"ANSI40\r\n").expect("write 40-col ANSI");
+        std::fs::write(login_dir.join("login-40.asc"), b"ASCII40\r\n").expect("write 40-col ASCII");
+        std::fs::write(login_dir.join("login-40.txt"), b"TEXT40\r\n").expect("write 40-col text");
         std::fs::write(login_dir.join("login.asc"), b"ASCII\r\n").expect("write ASCII");
         std::fs::write(login_dir.join("login.txt"), b"TEXT\r\n").expect("write text");
     }
@@ -4573,6 +7167,107 @@ action = "logoff"
         config.paths.runtime = base_dir.join("runtime");
         config.paths.logs = base_dir.join("logs");
         config
+    }
+
+    fn sysop_submenu_smoke_config(
+        bind_addr: SocketAddr,
+        base_dir: &Path,
+        db_path: &Path,
+    ) -> OxideConfig {
+        let mut config: OxideConfig = toml::from_str(
+            r#"
+[board]
+name = "Sysop Smoke BBS"
+
+[telnet]
+enabled = true
+bind = "127.0.0.1:0"
+max_connections = 1
+idle_timeout_seconds = 5
+
+[database]
+path = "oxidebbs.ddb"
+
+[paths]
+ansi = "ansi"
+screens = "screens"
+doors = "doors"
+runtime = "runtime"
+logs = "logs"
+
+[flow]
+login_screen = "login"
+login_menu = "login"
+main_menu = "main"
+
+[screens.login]
+text = "login.txt"
+
+[screens.main_menu]
+text = "main.txt"
+
+[screens.sysop_menu]
+text = "sysop.txt"
+
+[menus.login]
+screen = "login"
+prompt = "Login? "
+
+[[menus.login.items]]
+key = "L"
+label = "Logon"
+action = "login"
+
+[[menus.login.items]]
+key = "G"
+label = "Goodbye"
+action = "logoff"
+
+[menus.main]
+screen = "main_menu"
+prompt = "Command? "
+
+[[menus.main.items]]
+key = "S"
+label = "Sysop"
+action = "submenu"
+target = "sysop"
+min_security_level = 255
+
+[[menus.main.items]]
+key = "L"
+label = "Logoff"
+action = "logoff"
+
+[menus.sysop]
+screen = "sysop_menu"
+prompt = "Sysop? "
+
+[[menus.sysop.items]]
+key = "L"
+label = "Goodbye"
+action = "logoff"
+"#,
+        )
+        .expect("parse sysop submenu smoke config");
+        config.telnet.bind = bind_addr.to_string();
+        config.database.path = db_path.to_path_buf();
+        config.paths.ansi = base_dir.join("ansi");
+        config.paths.screens = base_dir.join("screens");
+        config.paths.doors = base_dir.join("doors");
+        config.paths.runtime = base_dir.join("runtime");
+        config.paths.logs = base_dir.join("logs");
+        config
+    }
+
+    fn write_sysop_submenu_smoke_screens(config: &OxideConfig) {
+        std::fs::create_dir_all(&config.paths.screens).expect("create screen dir");
+        std::fs::write(config.paths.screens.join("login.txt"), b"Login\r\n")
+            .expect("write login screen");
+        std::fs::write(config.paths.screens.join("main.txt"), b"Main\r\n")
+            .expect("write main screen");
+        std::fs::write(config.paths.screens.join("sysop.txt"), b"Sysop Menu\r\n")
+            .expect("write sysop screen");
     }
 
     async fn connect_with_retry(addr: SocketAddr) -> TcpStream {

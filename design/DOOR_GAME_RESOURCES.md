@@ -498,19 +498,26 @@ Use as background for:
 
 - Local doors
 - Door server integrations
-- Future BBSLink/DoorParty-style integrations
+- BBSLink/DoorParty-style integrations
 
 ---
 
 ## Remote game services
 
-Remote services are not local DOS doors, but they may be useful for future OxideBBS integrations.
+Remote services are not local DOS doors, but they are useful integration targets
+for OxideBBS provider work.
+
+v1.2 includes BBSLink and DoorParty-style provider adapters in
+`oxidebbs-door`, including local dry-run validation, TCP/telnet connector
+paths, DecentDB credential-reference storage, and localhost fake-server tests.
+Operators still provide their own provider accounts and secret-reference
+backends; OxideBBS must not store or display raw provider secrets.
 
 ---
 
 ## 13. BBSLink
 
-**Use for:** future remote-door integration target.
+**Use for:** remote-door provider integration target.
 
 Source:
 
@@ -524,14 +531,16 @@ BBSLink is not the same as running DOS doors locally, but it is relevant because
 
 Recommended OxideBBS usage:
 
-Do not make BBSLink part of v1. Treat it as a future “remote door provider” integration.
+Do not treat BBSLink as part of the v1 local-DOS-door requirement. In v1.2 it is
+a remote door-provider integration target with local dry-run validation,
+TCP/telnet session bridging, credential-reference persistence, and local
+fake-server coverage.
 
-Possible future abstraction:
+Compatibility abstraction:
 
 ```text
 DoorProvider
   LocalDosDoorProvider
-  LocalNativeDoorProvider
   RemoteBbsLinkProvider
   RemoteDoorPartyProvider
 ```
@@ -540,7 +549,8 @@ DoorProvider
 
 ## Open-source / source-available door and door-adjacent projects
 
-These can be useful for testing, inspiration, or future native door support. They are not all DOS doors.
+These can be useful for testing, compatibility research, or understanding door
+behavior. They are not all DOS doors.
 
 ---
 
@@ -556,7 +566,9 @@ The repository describes 32-bit and 64-bit ports of the Usurper BBS doorgame.
 
 Recommended OxideBBS usage:
 
-Investigate license and build/runtime details before recommending as an OxideBBS test door. This may be more useful as a modern native/ported door candidate than as a DOSEMU2 v1 test.
+Investigate license and build/runtime details before recommending as an OxideBBS
+test door. This may be more useful as a source-available compatibility reference
+than as a DOSEMU2 v1 test.
 
 ---
 
@@ -578,7 +590,7 @@ Good source for understanding modern door-game source layout and ANSI asset hand
 
 ## 16. FrotzDoor
 
-**Use for:** open-source/native door inspiration.
+**Use for:** source-available door behavior reference.
 
 Source:
 
@@ -588,7 +600,9 @@ FrotzDoor is a Frotz interpreter hardened for use as a BBS door. The repository 
 
 Recommended OxideBBS usage:
 
-This is interesting because it is door-adjacent and open source. It may be a good future compatibility candidate for native/Linux door support, depending on how it handles terminal I/O and BBS integration.
+This is interesting because it is door-adjacent and open source. It may be a
+good compatibility reference depending on how it handles terminal I/O and BBS
+integration.
 
 ---
 
@@ -621,13 +635,15 @@ Legend of the Green Dragon is an homage/remake inspired by the classic BBS door 
 
 Recommended OxideBBS usage:
 
-Do not treat this as a DOS door test. It is useful as historical/cultural inspiration and possibly for thinking about future native/networked games.
+Do not treat this as a DOS door test. It is useful as historical/cultural
+inspiration and possibly for thinking about networked games.
 
 ---
 
-## Development libraries and door-making references
+## Compatibility references for source-available doors
 
-These are useful if OxideBBS later encourages native modern doors.
+These are useful for understanding common terminal I/O expectations and
+door-launch assumptions.
 
 ---
 
@@ -649,7 +665,7 @@ Study expected APIs and drop-file support. Do not necessarily adopt it.
 
 ## 20. GoDoors
 
-**Use for:** modern native door development inspiration.
+**Use for:** modern door integration reference.
 
 Source:
 
@@ -659,7 +675,7 @@ GoDoors is described as a helper library for creating Linux-based door applicati
 
 Recommended OxideBBS usage:
 
-Useful as inspiration for a future `oxide-door-sdk` or native Rust door API.
+Useful for understanding how terminal-style games integrate with BBS launchers.
 
 ---
 
@@ -870,7 +886,7 @@ Start small and clean.
 3. **Open-source/source-available modern doors**
    - Examples: FrotzDoor, Crazy Eights Slots, Usurper ports
    - Why: source available, easier to debug
-   - Use: future native/stdin-stdout compatibility
+   - Use: source-available compatibility testing
 
 ### Tier 2: discovery candidates
 

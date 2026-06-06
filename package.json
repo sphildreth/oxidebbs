@@ -1,12 +1,13 @@
 {
   "name": "oxidebbs-docs",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "type": "module",
   "scripts": {
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",
-    "docs:preview": "vitepress preview docs"
+    "docs:preview": "vitepress preview docs",
+    "web-terminal:test": "node --test web-terminal/tests/*.js"
   },
   "devDependencies": {
     "vitepress": "^2.0.0-alpha.17"

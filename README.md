@@ -22,29 +22,29 @@
 
 # OxideBBS
 
-**OxideBBS** is a modern Rust BBS engine for telnet callers, ANSI/CP437
-screens, DecentDB persistence, local sysop operations, and DOS door games.
+**OxideBBS** is a modern Rust BBS engine for telnet and serial callers,
+ANSI/CP437 screens, DecentDB persistence, local sysop operations, FTN/OxideNet
+networking, caller file transfers, and DOS door games.
 
 It keeps the caller experience byte-oriented and classic while giving sysops a
-clean Rust codebase, a real database layer, auditable runtime operations, Docker
-deployment, and a GitHub-native release workflow.
+clean Rust codebase, a real database layer, auditable runtime operations,
+operational health checks, Docker deployment, and a GitHub-native release
+workflow.
+
+OxideBBS remains a modern Rust server. C64, C64 Ultimate, and C64 terminal
+application users are supported as remote callers through a C64-friendly
+terminal profile; this is not a C64-native server port.
 
 > **Built for sysops. Driven by code.**
 
-The canonical repository is:
-
-```text
-https://github.com/sphildreth/oxidebbs
-```
-
 ## Features
 
-- 📡 **Telnet Caller Runtime** - Multi-node telnet serving with session
-  lifecycle tracking, idle timeout handling, graceful shutdown, and live node
-  state.
-- 🎨 **ANSI/CP437-First UI** - Raw ANSI assets, CP437 conversion, 40-column and
-  80-column screen profiles, paging, caller-safe prompts, and CRLF-normalized
-  telnet output.
+- 📡 **Telnet And Serial Caller Runtime** - Multi-node telnet serving plus
+  disabled-by-default physical serial/modem devices, with session lifecycle
+  tracking, idle timeout handling, graceful shutdown, and live node state.
+- 🎨 **ANSI/CP437-First UI** - Raw ANSI assets, CP437 conversion, C64-friendly
+  40-column plain/PETSCII-fallback caller profile, 80-column ANSI profile,
+  paging, caller-safe prompts, and CRLF-normalized telnet output.
 - 🧭 **Configurable Menus** - Login, main, info, message, door, logoff, and
   nested submenu routing with hotkey-driven caller commands.
 - 👤 **Accounts And Auth** - New-user creation, Argon2id password hashing,
@@ -53,29 +53,59 @@ https://github.com/sphildreth/oxidebbs
 - 💬 **Local Message Areas** - DecentDB-backed message areas, posting, reading,
   replies, private-mail foundation, moderation fields, and SQL-side visibility
   filtering.
-- 🕹️ **DOS Door Support** - DOSEMU2-based live door launches, `DOOR.SYS` and
-  `DORINFO1.DEF` drop files, per-node runtime directories, byte bridging,
+- 📁 **Caller File Areas And Transfers** - File-area management, ZMODEM
+  send/receive, XMODEM-CRC fallback, upload sanitization, pending-review
+  uploads, transfer history, and binary-safe caller transport handling.
+- 🕹️ **DOS Door Compatibility** - DOSEMU2-based live door launches, `DOOR.SYS`,
+  `DORINFO1.DEF`, `CHAIN.TXT`, `DOORFILE.SR`, `PCBOARD.SYS`, and
+  `CALLINFO.BBS` drop files, per-node runtime directories, byte bridging,
   timeout cleanup, and durable `door_runs` records.
+- 🌐 **Remote Door Providers** - BBSLink and DoorParty-style provider adapters,
+  local dry-run checks, DecentDB-backed provider credentials, and redacted
+  secret display across sysop surfaces.
 - 🧪 **Bundled Door Fixture** - Oxide-owned `oxide-check` DOS test door for
   validating drop files, DOSEMU2 command planning, and live COM1 byte flow
   without bundling third-party doorware.
-- 🗄️ **DecentDB Persistence** - [DecentDB](https://github.com/sphildreth/decentdb) is the only system database, with
-  schema markers, migrations, users, sessions, messages, doors, audit events,
-  backup/export/import, and doctor checks.
+- 🛰️ **FTN And BinkP Networking** - Type-2 packet I/O, echomail toss/scan,
+  netmail routing, bundles, nodelists/nodediffs, AreaFix, BinkP polling and
+  listener support, TLS modes, retries, queues, packet retention, and stats.
+- 🧬 **OxideNet** - First-party FTN-style network profile with application
+  review, address assignment, credential lifecycle, config package generation
+  and import, nodelist publication, suspended-node enforcement, and CLI/TUI
+  operations.
+- 🗄️ **DecentDB Persistence And Maintenance** - [DecentDB](https://github.com/sphildreth/decentdb) is the only system database, with
+  schema markers, migrations, users, sessions, messages, doors, file transfers,
+  network state, audit events, doctor checks, verify, backup, export, import,
+  compaction, and audit purge operations.
 - 🧑‍💻 **Sysop CLI And TUI** - Local CLI commands plus a Ratatui sysop console
-  for dashboard, nodes, users, doors, messages, database, logs, config, ANSI,
-  audit, doctor, and read-only workflows.
+  for dashboard, nodes, users, doors, files, messages, database, logs, config,
+  ANSI, audit, doctor, network, OxideNet, and read-only workflows.
 - 🔌 **Local Control Socket** - Same-UID Unix control channel for live status,
   node list/show, disconnects, direct node messages, broadcasts, and stale-node
   recovery.
+- 🩺 **Remote Monitoring And Health Surface** - Opt-in plain-HTTP loopback monitoring web
+  listener with a human-readable root page, `/status`, doctor-backed `/health`,
+  `/healthz`, `/healtz`, sysop-authenticated read-only JSON APIs, CSRF/replay
+  protections, origin checks, rate limits, and read-only mutation blocking.
+- 🌐 **Browser Caller Terminal** - Optional `/terminal` endpoint on the same listener
+  as `[admin_web]` that opens a full-browser CP437 terminal connected to a normal
+  caller session via `/terminal/ws`, then prompts for the same BBS login menu flow as
+  telnet callers.
+- ⚡ **Browser ZMODEM Transfer** - `zmodem.js` is available on `/terminal/zmodem.js`
+  and `/terminal` routes upload/download bytes through the existing caller transfer
+  engine without changing transport protocol.
 - 📝 **Operational Logs And Audit Trail** - Configurable text or JSON logs,
-  rotation, audit retention, startup/shutdown events, door events, auth events,
-  and sysop action records.
+  rotation, monitoring web activity lines, audit retention, startup/shutdown
+  events, door events, auth events, and sysop action records.
 - 🐳 **Docker Deployment** - Cross-platform Docker Compose path for Windows,
   macOS, and Linux hosts with OxideBBS, DOSEMU2, assets, config, and the test
   door inside a Linux runtime image.
+- 🚢 **Release Automation** - Version metadata alignment, release archive smoke
+  checks, checksum verification, docs builds, Docker smoke checks, optional
+  DOSEMU2 smoke automation, and Codeberg mirror dry-run automation.
 - 🧱 **Modular Rust Workspace** - Focused crates for server, core domain, term,
-  telnet, DecentDB repositories, doors, and local sysop tooling.
+  telnet, serial/file transfer helpers, DecentDB repositories, doors, FTN,
+  BinkP, OxideNet, and local sysop tooling.
 
 ## Sysop TUI
 
@@ -92,7 +122,7 @@ DOSEMU2 and the bundled Oxide-owned test door fixture.
 OXIDEBBS_SYSOP_PASSWORD='choose-a-real-password' docker compose up -d --build
 ```
 
-Connect with SyncTERM or telnet:
+Connect with SyncTERM, telnet, or a C64/C64 Ultimate terminal client:
 
 ```bash
 telnet localhost 2323
@@ -114,12 +144,15 @@ volumes, reset steps, door testing, and Windows/macOS notes.
 
 GitHub Releases publish `oxidebbs-server` packages and SHA-256 checksums for:
 
-- `oxidebbs-<tag>-x86_64-unknown-linux-gnu.tar.gz`
-- `oxidebbs-<tag>-x86_64-apple-darwin.tar.gz`
-- `oxidebbs-<tag>-x86_64-pc-windows-msvc.zip`
+- `oxidebbs-<tag>-linux-x86_64-gnu.tar.gz`
+- `oxidebbs-<tag>-macos-x86_64.tar.gz`
+- `oxidebbs-<tag>-windows-x86_64-msvc.zip`
 
 Each package includes the server binary, bundled assets, example configs, the
 Oxide-owned `oxide-check` test door fixture, license files, and security policy.
+Manual release workflow dispatches default to a dry run that builds and smokes
+all three archive formats, verifies checksums, builds docs, and builds the
+Docker image without uploading artifacts.
 Docker remains the simplest deployment path for Windows and macOS sysops who
 want DOS door support because live door execution targets a Linux runtime with
 DOSEMU2.
@@ -163,9 +196,10 @@ without that file falls back to `config/oxidebbs.example.toml`.
 
 ## Sysop Operations
 
-OxideBBS is local-admin-first: there is no remote web admin surface in the
-current release line. Use the CLI, the local sysop TUI, and the local control
-socket from the host running `oxidebbs-server`.
+OxideBBS is local-admin-first. Mutating sysop operations live in the CLI, the
+local sysop TUI, and the same-UID local control socket. The optional monitoring
+web listener is intended for loopback status, health checks, and authenticated
+read-only JSON views.
 
 ```bash
 cargo run -p oxidebbs-server -- status
@@ -173,6 +207,8 @@ cargo run -p oxidebbs-server -- nodes list
 cargo run -p oxidebbs-server -- users list
 cargo run -p oxidebbs-server -- messages areas list
 cargo run -p oxidebbs-server -- doors list
+cargo run -p oxidebbs-server -- files areas list
+cargo run -p oxidebbs-server -- net status oxidenet
 cargo run -p oxidebbs-server -- logs recent
 cargo run -p oxidebbs-server -- db doctor
 ```
@@ -189,10 +225,35 @@ embedded serve runtime for the TUI session. Selectable themes include
 `oxide-classic`, `wildcat`, `telegard`, `vbbs`, `mystic`, `midnight`, and
 `high-contrast`.
 
+When `[admin_web]` is enabled, the loopback listener exposes a landing page and
+monitoring-friendly health checks. `/status` is public only when
+`public_status_enabled = true`. OxideBBS serves this listener as plain HTTP
+only; use a local reverse proxy such as Caddy for HTTPS/TLS termination. Do
+not connect directly with `https://127.0.0.1:8080`; terminate HTTPS at the
+proxy and forward plain HTTP to OxideBBS.
+
+If `[web_terminal].enabled = true` (default), the same listener also serves:
+
+- `GET /terminal` - full-browser caller terminal.
+- `GET /terminal/ws` - websocket byte stream.
+- `GET /terminal/zmodem.js` - browser-side zmodem helper.
+
+The browser terminal uses the same login, menu flow, sessions, node allocation,
+and disconnect handling as telnet/raw callers. ZMODEM upload/download flows use
+the same transfer stack through the websocket stream.
+
+```bash
+curl http://127.0.0.1:8080/
+curl http://127.0.0.1:8080/health
+curl http://127.0.0.1:8080/status
+```
+
 ## Doors
 
-OxideBBS isolates door execution from core session logic. A live DOS door
-session uses this byte path:
+OxideBBS isolates door execution from core session logic. Local DOS doors run
+through DOSEMU2 with compatibility drop files, while remote provider entries
+connect to BBSLink and DoorParty-style services without changing the caller
+menu flow. A live local DOS door session uses this byte path:
 
 ```text
 caller telnet client
@@ -211,6 +272,9 @@ cargo run -p oxidebbs-server -- --config config/oxidebbs.example.toml doors chec
 cargo run -p oxidebbs-server -- --config config/oxidebbs.example.toml doors dropfile oxide-check --user sysop --node 1 --format DORINFO1.DEF
 cargo run -p oxidebbs-server -- --config config/oxidebbs.example.toml doors test oxide-check --user sysop --dry-run
 ```
+
+Supported local drop-file writers include `DOOR.SYS`, `DORINFO1.DEF`,
+`CHAIN.TXT`, `DOORFILE.SR`, `PCBOARD.SYS`, and `CALLINFO.BBS`.
 
 OxideBBS does not bundle copyrighted or abandonware DOS doors. Add third-party
 doors only when you have the rights to run and distribute them.
@@ -232,8 +296,16 @@ Useful docs:
 - [Deployment and Operations](docs/project/deployment.md)
 - [Docker Deployment](docs/project/docker.md)
 - [Sysop CLI](docs/project/sysop-cli.md)
+- [Remote Monitoring And Health](docs/project/remote-admin.md)
 - [Caller Commands](docs/project/caller-commands.md)
+- [Serial And Modem Transport](docs/project/serial.md)
+- [File Transfers](docs/project/file-transfers.md)
+- [Doors](docs/project/doors.md)
+- [FTN Architecture](docs/ftn/architecture.md)
+- [BinkP](docs/ftn/binkp.md)
+- [OxideNet](docs/oxidenet/overview.md)
 - [Architecture](docs/project/architecture.md)
+- [Release v1.2 Plan](design/RELEASE_v1_2_PLAN.md)
 - [Changelog](docs/about/changelog.md)
 
 ## Repository Layout
@@ -247,7 +319,12 @@ Useful docs:
 │   ├── oxidebbs-telnet/     # telnet transport and negotiation
 │   ├── oxidebbs-db/         # DecentDB repository layer and schema helpers
 │   ├── oxidebbs-door/       # door metadata, drop files, runners
-│   └── oxidebbs-sysop/      # local Ratatui sysop console and services
+│   ├── oxidebbs-sysop/      # local Ratatui sysop console and services
+│   ├── oxidebbs-transfer/   # file-transfer protocols (ZMODEM, XMODEM-CRC)
+│   ├── oxidebbs-network/    # shared network protocol types and tables
+│   ├── oxidebbs-ftn/        # legacy FTN packet engine and tosser/scanner
+│   ├── oxidebbs-binkp/      # BinkP client/server for FTN/OxideNet transport
+│   └── oxidebbs-oxidenet/   # OxideNet first-party network profile
 ├── assets/                  # bundled ANSI, ASCII, text, and screen assets
 ├── config/                  # example board and door configuration
 ├── design/                  # specs, roadmap, ADRs, and architecture notes
@@ -277,18 +354,6 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 Use `--locked` when validating Rust changes because `Cargo.lock` is committed.
 Meaningful behavior, architecture, config, or product-scope changes should also
 update the relevant design docs and ADRs.
-
-## Current Boundaries
-
-- Telnet is the supported caller transport for the v1 release line.
-- DecentDB is the only system database.
-- Remote caller UI is ANSI/CP437 byte-oriented, not Unicode-first.
-- Ratatui is used only for the local sysop console, not caller screens.
-- Physical modem/serial support, BinkP polling, full FTN/OxideNet runtime, and
-  file transfer support are future work.
-- Public telnet exposure is an operator decision. Telnet sends credentials and
-  caller traffic in plaintext; the generated config binds to `127.0.0.1:2323`
-  by default.
 
 ## Contributing
 

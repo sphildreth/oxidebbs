@@ -14,7 +14,7 @@ For v1, the sysop interface was **CLI-first**. A local Ratatui-based TUI shipped
 4. Preserve the retro BBS feel without making administration painful.
 5. Make door troubleshooting easy.
 6. Make DecentDB health and backups easy to reason about.
-7. Make the future Ratatui console a wrapper around the same command/service layer, not a separate admin system.
+7. Keep the Ratatui console as a wrapper around the same command/service layer, not a separate admin system.
 
 ## Interface layers
 
@@ -23,7 +23,7 @@ OxideBBS should have three admin layers over time:
 ```text
 v1      CLI admin commands
 v1.1    Local Ratatui sysop console
-v2+     Optional read-only status web dashboard, if desired
+v1.2    Optional loopback remote status/admin surface, if explicitly enabled
 ```
 
 The CLI should be the source of truth. The TUI should call the same underlying services.
@@ -69,13 +69,17 @@ oxidebbs-server serve
 oxidebbs-server setup
 oxidebbs-server check
 oxidebbs-server status
+oxidebbs-server audit ...
+oxidebbs-server config ...
 oxidebbs-server users ...
 oxidebbs-server nodes ...
 oxidebbs-server messages ...
 oxidebbs-server doors ...
+oxidebbs-server files ...
 oxidebbs-server ansi ...
 oxidebbs-server db ...
 oxidebbs-server logs ...
+oxidebbs-server net ...
 ```
 
 Canonical top-level order is currently:
@@ -87,8 +91,10 @@ check
 config
 db
 doors
+files
 logs
 messages
+net
 nodes
 serve
 setup
@@ -312,15 +318,15 @@ cleanup only when control is connected.
 
 ### Notes
 
-`nodes watch` can be simple in v1: refresh every few seconds and print a table.
-The Ratatui console can replace this later with a real live dashboard. When the
-server is running, these states come from the local runtime registry and include
-heartbeat age for stale-session diagnosis. `nodes reset-stale` should use the
-live control channel when available and fall back to audited intent when the
-server is unreachable.
+`nodes watch` refreshes every few seconds and prints a table. The Ratatui console
+uses the same service-layer state for its dashboard. When the server is running,
+these states come from the local runtime registry and include heartbeat age for
+stale-session diagnosis. `nodes reset-stale` should use the live control channel
+when available and fall back to audited intent when the server is unreachable.
 
-Future web-based admin interfaces are not in v1 and, if introduced, must not
-proceed until CSRF and replay protections are in place.
+The opt-in loopback remote admin surface validates CSRF and replay protections
+before accepting authenticated read-only API requests or audited mutation
+attempts.
 
 ## Message commands
 
@@ -408,6 +414,25 @@ oxidebbs-server doors dropfile lord --user sysop --node 1 --format door.sys
 oxidebbs-server doors dropfile lord --user sysop --node 1 --format dorinfo1.def
 ```
 
+## File commands
+
+File-transfer administration is implemented as a local sysop CLI surface and is
+paired with caller-facing file menus plus live ZMODEM/XMODEM-CRC workflows.
+
+```bash
+oxidebbs-server files areas list
+oxidebbs-server files areas add <key> --name "Name" --root <path>
+oxidebbs-server files areas edit <key>
+oxidebbs-server files list [--area <key>]
+oxidebbs-server files import <area-key> <path>
+oxidebbs-server files remove <file-id> --reason <reason>
+oxidebbs-server files transfers recent
+```
+
+`files remove` is a safe unapprove operation that preserves stored bytes and
+requires a reason. File-area mutations, imports, and removals write audit
+events.
+
 ## ANSI/screen commands
 
 ### Essential v1
@@ -449,7 +474,7 @@ oxidebbs-server db backup <output-path>
 ```bash
 oxidebbs-server db export --format json
 oxidebbs-server db import --format json <path>
-oxidebbs-server db compact
+oxidebbs-server db compact --output <path> [--overwrite]
 oxidebbs-server db verify
 ```
 
@@ -458,8 +483,9 @@ oxidebbs-server db verify
 Backup/restore should be designed around DecentDB. `db import --format json <path>`
 is the v1 restore boundary; it is safe only for schema-only targets and runs
 transactionally.
-`db compact` is explicit but unsupported in this release because DecentDB does not
-expose a production-safe compaction API.
+`db compact --output <path> [--overwrite]` writes a verified compacted DecentDB
+output file and refuses to write to the active database path. Replacing the
+active database remains an offline operator action.
 
 `db stats --json` is a stable object contract with counts for schema version,
 users, message areas, messages, sessions, live active sessions, open session
@@ -484,6 +510,8 @@ oxidebbs-server audit user <alias-or-id>
 oxidebbs-server logs search <query>
 oxidebbs-server audit node <node-number>
 oxidebbs-server audit door <door-key>
+oxidebbs-server audit purge-before <timestamp>
+oxidebbs-server audit purge-retention
 ```
 
 ## Config commands
@@ -598,9 +626,10 @@ oxidebbs-server logs tail
 oxidebbs-server audit recent
 ```
 
-## Commands that can wait
+## Completed former wait-list commands
 
-These should not block v1:
+These commands no longer block the v1.2 CLI surface; the related TUI and network
+workflows are complete in the v1.2 plan:
 
 ```bash
 oxidebbs-server users delete
@@ -609,6 +638,8 @@ oxidebbs-server doors add
 oxidebbs-server doors edit
 oxidebbs-server ansi convert
 oxidebbs-server config set
+oxidebbs-server files areas list
+oxidebbs-server files import
 ```
 
 ## Implementation recommendation
@@ -623,13 +654,17 @@ oxidebbs-server/src/commands/setup.rs
 oxidebbs-server/src/commands/check.rs
 oxidebbs-server/src/commands/serve.rs
 oxidebbs-server/src/commands/status.rs
+oxidebbs-server/src/commands/audit.rs
+oxidebbs-server/src/commands/config.rs
 oxidebbs-server/src/commands/users.rs
 oxidebbs-server/src/commands/nodes.rs
 oxidebbs-server/src/commands/messages.rs
 oxidebbs-server/src/commands/doors.rs
+oxidebbs-server/src/commands/files.rs
 oxidebbs-server/src/commands/ansi.rs
 oxidebbs-server/src/commands/db.rs
 oxidebbs-server/src/commands/logs.rs
+oxidebbs-server/src/commands/net.rs
 ```
 
 ## Final recommendation

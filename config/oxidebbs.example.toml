@@ -53,9 +53,42 @@ confirm_quit = true
 
 [terminal]
 default_encoding = "cp437"
+default_profile = "plain"
+manual_profile_selection = true
 clear_screen_on_connect = true
 welcome_screen = "welcome.ans"
 logoff_screen = "logoff.ans"
+
+[terminal.profiles.ansi80]
+name = "ANSI / CP437 80-column"
+width = 80
+height = 25
+supports_ansi = true
+supports_color = true
+charset = "cp437"
+line_endings = "crlf"
+backspace_mode = "backspace_or_delete"
+
+[terminal.profiles.plain]
+name = "Plain ASCII"
+width = 80
+height = 25
+supports_ansi = false
+supports_color = false
+charset = "ascii"
+line_endings = "crlf"
+backspace_mode = "backspace_or_delete"
+
+[terminal.profiles.c64]
+name = "C64 / C64 Ultimate 40-column"
+width = 40
+height = 25
+supports_ansi = false
+supports_color = false
+charset = "petscii_ascii_fallback"
+line_endings = "crlf"
+backspace_mode = "backspace_or_delete"
+output_pacing_bytes_per_second = 1200
 
 [flow]
 login_screen = "login"
@@ -66,34 +99,55 @@ main_menu = "main"
 [screens.login]
 ansi = "login/login.ans"
 ansi_40 = "login/login-40.ans"
+ascii_40 = "login/login.asc"
 ascii = "login/login.asc"
+text_40 = "login/login.asc"
 text = "login/login.txt"
 
 [screens.screen1]
 ansi = "info/screen1.ans"
+ascii_40 = "info/screen1-40.asc"
 ascii = "info/screen1.asc"
+text_40 = "info/screen1-40.txt"
 text = "info/screen1.txt"
 pause = true
 
 [screens.screen2]
 ansi = "info/screen2.ans"
+ascii_40 = "info/screen2-40.asc"
 ascii = "info/screen2.asc"
+text_40 = "info/screen2-40.txt"
 text = "info/screen2.txt"
 pause = true
 
 [screens.main_menu]
 ansi = "menus/main/main.ans"
 ansi_40 = "menus/main/main-40.ans"
+ascii_40 = "menus/main/main.asc"
 ascii = "menus/main/main.asc"
+text_40 = "menus/main/main.txt"
 text = "menus/main/main.txt"
+pause = false
+
+[screens.sysop_menu]
+ansi = "menus/sysop/sysop.ans"
+ansi_40 = "menus/sysop/sysop-40.ans"
+ascii_40 = "menus/sysop/sysop.asc"
+ascii = "menus/sysop/sysop.asc"
+text_40 = "menus/sysop/sysop.txt"
+text = "menus/sysop/sysop.txt"
 pause = false
 
 [menus.main]
 screen = "main_menu"
+# Optional: if present, ? displays this screen instead of generated command help.
+# help_screen = "main_help"
 prompt = "Command? "
 
 [menus.login]
 screen = "login"
+# Optional: if present, ? displays this screen instead of generated command help.
+# help_screen = "login_help"
 prompt = "Login? "
 
 [[menus.login.items]]
@@ -122,6 +176,38 @@ label = "Messages"
 action = "messages"
 
 [[menus.main.items]]
+key = "F"
+label = "Files"
+action = "files"
+
+[[menus.main.items]]
+key = "G"
+label = "Goodbye"
+action = "logoff"
+
+[[menus.main.items]]
+key = "S"
+label = "Sysop"
+action = "submenu"
+target = "sysop"
+min_security_level = 255
+
+[menus.sysop]
+screen = "sysop_menu"
+prompt = "Sysop? "
+
+[[menus.sysop.items]]
+key = "N"
+label = "Node Status"
+action = "noop"
+
+[[menus.sysop.items]]
+key = "R"
+label = "Return to main"
+action = "submenu"
+target = "main"
+
+[[menus.sysop.items]]
 key = "G"
 label = "Goodbye"
 action = "logoff"
@@ -142,6 +228,97 @@ exclusive = false
 time_limit_minutes = 5
 enabled = false
 
-[ftn]
+# Remote provider seed example. Persist provider credential references with
+# `oxidebbs-server doors add/edit --credential-ref ...`; do not put raw provider
+# secrets in this TOML file.
+#
+# [[doors.definitions]]
+# key = "bbslink-lord"
+# name = "BBSLink LORD"
+# runner = "remote:bbslink"
+# working_dir = "telnet://bbslink.example:23"
+# command = "LORD"
+# drop_file = "DOOR.SYS"
+# exclusive = false
+# time_limit_minutes = 30
+# enabled = false
+
+[network]
 enabled = false
-reserved_network_name = "OxideNet"
+
+[network.binkp_listener]
+enabled = false
+bind = "0.0.0.0:24554"
+max_connections = 10
+# Required when accepting inbound sessions for tls_required links.
+# tls_cert_path = "./certs/binkp.crt"
+# tls_key_path = "./certs/binkp.key"
+
+[network.profiles.fidonet]
+name = "FidoNet"
+enabled = false
+adapter = "legacy-ftn"
+
+[network.profiles.fidonet.local_address]
+zone = 1
+net = 105
+node = 42
+point = 0
+
+[network.links.fidonet_hub]
+network = "fidonet"
+address = "1:105/0"
+host = "fidonet.example.net"
+binkp_port = 24554
+password = ""
+poll_schedule_minutes = 60
+enabled = false
+compression = "zip"
+transport_security = "plaintext_legacy"
+legacy_compatible = true
+
+[admin_web]
+# Remote monitoring/status HTTP surface. OxideBBS does not serve HTTPS/TLS on
+# this listener. Direct loopback/LAN HTTP is allowed; use a private LAN bind or
+# `0.0.0.0` only on trusted networks. Put Caddy, nginx, Traefik, or another
+# reverse proxy in front of it for WAN/public HTTPS access. `require_tls = true`
+# means public external access must arrive through that TLS-terminating proxy;
+# it does not enable native TLS in OxideBBS.
+enabled = false
+public_status_enabled = false
+bind = "127.0.0.1:8080"
+require_tls = true
+read_only = true
+allowed_origins = []
+behind_reverse_proxy = false
+session_timeout_seconds = 900
+csrf_token_ttl_seconds = 900
+replay_window_seconds = 300
+rate_limit_per_minute = 30
+
+[web_terminal]
+# Browser-based caller terminal endpoint on the monitoring listener.
+# Default is true, so `/terminal` and `/terminal/ws` are available whenever
+# `[admin_web].enabled = true` and omitted for opt-out.
+enabled = true
+
+[serial]
+enabled = false
+
+[[serial.devices]]
+name = "modem"
+path = "/dev/ttyUSB0"
+baud_rate = 115200
+data_bits = 8
+parity = "none"
+stop_bits = 1
+flow_control = "rtscts"
+init_strings = ["ATZ"]
+answer_string = "ATA"
+require_carrier_detect = false
+drop_dtr_on_hangup = true
+read_timeout_ms = 100
+
+[file_transfers]
+enabled = false
+max_upload_bytes = 1048576

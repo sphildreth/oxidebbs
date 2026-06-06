@@ -5,7 +5,7 @@
 OxideBBS is a modern BBS software package built in Rust. It targets sysops who want
 experience of a classic 1990s BBS with modern reliability, clean deployment,
 DecentDB-backed persistence, and first-class support for telnet callers, ANSI/
-CP437 screens, DOS door games, and future FTN-style message networking.
+CP437 screens, DOS door games, and FTN-style message networking.
 
 OxideBBS is software for running a board. It is not itself a single hosted board.
 
@@ -31,7 +31,18 @@ They value:
 A developer interested in Rust, terminal systems, DecentDB, telnet, CP437, protocol
 work, and BBS internals.
 
-### Future user: message-network sysop
+### Secondary user: C64/C64 Ultimate caller
+
+A caller using a native C64, C64 Ultimate, or C64 terminal application to reach
+OxideBBS over normal BBS-style network access. This user expects a 40-column,
+ASCII/PETSCII-friendly experience that works without modern 80-column ANSI
+assumptions.
+
+User story: As a C64 or C64 Ultimate user, I want to connect to OxideBBS using
+a native C64 terminal application so that I can use the BBS without needing a
+modern ANSI/80-column terminal.
+
+### Secondary user: message-network sysop
 
 A sysop who wants FTN/FidoNet-style shared echomail and netmail using OxideBBS and
 possibly OxideNet.
@@ -43,8 +54,8 @@ possibly OxideNet.
 3. Use DecentDB as the only system database.
 4. Treat ANSI/CP437 as a first-class user experience.
 5. Make DOS door launching a core capability.
-6. Leave room for physical modem support without blocking v1.
-7. Leave room for FTN-style message networks without forcing them into v1.
+6. Support disabled-by-default physical modem/serial transport.
+7. Support FTN-style message networks without forcing every board to enable them.
 
 ## 4. v1 requirements
 
@@ -70,6 +81,22 @@ possibly OxideNet.
 - Paging for long text
 - Status bar support
 - Supported 40-column and 80-column caller layouts
+- Named C64/C64 Ultimate caller compatibility profile (`c64`) for remote
+  callers. OxideBBS does not run on C64 hardware; it remains a Rust server
+  accessed by C64 clients.
+- C64-friendly navigation through 40-column menus, prompts, message lists,
+  message reader output, file lists, and plain fallbacks for ANSI art.
+- ASCII fallback is required for basic navigation. PETSCII-aware rendering is a
+  terminal-profile concern; until full PETSCII translation exists, C64 callers
+  must receive usable ASCII/PETSCII-friendly plain output.
+- Minimal control sequence assumptions for C64/plain callers: no advanced ANSI
+  escape sequences unless explicitly configured for an ANSI-capable profile.
+- CR, LF, and CRLF input handling plus `0x08` and `0x7f` backspace/delete
+  normalization for login, password, and prompt editing.
+- Optional output pacing per terminal profile or connection for slower clients.
+- Manual profile selection path during onboarding or account settings when
+  terminal detection is unreliable: ANSI / 80-column, plain ASCII, and C64 /
+  40-column / PETSCII-friendly.
 
 ### User system
 
@@ -124,6 +151,8 @@ possibly OxideNet.
 
 ## 5. v1.1 / v1.2 requirements
 
+All items in this section have been completed as of the v1.2 release.
+
 ### FTN-style networking foundation
 
 - Internal network-address model
@@ -142,15 +171,27 @@ possibly OxideNet.
 - Message stats
 - Config inspection
 
-## 6. v2 candidates
+## 6. v1.2 shipped scope and post-v1.2 candidates
+
+**Note:** The v1.2 release implements the former deferred-scope items listed in
+the active release plan.
+
+The following items were previously listed as v2 or future scope and are now
+shipped in v1.2 per
+[`design/RELEASE_v1_2_PLAN.md`](./RELEASE_v1_2_PLAN.md) and
+[ADR 0018](./adr/0018-v1-2-completes-deferred-scope.md).
 
 - Physical modem/serial transport
-- BinkP polling
+- BinkP polling for FTN/FidoNet mail exchange
 - FTN packet tosser/scanner
 - OxideNet network support
 - Web-based read-only status dashboard
-- ZMODEM/XMODEM/YMODEM file transfers, if still desired
-- Native door API for future Rust-native doors
+- Caller file-area transfers: ZMODEM primary and XMODEM-CRC fallback
+
+Post-v1.2 candidates are tracked in
+[`design/RELEASE_v1_3_PLAN.md`](./RELEASE_v1_3_PLAN.md). Door work after v1.2
+focuses on compatibility with existing door games, drop-file formats, provider
+behavior, and sysop tooling.
 
 ## 7. Success criteria
 
