@@ -1,9 +1,10 @@
 # Remote Monitoring
 
 Remote monitoring is disabled by default. OxideBBS validates the
-security-sensitive `[admin_web]` configuration and can start a loopback HTTP
-status surface when explicitly enabled. The configuration section retains the
-`[admin_web]` name for compatibility, but this is not a browser sysop portal.
+security-sensitive `[admin_web]` configuration and can start an HTTP status and
+browser-terminal surface when explicitly enabled. The listener may be bound to
+loopback, private LAN, link-local, or all local interfaces for direct LAN use.
+WAN/public exposure should be placed behind a TLS-terminating reverse proxy.
 
 The public HTTP surface is intentionally narrow: `GET /status` is available only
 when both `enabled = true` and `public_status_enabled = true`. The payload omits
@@ -16,9 +17,26 @@ plain HTTP only, even when `require_tls = true`. That setting is an operator
 policy flag for proxied deployments; it does not make OxideBBS accept native TLS
 connections.
 
+For LAN-only access, binding directly to a LAN address or all local interfaces
+is allowed:
+
+```toml
+[admin_web]
+enabled = true
+bind = "0.0.0.0:8080"
+public_status_enabled = true
+read_only = true
+```
+
+`0.0.0.0` means all local IPv4 interfaces. On a LAN-only host this exposes
+OxideBBS to the LAN; on a VPS or a machine with a public NIC it also exposes
+the listener publicly. Use firewall rules or a reverse proxy when the host has
+WAN reachability.
+
 Keep `bind = "127.0.0.1:8080"` and place OxideBBS behind a local reverse proxy
-when HTTPS is needed. The reverse proxy, such as Caddy, nginx, or Traefik,
-terminates TLS and forwards plain HTTP to the loopback OxideBBS listener.
+when HTTPS or WAN/public access is needed. The reverse proxy, such as Caddy,
+nginx, or Traefik, terminates TLS and forwards plain HTTP to the loopback
+OxideBBS listener.
 Pointing a browser or curl at `https://127.0.0.1:8080` talks TLS to an HTTP
 socket and will fail.
 
@@ -122,10 +140,12 @@ Validation rules:
 
 - `bind` must be an IP socket address.
 - timeout, CSRF, replay-window, and rate-limit values must be greater than zero.
-- `allowed_origins` entries must be exact `https://` or loopback-only
-  `http://` origins without paths, whitespace, userinfo, or `*`.
-- enabled remote monitoring must bind to a loopback address. OxideBBS does not
-  serve native HTTPS/TLS on this listener.
+- `allowed_origins` entries must be exact `https://` origins or direct
+  loopback/private-LAN/link-local `http://` origins without paths, whitespace,
+  userinfo, or `*`.
+- enabled remote monitoring may bind to loopback, private LAN, link-local, or
+  unspecified addresses. OxideBBS does not serve native HTTPS/TLS on this
+  listener.
 - `behind_reverse_proxy = true` requires a loopback bind and `require_tls = true`
   so HTTPS is terminated by a local reverse proxy before plain HTTP is forwarded
   to OxideBBS.

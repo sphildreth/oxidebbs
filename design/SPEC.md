@@ -486,12 +486,14 @@ session, menu key, user id/alias, audit event type, door key/name, message area,
 message id, and outcome fields when applicable.
 
 All mutating sysop control is local in v1.2. `[admin_web]` configuration exists
-and is disabled by default. When explicitly enabled, it may expose a loopback
-public `/status` endpoint plus sysop-authenticated read-only JSON API views.
+and is disabled by default. When explicitly enabled, it may expose direct
+loopback/LAN HTTP monitoring, browser-terminal, and sysop-authenticated
+read-only JSON API views. Public/WAN exposure should be placed behind a
+TLS-terminating reverse proxy.
 The `[admin_web]` listener is plain HTTP only; OxideBBS does not implement
 native HTTPS/TLS for this surface. HTTPS deployments must terminate TLS in a
 local reverse proxy such as Caddy, nginx, or Traefik and forward plain HTTP to
-the loopback listener.
+the OxideBBS listener.
 Remote mutation attempts are guarded by session authentication, CSRF, replay
 nonce/timestamp checks, rate limits, origin checks, and audit logging, but are
 blocked by read-only mode.
@@ -541,7 +543,9 @@ to `true`, so `OxideBBS` accepts browser callers on `/terminal` out of the box
 when `[admin_web].enabled = true`. Browser callers authenticate at the normal BBS
 login prompt, then follow the same menu and session flow as any other caller.
 Browser ZMODEM transfers remain on the same websocket stream and the same server
-transfer stack; no XMODEM changes are required for web sessions.
+transfer stack. XMODEM downloads are manually started by caller terminals and
+negotiate CRC mode when the receiver sends `C`, falling back to classic checksum
+mode when the receiver sends `NAK`.
 
 ## 13. FTN/OxideNet boundary
 

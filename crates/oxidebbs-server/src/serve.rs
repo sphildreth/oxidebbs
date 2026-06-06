@@ -2735,7 +2735,7 @@ async fn run_file_download<T: Transport>(
     if protocol == TransferProtocol::XmodemCrc {
         send_text(
             transport,
-            "Start XMODEM-CRC receive in your terminal now.\r\n",
+            "Start XMODEM receive in your terminal now. CRC is used when the terminal requests it.\r\n",
         )
         .await?;
     }
@@ -3086,7 +3086,7 @@ async fn prompt_transfer_protocol<T: Transport>(
         idle_timeout,
         true,
         false,
-        "Protocol: Z) ZMODEM  X) XMODEM-CRC  blank to return: ",
+        "Protocol: Z) ZMODEM  X) XMODEM  blank to return: ",
     )
     .await?
     {
@@ -3179,7 +3179,7 @@ fn elapsed_millis(started: Instant) -> i64 {
 fn transfer_protocol_label(protocol: TransferProtocol) -> &'static str {
     match protocol {
         TransferProtocol::Zmodem => "ZMODEM",
-        TransferProtocol::XmodemCrc => "XMODEM-CRC",
+        TransferProtocol::XmodemCrc => "XMODEM",
     }
 }
 

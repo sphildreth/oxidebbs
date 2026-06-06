@@ -279,10 +279,11 @@ legacy_compatible = true
 
 [admin_web]
 # Remote monitoring/status HTTP surface. OxideBBS does not serve HTTPS/TLS on
-# this listener. Keep it bound to loopback and put Caddy, nginx, Traefik, or
-# another reverse proxy in front of it when browser or network access needs
-# HTTPS. `require_tls = true` means external access must arrive through that
-# TLS-terminating proxy; it does not enable native TLS in OxideBBS.
+# this listener. Direct loopback/LAN HTTP is allowed; use a private LAN bind or
+# `0.0.0.0` only on trusted networks. Put Caddy, nginx, Traefik, or another
+# reverse proxy in front of it for WAN/public HTTPS access. `require_tls = true`
+# means public external access must arrive through that TLS-terminating proxy;
+# it does not enable native TLS in OxideBBS.
 enabled = false
 public_status_enabled = false
 bind = "127.0.0.1:8080"

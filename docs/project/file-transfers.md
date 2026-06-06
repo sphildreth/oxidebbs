@@ -7,19 +7,21 @@ The caller workflow is:
 
 - Select a file area.
 - Choose `D` to download or `U` to upload.
-- Choose `Z` for ZMODEM or `X` for XMODEM-CRC.
-- For XMODEM-CRC uploads, provide a filename before the protocol starts because
+- Choose `Z` for ZMODEM or `X` for XMODEM.
+- For XMODEM uploads, provide a filename before the protocol starts because
   XMODEM does not carry metadata.
 
 ZMODEM is the primary protocol and supports send, receive, batch protocol
 state, retry via `ZRPOS`, cancel handling, metadata parsing, and CRC-32 data
-subpackets. XMODEM-CRC is the single-file fallback.
+subpackets. XMODEM is the single-file fallback. Downloads prefer CRC mode when
+the receiver sends `C` and fall back to classic checksum mode when the receiver
+sends `NAK`.
 
 ZMODEM downloads are normally auto-detected by BBS-aware terminal clients.
-XMODEM-CRC downloads are not auto-started; after OxideBBS prints the transfer
-start line, the caller must manually start an XMODEM-CRC receive in the terminal
-client. OxideBBS waits up to 60 seconds for the receiver's initial CRC request
-byte.
+XMODEM downloads are not auto-started; after OxideBBS prints the transfer start
+line, the caller must manually start an XMODEM receive in the terminal client.
+OxideBBS waits up to 60 seconds for the receiver's initial CRC or checksum
+request byte.
 
 File area roots are sysop-controlled storage directories. Downloaded files are
 read from the entry storage name under the area root. Caller uploads are

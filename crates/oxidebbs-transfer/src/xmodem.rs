@@ -15,10 +15,18 @@ const DEFAULT_MAX_RETRIES: u8 = 10;
 const CONTROL_TIMEOUT_SECS: u64 = 1;
 const INITIAL_RECEIVER_TIMEOUT_SECS: u64 = 60;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SendMode {
+    Crc,
+    Checksum,
+}
+
 /// Send bytes to a caller using XMODEM-CRC.
 ///
-/// The receiver must start the transfer by sending `C`. Payloads are split into
-/// 128-byte blocks and padded with CP/M EOF bytes for the final block.
+/// The receiver should start the transfer by sending `C`. For terminal clients
+/// that expose only classic XMODEM receive and send `NAK`, the sender falls
+/// back to the one-byte checksum variant. Payloads are split into 128-byte
+/// blocks and padded with CP/M EOF bytes for the final block.
 ///
 /// # Errors
 ///
@@ -42,13 +50,13 @@ pub async fn send_xmodem_crc_with_retries<T: ByteTransport + ?Sized>(
     payload: &[u8],
     max_retries: u8,
 ) -> Result<(), TransferError> {
-    wait_for_crc_request(transport, max_retries).await?;
+    let send_mode = wait_for_receiver_request(transport, max_retries).await?;
 
     let mut block_number = 1_u8;
     for chunk in payload.chunks(BLOCK_SIZE) {
         let mut block = [CPMEOF; BLOCK_SIZE];
         block[..chunk.len()].copy_from_slice(chunk);
-        send_block_with_retries(transport, block_number, &block, max_retries).await?;
+        send_block_with_retries(transport, block_number, &block, send_mode, max_retries).await?;
         block_number = block_number.wrapping_add(1);
     }
 
@@ -94,14 +102,15 @@ pub async fn receive_xmodem_crc_with_size<T: ByteTransport + ?Sized>(
     Ok(received)
 }
 
-async fn wait_for_crc_request<T: ByteTransport + ?Sized>(
+async fn wait_for_receiver_request<T: ByteTransport + ?Sized>(
     transport: &mut T,
     max_retries: u8,
-) -> Result<(), TransferError> {
+) -> Result<SendMode, TransferError> {
     let attempts = INITIAL_RECEIVER_TIMEOUT_SECS.max(u64::from(max_retries) + 1);
     for _ in 0..attempts {
         match read_control_byte_with_timeout(transport, CONTROL_TIMEOUT_SECS).await? {
-            Some(CRC_REQUEST) => return Ok(()),
+            Some(CRC_REQUEST) => return Ok(SendMode::Crc),
+            Some(NAK) => return Ok(SendMode::Checksum),
             Some(CAN) => return Err(TransferError::Canceled),
             Some(_) | None => {}
         }
@@ -113,10 +122,10 @@ async fn send_block_with_retries<T: ByteTransport + ?Sized>(
     transport: &mut T,
     block_number: u8,
     block: &[u8; BLOCK_SIZE],
+    send_mode: SendMode,
     max_retries: u8,
 ) -> Result<(), TransferError> {
-    let crc = crc16_xmodem(block);
-    let frame = build_block_frame(block_number, block, crc);
+    let frame = build_block_frame(block_number, block, send_mode);
     for _ in 0..=max_retries {
         transport.write_all(&frame).await?;
         transport.flush().await?;
@@ -212,14 +221,23 @@ async fn receive_xmodem_crc_padded<T: ByteTransport + ?Sized>(
     }
 }
 
-fn build_block_frame(block_number: u8, block: &[u8; BLOCK_SIZE], crc: u16) -> Vec<u8> {
+fn build_block_frame(block_number: u8, block: &[u8; BLOCK_SIZE], send_mode: SendMode) -> Vec<u8> {
     let mut frame = Vec::with_capacity(BLOCK_SIZE + 5);
     frame.push(SOH);
     frame.push(block_number);
     frame.push(0xFF - block_number);
     frame.extend_from_slice(block);
-    frame.extend_from_slice(&crc.to_be_bytes());
+    match send_mode {
+        SendMode::Crc => frame.extend_from_slice(&crc16_xmodem(block).to_be_bytes()),
+        SendMode::Checksum => frame.push(xmodem_checksum(block)),
+    }
     frame
+}
+
+fn xmodem_checksum(block: &[u8; BLOCK_SIZE]) -> u8 {
+    block
+        .iter()
+        .fold(0_u8, |checksum, byte| checksum.wrapping_add(*byte))
 }
 
 async fn read_required_byte<T: ByteTransport + ?Sized>(
@@ -339,7 +357,7 @@ mod tests {
     async fn receiver_accepts_valid_block_and_truncates_to_expected_size() {
         let mut block = [CPMEOF; BLOCK_SIZE];
         block[..5].copy_from_slice(b"hello");
-        let frame = build_block_frame(1, &block, crc16_xmodem(&block));
+        let frame = build_block_frame(1, &block, SendMode::Crc);
         let reads = frame
             .into_iter()
             .chain([EOT])

@@ -749,9 +749,9 @@ impl OxideConfig {
                         .into(),
                 ));
             }
-            if !ip_is_loopback(bind.ip()) {
+            if !ip_is_lan_or_unspecified(bind.ip()) {
                 return Err(ConfigError::Validation(
-                    "admin_web.bind must remain loopback-only; terminate HTTPS/TLS in a local reverse proxy".into(),
+                    "admin_web.bind must be loopback, private LAN, link-local, or unspecified; use a reverse proxy for public WAN access".into(),
                 ));
             }
         }
@@ -1353,6 +1353,20 @@ fn ip_is_loopback(ip: IpAddr) -> bool {
     ip.is_loopback()
 }
 
+fn ip_is_lan_or_unspecified(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => {
+            ip.is_loopback() || ip.is_private() || ip.is_link_local() || ip.is_unspecified()
+        }
+        IpAddr::V6(ip) => {
+            ip.is_loopback()
+                || ip.is_unique_local()
+                || ip.is_unicast_link_local()
+                || ip.is_unspecified()
+        }
+    }
+}
+
 fn validate_admin_web_origin(origin: &str) -> Result<(), ConfigError> {
     let trimmed = origin.trim();
     if trimmed.is_empty() || trimmed != origin {
@@ -1391,15 +1405,15 @@ fn validate_admin_web_origin(origin: &str) -> Result<(), ConfigError> {
             "admin_web.allowed_origins entries must not contain userinfo".into(),
         ));
     }
-    if scheme == "http" && !origin_host_is_loopback(rest) {
+    if scheme == "http" && !origin_host_is_lan_or_unspecified(rest) {
         return Err(ConfigError::Validation(
-            "admin_web.allowed_origins http origins must be loopback-only".into(),
+            "admin_web.allowed_origins http origins must be loopback, private LAN, link-local, or unspecified".into(),
         ));
     }
     Ok(())
 }
 
-fn origin_host_is_loopback(authority: &str) -> bool {
+fn origin_host_is_lan_or_unspecified(authority: &str) -> bool {
     let host = if let Some(rest) = authority.strip_prefix('[') {
         let Some((host, remainder)) = rest.split_once(']') else {
             return false;
@@ -1416,7 +1430,7 @@ fn origin_host_is_loopback(authority: &str) -> bool {
         return true;
     }
     match host.parse::<IpAddr>() {
-        Ok(ip) => ip_is_loopback(ip),
+        Ok(ip) => ip_is_lan_or_unspecified(ip),
         Err(_) => false,
     }
 }
@@ -2085,7 +2099,7 @@ name = "Admin Web Origin"
 
 [admin_web]
 enabled = true
-allowed_origins = ["http://localhost:5173", "https://admin.example.test"]
+allowed_origins = ["http://localhost:5173", "http://192.168.1.50:8080", "https://admin.example.test"]
 "#;
         let config: OxideConfig = toml::from_str(toml).expect("parse");
 
@@ -2115,7 +2129,7 @@ allowed_origins = ["*"]
     }
 
     #[test]
-    fn rejects_admin_web_http_origin_unless_loopback() {
+    fn rejects_admin_web_http_origin_unless_loopback_or_lan() {
         let toml = r#"
 [board]
 name = "Bad Admin Web Http Origin"
@@ -2127,12 +2141,12 @@ allowed_origins = ["http://admin.example.test"]
         let config: OxideConfig = toml::from_str(toml).expect("parse");
         let error = config
             .validate_admin_web()
-            .expect_err("non-loopback http origin rejected");
+            .expect_err("non-lan http origin rejected");
 
         assert!(
             error
                 .to_string()
-                .contains("admin_web.allowed_origins http origins must be loopback-only")
+                .contains("admin_web.allowed_origins http origins must be loopback, private LAN")
         );
     }
 
@@ -2183,24 +2197,41 @@ behind_reverse_proxy = true
     }
 
     #[test]
-    fn rejects_admin_web_non_loopback_bind_until_native_tls_exists() {
+    fn accepts_admin_web_lan_bind_for_direct_lan_access() {
         let toml = r#"
 [board]
-name = "Bad Admin Web"
+name = "LAN Admin Web"
 
 [admin_web]
 enabled = true
 bind = "0.0.0.0:8080"
 "#;
         let config: OxideConfig = toml::from_str(toml).expect("parse");
+
+        config
+            .validate_admin_web()
+            .expect("direct LAN/all-interface admin web bind validates");
+    }
+
+    #[test]
+    fn rejects_admin_web_public_bind_without_reverse_proxy() {
+        let toml = r#"
+[board]
+name = "Bad Admin Web"
+
+[admin_web]
+enabled = true
+bind = "8.8.8.8:8080"
+"#;
+        let config: OxideConfig = toml::from_str(toml).expect("parse");
         let error = config
             .validate_admin_web()
-            .expect_err("non-loopback admin web rejected");
+            .expect_err("public admin web bind rejected");
 
         assert!(
             error
                 .to_string()
-                .contains("admin_web.bind must remain loopback-only")
+                .contains("admin_web.bind must be loopback, private LAN")
         );
     }
 
