@@ -33,4 +33,4 @@ Transfer history is stored in DecentDB with node, user, area, file entry,
 direction, protocol, byte counts, duration, outcome, and error details.
 
 YMODEM, XMODEM-1k, Kermit, external `rz`/`sz`, and FTN BinkP mail transport are
-not caller file-transfer protocols for this release plan.
+not caller file-transfer protocols.

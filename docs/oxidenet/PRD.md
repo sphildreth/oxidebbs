@@ -1,6 +1,6 @@
 # OxideNet PRD
 
-The source PRD lives in `design/OXIDENET_PRD.md`. For v1.2, the implemented
+The source PRD lives in `design/OXIDENET_PRD.md`. The implemented
 operational subset is:
 
 - application submission and manual review;

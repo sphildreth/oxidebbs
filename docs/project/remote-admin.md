@@ -149,7 +149,7 @@ Validation rules:
 - `behind_reverse_proxy = true` requires a loopback bind and `require_tls = true`
   so HTTPS is terminated by a local reverse proxy before plain HTTP is forwarded
   to OxideBBS.
-- `read_only = false` is rejected; remote mutations are not enabled in v1.2.
+- `read_only = false` is rejected; remote mutations are not supported.
 
 The real sysop surfaces remain the local CLI, local Unix control socket, and
 local Ratatui sysop TUI. Remote mutations are intentionally unavailable.

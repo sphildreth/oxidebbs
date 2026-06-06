@@ -3,7 +3,7 @@
 The FTN scanner exports local echomail messages into outbound packet files for
 configured links.
 
-Current v1.2 behavior:
+Current behavior:
 
 - scans enabled links for the selected network profile
 - reads subscribed `network_area_subscriptions`

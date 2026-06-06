@@ -1,6 +1,6 @@
 # Netmail Routing
 
-OxideBBS v1.2 includes a pure `oxidebbs-ftn` routing decision layer for
+OxideBBS includes a pure `oxidebbs-ftn` routing decision layer for
 netmail. The tosser uses that layer to deliver local netmail, queue direct or
 hub-routed outbound netmail, and quarantine unknown destinations. The scanner
 materializes pending outbound netmail rows into Type-2+ packet files for BinkP

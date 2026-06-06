@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-06-06
+
 ### Added
 - `oxidebbs-network` protocol-neutral network foundation types, shared
   `network_*` DecentDB tables, repository APIs, and the shared `[network]`
@@ -35,10 +37,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   format.
 - `files` sysop CLI group for file-area list/add/edit, file list/import/remove,
   and transfer-history inspection.
-- `oxidebbs-transfer` CRC-16/XMODEM, XMODEM-CRC send/receive fallback, and
+- `oxidebbs-transfer` CRC-16/XMODEM, XMODEM CRC/checksum negotiation, and
   owned ZMODEM send/receive state machines with metadata, retry, cancel, batch,
   and protocol loopback coverage.
-- Caller file-area workflows for ZMODEM and XMODEM-CRC uploads/downloads,
+- Caller file-area workflows for ZMODEM and negotiated XMODEM uploads/downloads,
   including security gates, upload path sanitization, pending-review uploads,
   transfer history persistence, and telnet IAC escaping for binary transfers.
 - `oxidebbs-ftn` Type-2 packet reader/writer, echomail kludge
@@ -93,16 +95,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Public docs pages for doors, serial/modem transport, caller file-transfer
   status, and OxideNet status, with navigation entries.
 - Disabled-by-default `[admin_web]` monitoring configuration model with
-  validation for loopback-only enabled binds, public-status opt-in, origin
-  allowlists, reverse-proxy TLS policy with no native HTTPS listener, read-only
-  mode, CSRF/replay timing, and rate-limit settings.
+  validation for loopback, private-LAN, link-local, and unspecified direct-LAN
+  binds, public-status opt-in, origin allowlists, reverse-proxy TLS policy with
+  no native HTTPS listener, read-only mode, CSRF/replay timing, and rate-limit
+  settings.
 - Remote monitoring authentication with Argon2 password verification,
   cookie-backed in-memory sysop sessions, CSRF token runtime validation, origin
   checks, login rate limiting, authenticated read-only API views, logout session
   deletion, and guarded mutation routes that validate nonce/timestamp replay
   headers before read-only mode blocks the mutation.
 - Reusable read-only admin status JSON payload helper shared by the existing
-  `status --json` command and the opt-in loopback `/status` route.
+  `status --json` command and the opt-in loopback or LAN `/status` route.
 - C64/C64 Ultimate caller compatibility requirement with a named `c64`
   terminal profile, 40-column plain fallback assets, C64 terminal-type
   detection, CR/LF and backspace/delete coverage, and terminal profile config
@@ -139,7 +142,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sending, and packet completion after acknowledgement.
 - ByteTransport-Transport bridge in `oxidebbs-transfer` with `TransportAdapter` that wraps
   telnet `Transport` implementations to provide the `ByteTransport` interface, enabling file
-  transfer protocols (XMODEM-CRC, ZMODEM) to work over any transport layer with timeout support.
+  transfer protocols (XMODEM, ZMODEM) to work over any transport layer with timeout support.
 - Path sanitization utilities in `oxidebbs-transfer` with `sanitize_filename()`,
   `validate_path_within_base()`, and `safe_upload_path()` functions to prevent directory traversal
   attacks and ensure secure file upload operations.
@@ -180,7 +183,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   TLS session support. Opportunistic links fall back to plaintext only when
   legacy compatibility is explicitly enabled.
 - Remote monitoring remains disabled by default, but `[admin_web]` can now start
-  an opt-in loopback public `/status` endpoint plus sysop-authenticated
+  an opt-in loopback or LAN public `/status` endpoint plus sysop-authenticated
   read-only API views. Remote mutations remain blocked by read-only mode after
   auth, CSRF, replay, rate-limit, origin, and audit checks.
 

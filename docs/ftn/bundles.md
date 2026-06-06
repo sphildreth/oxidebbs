@@ -37,7 +37,7 @@ Classic day-of-week arcmail names such as `.su0`, `.mo0`, `.tu0`, `.we0`,
 policy before OxideBBS treats them as extractable bundles. The current
 classifier intentionally recognizes only unambiguous suffixes.
 
-Out of scope for this v1.2 FTN operations slice:
+Out of scope for caller-facing FTN operations:
 
 - implement arcmail bundle naming
 - outbound ARJ bundle creation; outbound arcmail creation is ZIP-only

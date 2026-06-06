@@ -15,5 +15,5 @@ Validated ranges:
 | `42:2/*` and beyond | Future nets. |
 
 Approving an application without `--address` assigns the next unused top-level
-member address. Point addresses parse through the shared model, but v1.2 member
+member address. Point addresses parse through the shared model, but member
 allocation intentionally assigns top-level `42:1/N` nodes.

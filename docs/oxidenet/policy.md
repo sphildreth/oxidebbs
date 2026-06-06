@@ -1,6 +1,6 @@
 # OxideNet Policy
 
-Policy version `1.0` is the default accepted policy for v1.2 packages.
+Policy version `1.0` is the default accepted policy for OxideNet packages.
 
 Members must:
 

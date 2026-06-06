@@ -1,15 +1,16 @@
 # Sysop CLI
 
-OxideBBS is CLI-first. The server process is controlled with local commands in
-`oxidebbs-server`, not a remote sysop-control API.
+OxideBBS is sysop-command first. The same `oxidebbs-server` binary starts the
+BBS, checks configuration, manages users, watches nodes, administers doors and
+files, and runs network operations.
 
 Examples:
 
 ```bash
-cargo run -p oxidebbs-server -- status
-cargo run -p oxidebbs-server -- nodes list
-cargo run -p oxidebbs-server -- doors test lord --user sysop --dry-run
-cargo run -p oxidebbs-server -- db export --format json
+oxidebbs-server status
+oxidebbs-server nodes list
+oxidebbs-server doors test lord --user sysop --dry-run
+oxidebbs-server db export --format json
 ```
 
 Global options:
@@ -57,7 +58,7 @@ separate `is_sysop` flag.
 Launch the local Ratatui sysop console with:
 
 ```bash
-cargo run -p oxidebbs-server -- --config config/oxidebbs.toml sysop
+oxidebbs-server --config config/oxidebbs.toml sysop
 ```
 
 `sysop` opens the full TUI by default. It first tries to attach to the live
@@ -69,7 +70,7 @@ The legacy `--tui` flag is accepted for compatibility, and `--readonly` starts
 the console with destructive actions disabled:
 
 ```bash
-cargo run -p oxidebbs-server -- --config config/oxidebbs.toml sysop --readonly
+oxidebbs-server --config config/oxidebbs.toml sysop --readonly
 ```
 
 By default, pressing `Q` in the TUI opens a confirmation dialog before quitting.
@@ -84,7 +85,7 @@ confirm_quit = true
 To skip the routine confirmation for one launch when no callers are online, use:
 
 ```bash
-cargo run -p oxidebbs-server -- --config config/oxidebbs.toml sysop --no-confirm-quit
+oxidebbs-server --config config/oxidebbs.toml sysop --no-confirm-quit
 ```
 
 If any nodes are active, the TUI always shows a stronger confirmation dialog
@@ -94,13 +95,13 @@ with `Nodes are active. Continue to shutdown?` before it exits, even when
 Use `--connect-only` when `sysop` should never start an embedded server:
 
 ```bash
-cargo run -p oxidebbs-server -- --config config/oxidebbs.toml sysop --connect-only
+oxidebbs-server --config config/oxidebbs.toml sysop --connect-only
 ```
 
 Select a TUI color theme with `--theme`:
 
 ```bash
-cargo run -p oxidebbs-server -- --config config/oxidebbs.toml sysop --theme telegard
+oxidebbs-server --config config/oxidebbs.toml sysop --theme telegard
 ```
 
 Available themes:
@@ -218,7 +219,7 @@ Rotation strategies are:
 `serve --log-level <level>` overrides `[logging].level` for that serve run:
 
 ```bash
-cargo run -p oxidebbs-server -- --config config/oxidebbs.toml serve --log-level debug
+oxidebbs-server --config config/oxidebbs.toml serve --log-level debug
 ```
 
 The effective precedence is `serve --log-level`, then global `-v`, then
@@ -232,9 +233,9 @@ activity record; file logs are the operational troubleshooting stream.
 Read logs with:
 
 ```bash
-cargo run -p oxidebbs-server -- --config config/oxidebbs.toml logs recent
-cargo run -p oxidebbs-server -- --config config/oxidebbs.toml logs tail --follow
-cargo run -p oxidebbs-server -- --config config/oxidebbs.toml logs search login_success
+oxidebbs-server --config config/oxidebbs.toml logs recent
+oxidebbs-server --config config/oxidebbs.toml logs tail --follow
+oxidebbs-server --config config/oxidebbs.toml logs search login_success
 ```
 
 The log commands read regular files under `paths.logs`, including nested door
@@ -245,7 +246,7 @@ runner logs under `logs/doors/`.
 Start with:
 
 ```bash
-cargo run -p oxidebbs-server -- setup
+oxidebbs-server setup
 ```
 
 Important setup behavior:
@@ -259,8 +260,8 @@ Important setup behavior:
 After setup:
 
 ```bash
-cargo run -p oxidebbs-server -- --config config/oxidebbs.toml check
-cargo run -p oxidebbs-server -- --config config/oxidebbs.toml config paths
+oxidebbs-server --config config/oxidebbs.toml check
+oxidebbs-server --config config/oxidebbs.toml config paths
 ```
 
 ## Config validation
@@ -300,13 +301,13 @@ path. Directory paths, including paths written with a trailing slash, resolve to
 ## Starting `serve`
 
 ```bash
-cargo run -p oxidebbs-server -- serve
+oxidebbs-server serve
 ```
 
 or:
 
 ```bash
-cargo run -p oxidebbs-server -- --config config/oxidebbs.toml serve
+oxidebbs-server --config config/oxidebbs.toml serve
 ```
 
 `serve` starts telnet on the configured bind address and opens:
@@ -367,13 +368,13 @@ spaces).
 ## Node monitoring and control
 
 ```bash
-cargo run -p oxidebbs-server -- nodes list
-cargo run -p oxidebbs-server -- nodes show 1
-cargo run -p oxidebbs-server -- nodes watch
-cargo run -p oxidebbs-server -- nodes disconnect 1
-cargo run -p oxidebbs-server -- nodes message 1 "System will restart in 1 minute."
-cargo run -p oxidebbs-server -- nodes broadcast "Welcome to the night shift."
-cargo run -p oxidebbs-server -- nodes reset-stale
+oxidebbs-server nodes list
+oxidebbs-server nodes show 1
+oxidebbs-server nodes watch
+oxidebbs-server nodes disconnect 1
+oxidebbs-server nodes message 1 "System will restart in 1 minute."
+oxidebbs-server nodes broadcast "Welcome to the night shift."
+oxidebbs-server nodes reset-stale
 ```
 
 When live, node rows include states:
@@ -387,12 +388,13 @@ Live `status --json` also includes `audit_write_failures`, the in-memory count
 of best-effort audit writes that failed while the server was running.
 
 The `[admin_web]` monitoring surface is disabled by default and validated. When
-explicitly enabled, it can serve a loopback public `/status` endpoint and
-sysop-authenticated read-only JSON views. `GET /` returns a small static route
-index. `GET /health`, `/healthz`, and `/healtz` run doctor-backed monitoring
-checks and return HTTP `200` only when doctor has no failed checks. OxideBBS
-does not serve HTTPS/TLS for this listener; put it behind a local reverse proxy
-such as Caddy when HTTPS is required. Remote mutation attempts require CSRF and
+explicitly enabled, it can serve `/status`, `/health`, `/terminal`, and
+sysop-authenticated read-only JSON views on loopback or trusted LAN interfaces.
+`GET /` returns a small static route index. `GET /health`, `/healthz`, and
+`/healtz` run doctor-backed monitoring checks and return HTTP `200` only when
+doctor has no failed checks. OxideBBS does not serve HTTPS/TLS for this
+listener; put it behind a local reverse proxy such as Caddy when HTTPS is
+required for WAN access. Remote mutation attempts require CSRF and
 nonce/timestamp replay checks, are audited, and remain blocked by
 `admin_web.read_only`; the mutating sysop/control surface remains local CLI plus
 Unix control socket.
@@ -400,9 +402,9 @@ Unix control socket.
 ## Messages
 
 ```bash
-cargo run -p oxidebbs-server -- messages search "packet"
-cargo run -p oxidebbs-server -- messages search "retro" --area retro.echo
-cargo run -p oxidebbs-server -- messages search "1:105/42" --network fidonet
+oxidebbs-server messages search "packet"
+oxidebbs-server messages search "retro" --area retro.echo
+oxidebbs-server messages search "1:105/42" --network fidonet
 ```
 
 `messages search` matches subject, body, author display name, area key, remote
@@ -457,9 +459,9 @@ commands.
 Recommended smoke-test flow:
 
 ```bash
-cargo run -p oxidebbs-server -- --config config/oxidebbs.example.toml doors check oxide-check
-cargo run -p oxidebbs-server -- --config config/oxidebbs.example.toml doors dropfile oxide-check --user sysop --node 1 --format DORINFO1.DEF
-cargo run -p oxidebbs-server -- --config config/oxidebbs.example.toml doors test oxide-check --user sysop --dry-run
+oxidebbs-server --config config/oxidebbs.example.toml doors check oxide-check
+oxidebbs-server --config config/oxidebbs.example.toml doors dropfile oxide-check --user sysop --node 1 --format DORINFO1.DEF
+oxidebbs-server --config config/oxidebbs.example.toml doors test oxide-check --user sysop --dry-run
 ```
 
 Live test expectation:
@@ -506,29 +508,29 @@ File-area administration is available from both the local sysop TUI and CLI.
 The TUI Files screen shows areas, entries, and transfer history, and can
 enable/disable areas or approve/unapprove entries with confirmation and audit
 logging. Callers can use the configured `files` menu action for live ZMODEM or
-XMODEM-CRC uploads and downloads when `[file_transfers].enabled = true`.
+negotiated XMODEM uploads and downloads when `[file_transfers].enabled = true`.
 
 Area management:
 
 ```bash
-cargo run -p oxidebbs-server -- files areas list
-cargo run -p oxidebbs-server -- files areas add main --name "Main Files" --root files/main --read-level 0 --download-level 10 --upload-level 20
-cargo run -p oxidebbs-server -- files areas edit main --name "General Files" --enabled true
+oxidebbs-server files areas list
+oxidebbs-server files areas add main --name "Main Files" --root files/main --read-level 0 --download-level 10 --upload-level 20
+oxidebbs-server files areas edit main --name "General Files" --enabled true
 ```
 
 File entries:
 
 ```bash
-cargo run -p oxidebbs-server -- files list
-cargo run -p oxidebbs-server -- files list --area main
-cargo run -p oxidebbs-server -- files import main ./uploads/demo.zip --description "Demo archive"
-cargo run -p oxidebbs-server -- files remove <file-id> --reason "duplicate upload"
+oxidebbs-server files list
+oxidebbs-server files list --area main
+oxidebbs-server files import main ./uploads/demo.zip --description "Demo archive"
+oxidebbs-server files remove <file-id> --reason "duplicate upload"
 ```
 
 Transfer history:
 
 ```bash
-cargo run -p oxidebbs-server -- files transfers recent --limit 50
+oxidebbs-server files transfers recent --limit 50
 ```
 
 Operational notes:
@@ -547,11 +549,11 @@ Operational notes:
 ## Database operations
 
 ```bash
-cargo run -p oxidebbs-server -- db backup backups/oxidebbs.ddb
-cargo run -p oxidebbs-server -- db export --format json > backups/oxidebbs.json
-cargo run -p oxidebbs-server -- db import --format json backups/oxidebbs.json
-cargo run -p oxidebbs-server -- db compact --output backups/oxidebbs-compacted.ddb
-cargo run -p oxidebbs-server -- audit purge-retention --dry-run
+oxidebbs-server db backup backups/oxidebbs.ddb
+oxidebbs-server db export --format json > backups/oxidebbs.json
+oxidebbs-server db import --format json backups/oxidebbs.json
+oxidebbs-server db compact --output backups/oxidebbs-compacted.ddb
+oxidebbs-server audit purge-retention --dry-run
 ```
 
 - `db backup` copies the active database file.
@@ -584,25 +586,25 @@ packet inspection, subscription metadata updates, poll dry-run preflight, and
 full nodelist import/lookup:
 
 ```bash
-cargo run -p oxidebbs-server -- net status fidonet
-cargo run -p oxidebbs-server -- net toss fidonet
-cargo run -p oxidebbs-server -- net scan fidonet
-cargo run -p oxidebbs-server -- net links list --network fidonet
-cargo run -p oxidebbs-server -- net links show fidonet-hub
-cargo run -p oxidebbs-server -- net areas list --network fidonet
-cargo run -p oxidebbs-server -- net areas subscribe TEST.ECHO fidonet-hub --network fidonet
-cargo run -p oxidebbs-server -- net queue fidonet-hub
-cargo run -p oxidebbs-server -- net packets summary --network fidonet
-cargo run -p oxidebbs-server -- net packets show <packet-id>
-cargo run -p oxidebbs-server -- net packets retry <packet-id>
-cargo run -p oxidebbs-server -- net packets mark-quarantined <packet-id> --reason "operator review"
-cargo run -p oxidebbs-server -- net packets outbound --network fidonet
-cargo run -p oxidebbs-server -- net logs fidonet-hub --limit 25
-cargo run -p oxidebbs-server -- net poll fidonet-hub
-cargo run -p oxidebbs-server -- net poll fidonet-hub --dry-run
-cargo run -p oxidebbs-server -- net areafix send fidonet-hub "+FSX_GEN" --password <password> --network fidonet
-cargo run -p oxidebbs-server -- net nodelist import NODELIST.123 --network fidonet
-cargo run -p oxidebbs-server -- net nodelist lookup 1:105/42 --network fidonet
+oxidebbs-server net status fidonet
+oxidebbs-server net toss fidonet
+oxidebbs-server net scan fidonet
+oxidebbs-server net links list --network fidonet
+oxidebbs-server net links show fidonet-hub
+oxidebbs-server net areas list --network fidonet
+oxidebbs-server net areas subscribe TEST.ECHO fidonet-hub --network fidonet
+oxidebbs-server net queue fidonet-hub
+oxidebbs-server net packets summary --network fidonet
+oxidebbs-server net packets show <packet-id>
+oxidebbs-server net packets retry <packet-id>
+oxidebbs-server net packets mark-quarantined <packet-id> --reason "operator review"
+oxidebbs-server net packets outbound --network fidonet
+oxidebbs-server net logs fidonet-hub --limit 25
+oxidebbs-server net poll fidonet-hub
+oxidebbs-server net poll fidonet-hub --dry-run
+oxidebbs-server net areafix send fidonet-hub "+FSX_GEN" --password <password> --network fidonet
+oxidebbs-server net nodelist import NODELIST.123 --network fidonet
+oxidebbs-server net nodelist lookup 1:105/42 --network fidonet
 ```
 
 `net toss` imports raw `.pkt` files and safe ZIP packet bundles from
@@ -623,14 +625,17 @@ See [FTN CLI](../ftn/cli.md), [FTN Tosser](../ftn/tosser.md),
 [FTN Scanner](../ftn/scanner.md), and [FTN Nodelists](../ftn/nodelist.md) for
 the current scope and limitations.
 
-## Local-only boundary
+## Local And Remote Boundaries
 
-All operations here are local to the current machine:
+The CLI and TUI remain the full sysop-control surfaces:
 
-- the remote TCP admin surface is disabled by default and loopback-only when
-  enabled
+- local CLI commands run on the host where `oxidebbs-server` can read the config
+  and database paths
+- the local control socket uses Unix peer UID checks plus filesystem permissions
+- remote monitoring is disabled by default
+- enabled remote monitoring may bind to loopback or trusted LAN interfaces
 - authenticated remote API views are read-only
-- control socket path must be local filesystem access only
-- local control socket uses Unix peer UID checks plus filesystem permissions
+- WAN/public HTTPS should terminate at a local reverse proxy before forwarding
+  plain HTTP to OxideBBS
 - remote mutation attempts are guarded by CSRF and replay protection but remain
   blocked by read-only mode

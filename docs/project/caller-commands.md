@@ -100,7 +100,7 @@ Inside a file area, callers use these prompt commands:
 | `R` | Return | Returns to area selection | Active |
 | Blank line | Return | Returns to area selection | Active |
 
-Supported caller transfer protocols are ZMODEM (`Z`) and XMODEM-CRC (`X`).
+Supported caller transfer protocols are ZMODEM (`Z`) and XMODEM (`X`).
 Uploads are stored pending sysop review.
 
 ## Supported Menu Actions
@@ -120,18 +120,19 @@ case-insensitively.
 | `submenu` | Moves into the configured target menu | Active |
 | `noop` | Accepts the key and performs no visible action | Active |
 
-## Future Commands
+## Custom Or Future Commands
 
 No caller key is globally reserved by the router. Future commands become real
 only when the config maps a key to an implemented action or prompt handler.
 
-When adding a future caller command:
+When changing caller commands on a board:
 
 1. Add or update the menu action or runtime prompt.
 2. Update the default config if the key is part of the starter command set.
 3. Update every starter screen asset that displays the command.
-4. Update this reference in the same change.
-5. Mark planned commands as `Not implemented` until the runtime route exists.
+4. Keep a local note of any board-specific keys so callers and co-sysops know
+   what is available.
+5. Treat unconfigured keys as unavailable, even if an ANSI screen mentions them.
 
 ## Source Of Truth
 

@@ -1,6 +1,6 @@
 # FTN Architecture
 
-OxideBBS v1.2 includes built-in FTN networking. A sysop does not need
+OxideBBS includes built-in FTN networking. A sysop does not need
 BinkleyTerm, FrontDoor, InterMail, binkd, or another external mailer just to
 exchange echomail and netmail.
 
@@ -25,7 +25,7 @@ OxideBBS can scan local messages into outbound files without calling another
 system.
 
 The mailer is only needed to move those files between systems automatically.
-For v1.2, the built-in mailer is BinkP over TCP/IP.
+The built-in mailer is BinkP over TCP/IP.
 
 ## Built-In BinkP Mailer
 
@@ -74,7 +74,7 @@ can tell whether a problem is packet creation, transport, or packet import.
 
 ## Manual Operation
 
-The v1.2 CLI keeps each operation available separately:
+The CLI keeps each operation available separately:
 
 ```bash
 oxidebbs-server net scan fidonet
@@ -106,7 +106,7 @@ In that mode:
 This is useful for testing, manual recovery, or sites that already have an
 external transport workflow.
 
-v1.2 does not require Binkley-style `.flo` files, BSO directories, EMSI, modem
+OxideBBS does not require Binkley-style `.flo` files, BSO directories, EMSI, modem
 answering, or caller pass-through from a front-end mailer.
 
 ## Spool Directories
@@ -174,9 +174,9 @@ or update DecentDB network state. TLS-capable poll sessions, inbound listener
 execution, AreaFix netmail processing, reply netmail, rescan queueing, packet
 retention, and operations stats are implemented.
 
-## Current Implementation Status
+## Operations Scope
 
-The v1.2 FTN implementation includes shared network configuration, DecentDB
+The FTN implementation includes shared network configuration, DecentDB
 network tables, protocol-neutral network types, FTN packet/kludge/duplicate
 primitives, inbound raw/ZIP/ARJ packet tossing, outbound packet scanning and ZIP
 bundle creation, TLS/plaintext BinkP client polling, inbound BinkP listener
@@ -184,11 +184,11 @@ execution, netmail delivery/forwarding, AreaFix command processing, BinkP frame
 I/O, transport-security policy, nodelist import/apply-diff/list/lookup/count,
 packet retention cleanup, and operations stats.
 
-The following pieces are outside this FTN operations slice:
+The following pieces are not part of day-to-day sysop operation:
 
 - nodelist-driven runtime routing integration
 - outbound ARJ bundle creation
 - OxideNet-specific workflows beyond the BinkP transport path
 
-See `design/MAILER.md` and `design/FTN_PLAN.md` in the repository for the
-implementation specifications.
+Developer planning notes live under `design/` in the repository; day-to-day
+sysop operation should use the `net` commands documented here.

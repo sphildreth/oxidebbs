@@ -4,7 +4,7 @@ OxideNet is the first-party FTN-style network profile for OxideBBS. It uses the
 shared network schema, DecentDB registry tables, BinkP polling, and the
 `oxidebbs-oxidenet` workflow service.
 
-Implemented v1.2 workflows:
+Implemented workflows:
 
 - OxideNet defaults for zone `42`, primary hub `42:1/1`, backup hub `42:1/2`,
   member range `42:1/100-899`, test range `42:1/900+`, and default areas.

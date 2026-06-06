@@ -17,4 +17,4 @@ bytes remain authoritative for duplicate hashing and re-export; display text is
 decoded only at higher layers.
 
 Tosser, scanner, bundle, and nodelist workflows build on these primitives and
-are tracked separately in the v1.2 release plan.
+are tracked separately from this packet-format reference.

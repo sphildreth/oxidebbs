@@ -44,9 +44,9 @@ sysop. `users demote-sysop` clears the sysop flag, but it does not lower the
 numeric security level. Run `users set-level` after demotion when the account
 should also lose level `255`.
 
-## Enforced Since v1.2
+## Enforced Areas
 
-These areas now use user security levels since v1.2:
+These areas use user security levels:
 
 - Door launching from the caller `Doors` menu: if `min_security_level` is set on a door definition, callers with lower security levels are denied access. The effective door launch level is the maximum of the invoking menu item level and the door definition level.
 - Caller menu routing: menu items with `min_security_level` above the authenticated user's level are rejected with an access-denied message. Unauthenticated callers are denied any menu item with `min_security_level > 0`.

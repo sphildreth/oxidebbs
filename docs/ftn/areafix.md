@@ -4,7 +4,7 @@ AreaFix is the FTN netmail robot used to manage echomail subscriptions. A linked
 system sends netmail to `AreaFix` at the board's FTN address, with the link
 password in the subject line and commands in the message body.
 
-OxideBBS v1.2 includes the pure `oxidebbs-ftn` command parser, inbound tosser
+OxideBBS includes the pure `oxidebbs-ftn` command parser, inbound tosser
 processing for netmail addressed to `AreaFix` or `AreaMgr`, and a local
 sysop-side executor:
 

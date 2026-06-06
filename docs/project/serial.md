@@ -1,6 +1,6 @@
 # Serial And Modem Transport
 
-Telnet remains enabled by default. Serial/modem transport is available for v1.2
+Telnet remains enabled by default. Serial/modem transport is available
 and is disabled until `[serial].enabled = true`.
 
 When enabled, each `[[serial.devices]]` entry opens a physical TTY with the

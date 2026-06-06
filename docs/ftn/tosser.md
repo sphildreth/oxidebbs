@@ -2,7 +2,7 @@
 
 The FTN tosser imports inbound legacy packet files into local message areas.
 
-Current v1.2 behavior:
+Current behavior:
 
 - scans `paths.runtime/network/<profile>/inbound/drop`
 - accepts raw `.pkt` files

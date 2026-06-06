@@ -39,8 +39,9 @@ PTY/COM1 Bridge
 
 - Use Rust.
 - Use DecentDB as the only system database.
-- Keep the current caller runtime telnet-first until the v1.2 serial/modem
-  phase is fully implemented and validated.
+- Keep telnet as the default caller path. Physical serial/modem support remains
+  disabled by default and should be enabled only by sysops who intentionally
+  configure it.
 - Treat ANSI/CP437 as a first-class byte-oriented terminal format.
 - Do not use Ratatui for the remote caller UI.
 - Keep door execution isolated from core session logic.
@@ -64,13 +65,10 @@ software. OxideBBS is not ported to run on C64 hardware.
 
 ## Menus
 
-Menus are configured as safe key-to-action mappings. Screen assets draw the visual
-menu, while menu entries decide what a pressed key does. The current implementation
-also includes pure core flows for new-user creation, login state updates, local
-message commands, private mail targeting, moderation state changes, and FTN/OxideNet
-address and packet-boundary models. Door support has tested drop-file
-generation, per-node runtime directories, dry-run planning, DOSEMU2 command
-planning, and DecentDB run logging helpers.
+Menus are configured as safe key-to-action mappings. Screen assets draw the
+visual menu, while menu entries decide what a pressed key does. For sysops, this
+means ANSI art can change without changing command behavior, and command routing
+can change without editing art files.
 
 ## Door byte bridge model
 

@@ -1,230 +1,220 @@
 # Getting Started
 
-OxideBBS is a local Rust BBS server with:
+OxideBBS is a BBS server for sysops who want ANSI/CP437 callers, telnet and
+browser-terminal access, DOS doors, file areas, local sysop tools, and FTN or
+OxideNet networking.
 
-- Telnet caller runtime
-- ANSI/CP437 rendering
-- DecentDB persistence
-- DOS door launch support
-- CLI-first sysop operations
+Choose the install path that matches how you want to operate the board:
 
-## Prerequisites
+| Path | Best for | Complexity |
+| --- | --- | --- |
+| [Docker](./docker.md) | Fastest cross-platform setup, including DOSEMU2 for doors. | Easiest |
+| [Release binaries](./release-binaries.md) | Running directly on Linux, macOS, or Windows without compiling Rust. | Moderate |
+| [Build from source](#build-from-source) | Development, custom patches, or unsupported targets. | Most involved |
 
-- Rust stable with `rustfmt` and `clippy`
-- Node.js 20 or newer (documentation site only)
-- Native DecentDB headers:
+Most new sysops should start with Docker. Use release binaries when you want a
+normal service install on a host you manage. Build from source only when you are
+working on OxideBBS itself or need to patch it.
+
+## Option 1: Docker
+
+Docker keeps DecentDB, door runtime files, and DOSEMU2 on a Linux filesystem even
+when the host is Windows or macOS.
+
+```bash
+OXIDEBBS_SYSOP_PASSWORD='choose-a-real-password' docker compose up -d --build
+```
+
+Connect with SyncTERM or another telnet client:
+
+```text
+localhost:2323
+```
+
+Run sysop commands through Compose:
+
+```bash
+docker compose run --rm oxidebbs status
+docker compose run --rm oxidebbs nodes list
+docker compose run --rm oxidebbs doors check oxide-check
+```
+
+See [Docker Deployment](./docker.md) for volume layout, reset steps, and door
+notes.
+
+## Option 2: Release binaries
+
+Download the archive for your platform from the GitHub release page:
+
+```text
+oxidebbs-<version>-linux-x86_64-gnu.tar.gz
+oxidebbs-<version>-macos-x86_64.tar.gz
+oxidebbs-<version>-windows-x86_64-msvc.zip
+```
+
+Each archive has a matching `.sha256` file. Extract the archive, then run the
+binary from the extracted directory:
+
+```bash
+./oxidebbs-server --version
+./oxidebbs-server setup
+./oxidebbs-server --config config/oxidebbs.toml check
+./oxidebbs-server --config config/oxidebbs.toml serve
+```
+
+The release archive includes the server binary, default assets, example config,
+and the Oxide-owned `oxide-check` test door fixture. Linux hosts that launch DOS
+doors still need DOSEMU2 installed on the host unless you use Docker.
+
+See [Release Binaries](./release-binaries.md) for install and service notes.
+
+## Option 3: Build from source
+
+Use this path when you are developing OxideBBS or need local patches.
+
+Prerequisites:
 
 ```bash
 sudo apt-get install -y clang libclang-dev
 ```
 
-From repository root, the normal validation command is:
+Build and run from the repository:
+
+```bash
+cargo build --release --locked -p oxidebbs-server --bin oxidebbs-server
+./target/release/oxidebbs-server setup
+./target/release/oxidebbs-server --config config/oxidebbs.toml check
+./target/release/oxidebbs-server --config config/oxidebbs.toml serve
+```
+
+If you are changing OxideBBS source code, run the contributor quality gate before
+opening a pull request:
 
 ```bash
 ./scripts/dev-check.sh
 ```
 
-For Windows, macOS, or sysops who want the packaged Linux runtime with DOSEMU2
-included, start with [Docker Deployment](/project/docker) instead of installing
-native build prerequisites.
+## First board setup
 
-## 1) Create a board
+The setup wizard creates a board config, DecentDB database, initial sysop
+account, directories, default ANSI/screen assets, and the starter message area:
 
 ```bash
-cargo run -p oxidebbs-server -- setup
+oxidebbs-server setup
 ```
 
-`setup` creates `config/oxidebbs.toml`, initializes `data/oxidebbs.ddb`,
-creates the initial sysop account, and prepares runtime/asset directories.
-
-For unattended setup, pass required values:
+For unattended setup:
 
 ```bash
-cargo run -p oxidebbs-server -- setup \
+oxidebbs-server setup \
   --board-name "My BBS" \
   --sysop-alias sysop \
   --sysop-password "change-this" \
   --nodes 4
 ```
 
-## 2) Validate config and runtime paths
-
-```bash
-cargo run -p oxidebbs-server -- check
-cargo run -p oxidebbs-server -- config check
-```
-
-Validation checks:
-
-- socket address parsing
-- config paths and screen assets
-- door definitions and runner availability
-- drop-file format and timeout constraints
-- runtime directory writability
-
-`check` errors on missing/invalid configuration and reports warnings for optional
-but missing directories or assets.
-
-Install your distribution's DOSEMU2 package before live door testing. The
-runtime executable is commonly named `dosemu`, but legacy `dosemu-1.x` is not
-supported because it does not accept OxideBBS's run-local `pts <path>` COM1
-mapping.
-
-```bash
-dosemu --version
-```
-
-The version output should identify DOSEMU2, not `dosemu-1.x`.
-
-Fedora users should follow the [DOSEMU2 on Fedora](/project/dosemu2-fedora)
-guide because the validated package set requires the `stsp/dosemu2` Copr
-packages and a DJ64 loader-path check.
-
-For Debian 13 LXC hosts, verify PTYs are present and writable by the runtime
-user; DOSEMU2 uses this for `COM1` bridging:
-
-```bash
-test -d /dev/pts && ls -ld /dev/pts
-```
-
-Validate the bundled test door without DOSEMU2:
-
-```bash
-cargo run -p oxidebbs-server -- --config config/oxidebbs.example.toml doors check oxide-check
-cargo run -p oxidebbs-server -- --config config/oxidebbs.example.toml doors dropfile oxide-check --user sysop --node 1 --format DORINFO1.DEF
-cargo run -p oxidebbs-server -- --config config/oxidebbs.example.toml doors test oxide-check --user sysop --dry-run
-```
-
-Free Pascal (`i8086-msdos`) is only needed when maintaining
-`tools/doors/oxide-door-check/src/oxidechk.pas`. `check`, `dropfile`, and
-`--dry-run` validation do not need it.
-
-The v1 live model does not use DOS console I/O. During a caller door session,
-OxideBBS pauses normal menu parsing and forwards raw bytes through this path:
+The generated config is usually:
 
 ```text
-caller telnet client
-  <-> OxideBBS caller transport
-  <-> OxideBBS PTY byte bridge
-  <-> DOSEMU2 COM1 pts backend
-  <-> DOSEMU2-emulated COM1 UART
-  <-> DOS door program
+config/oxidebbs.toml
 ```
 
-OxideBBS starts DOSEMU2 with `COM1` mapped to the per-node PTY path:
-
-```text
-$_com1 = "pts <absolute/path/to/runtime/node-001/OXCOM1.PTY>"
-```
-
-Per-run DOSEMU2 config is written to `OXDOSEMU2.CONF` and includes:
-
-```text
-$_cpu_vm = "emulated"
-$_cpu_vm_dpmi = "emulated"
-$_sound = (off)
-$_mouse_internal = (off)
-$_joy_device = ""
-$_pktdriver = (off)
-$_tcpdriver = (off)
-$_ttylocks = ""
-```
-
-When the caller presses a key, OxideBBS reads that byte from telnet and writes it
-to the PTY bridge. DOSEMU2 receives it on `COM1` and passes it to the door. When
-the door writes to COM1, DOSEMU2 emits those bytes on the PTY bridge, and
-OxideBBS writes them to the caller's telnet connection. That means an end-to-end
-smoke test validates both launch and serial transport behavior, not just console
-I/O.
-
-DOSEMU2 maps `COM1` directly to the host PTY, so this is not a Rust-hosted
-FOSSIL driver. The host bridge is byte transport only. A DOS-side FOSSIL TSR can
-be loaded inside DOSEMU2 if a specific door explicitly requires FOSSIL APIs.
-
-In this model there is no SDL window and no display-server requirement for door
-runtime.
-
-## 3) Start serving
+Validate it before first boot:
 
 ```bash
-cargo run -p oxidebbs-server -- serve
+oxidebbs-server --config config/oxidebbs.toml check
+oxidebbs-server --config config/oxidebbs.toml config check
 ```
 
-`serve` binds telnet, accepts caller sessions, persists session/audit rows, and
-starts the local Unix control socket:
+## Start the BBS
+
+```bash
+oxidebbs-server --config config/oxidebbs.toml serve
+```
+
+The server accepts caller sessions, writes session/audit rows, and starts the
+local control socket at:
 
 ```text
 runtime/oxidebbs-control.sock
 ```
 
-If that socket path is already active, startup fails to avoid clobbering an
-already-running server.
-
-## 4) Confirm runtime
+Use local sysop commands while the server is running:
 
 ```bash
-cargo run -p oxidebbs-server -- status
-cargo run -p oxidebbs-server -- nodes list
-cargo run -p oxidebbs-server -- nodes watch
+oxidebbs-server --config config/oxidebbs.toml status
+oxidebbs-server --config config/oxidebbs.toml nodes list
+oxidebbs-server --config config/oxidebbs.toml nodes watch
 ```
 
-While running, node status comes from live runtime registry and includes heartbeat
-age. If the socket is unreachable, status/list/watch read through active session
-rows from DecentDB.
+## Enable browser terminal and LAN monitoring
 
-## 5) Use local sysop controls
+When `[admin_web].enabled = true`, OxideBBS can serve `/terminal`, `/health`,
+and `/status` from the same HTTP listener. Direct LAN HTTP is allowed; WAN or
+public HTTPS should be handled by a reverse proxy.
+
+See [Remote Monitoring](./remote-admin.md) for safe bind examples.
+
+## Doors
+
+OxideBBS includes an Oxide-owned `oxide-check` test door fixture for validating
+the door path. Validate it without launching DOSEMU2:
 
 ```bash
-cargo run -p oxidebbs-server -- nodes message 1 "Maintenance in 10 minutes."
-cargo run -p oxidebbs-server -- nodes disconnect 1
-cargo run -p oxidebbs-server -- nodes broadcast "Server restart at 00:00 UTC."
-cargo run -p oxidebbs-server -- nodes reset-stale
+oxidebbs-server --config config/oxidebbs.toml doors check oxide-check
+oxidebbs-server --config config/oxidebbs.toml doors test oxide-check --user sysop --dry-run
 ```
 
-When the control socket is unavailable, these commands still record explicit
-sysop intent in audit rows and return explicit messaging explaining the delivery
-gap.
+Live DOS doors use this byte path:
 
-## 6) Doors and data safety checks
+```text
+caller client
+  <-> OxideBBS caller transport
+  <-> OxideBBS PTY byte bridge
+  <-> DOSEMU2 COM1 pts backend
+  <-> DOS door program
+```
+
+Linux hosts running live DOS doors need DOSEMU2. Fedora sysops should use the
+[DOSEMU2 on Fedora](./dosemu2-fedora.md) guide.
+
+## File areas
+
+Enable `[file_transfers]`, create a file area, then import files:
 
 ```bash
-cargo run -p oxidebbs-server -- doors check oxide-check
-cargo run -p oxidebbs-server -- doors test oxide-check --user sysop --dry-run
+oxidebbs-server --config config/oxidebbs.toml files areas add main \
+  --name "Main Files" \
+  --root files/main \
+  --read-level 0 \
+  --download-level 0 \
+  --upload-level 20
+
+oxidebbs-server --config config/oxidebbs.toml files import main ./uploads/demo.zip \
+  --description "Demo archive"
 ```
 
-Caller `Doors` menu launch uses live door execution in the caller path and records
-door run rows with timeout and byte counters. With DOSEMU2 configured and
-`oxide-check` enabled, run the door from the caller `Doors` menu to complete an
-end-to-end live test and confirm:
+Callers can download with ZMODEM or XMODEM from the configured `files` menu.
+Uploads are stored pending sysop review.
 
-- caller keystrokes reach the door through DOSEMU2 COM1,
-- door output written to COM1 reaches the caller telnet session,
-- the door responds to keyboard input,
-- and `OXIDECHK.RPT`/`OXNODE.TXT` are created under the node runtime directory.
-
-Optional live smoke test command:
+## Backups
 
 ```bash
-OXIDE_DOOR_INTERACTIVE=1 ./scripts/test-oxide-door-dosemu2.sh
+oxidebbs-server --config config/oxidebbs.toml db backup backups/oxidebbs.ddb
+oxidebbs-server --config config/oxidebbs.toml db export --format json > backups/oxidebbs.json
+oxidebbs-server --config config/oxidebbs.toml db compact --output backups/oxidebbs-compacted.ddb
 ```
 
-## 7) Backup, export, and restore
+`db import --format json` is a full restore into a schema-only target. Stop the
+server before manually replacing the active database file.
 
-```bash
-cargo run -p oxidebbs-server -- db backup backups/oxidebbs.ddb
-cargo run -p oxidebbs-server -- db export --format json > backups/oxidebbs.json
-cargo run -p oxidebbs-server -- db import --format json backups/oxidebbs.json
-cargo run -p oxidebbs-server -- db compact --output backups/oxidebbs-compacted.ddb
-```
+## Where to go next
 
-`db import --format json` is a full restore into schema-only targets only. It is
-transactional and validates IDs, relationships, and schema compatibility.
-
-`db compact --output <path> [--overwrite]` writes and verifies a compacted
-DecentDB output file. It refuses the active database path; stop the server before
-manually replacing the active database.
-
-## 8) Local-only boundary
-
-There is no remote web or TCP admin interface in this phase. All operational
-control is local to the host running `oxidebbs-server`.
+- [Setup Wizard](./setup.md) explains generated config and starter assets.
+- [Docker Deployment](./docker.md) covers Docker volumes and door runtime notes.
+- [Release Binaries](./release-binaries.md) covers packaged installs.
+- [Menus](./menus.md) explains caller menus and help screens.
+- [Doors](./doors.md) covers local and remote door setup.
+- [File Transfers](./file-transfers.md) covers ZMODEM and XMODEM behavior.
+- [FTN Architecture](../ftn/architecture.md) covers echomail and netmail.
+- [OxideNet](../oxidenet/overview.md) covers first-party OxideNet workflows.

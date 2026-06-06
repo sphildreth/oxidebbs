@@ -1,7 +1,7 @@
 # BinkP
 
 BinkP is the TCP/IP mailer protocol used by OxideBBS for FTN packet and bundle
-exchange. Caller file-transfer protocols such as XMODEM-CRC and ZMODEM are not
+exchange. Caller file-transfer protocols such as XMODEM and ZMODEM are not
 used for network mail exchange.
 
 The `oxidebbs-binkp` crate provides:
