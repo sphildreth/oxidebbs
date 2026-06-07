@@ -97,6 +97,7 @@ Door run history is visible through:
 
 ```bash
 oxidebbs-server doors package inspect sample.oxdoor
+oxidebbs-server doors package import sample.oxdoor --dry-run
 oxidebbs-server doors runs list
 oxidebbs-server doors runs show <run-id>
 oxidebbs-server doors cleanup
