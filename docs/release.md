@@ -38,7 +38,7 @@ Run `.github/workflows/release.yml` from GitHub Actions with:
 The dry run builds the Linux, macOS, and Windows packages, verifies checksums,
 smokes each packaged binary, builds the VitePress documentation site, and
 builds/smokes the Docker image. It uploads the generated archives as workflow
-artifacts only. It does not create a GitHub release.
+artifacts only. It does not create a GitHub release or publish a Docker image.
 
 ## Publish
 
@@ -59,16 +59,18 @@ Then run `.github/workflows/release.yml` with:
 | `dry_run` | `false` |
 
 The publish run checks out the tag, rebuilds and smokes all release artifacts,
-then creates the GitHub release with the artifacts and `.sha256` files attached.
-The publish job uses `--verify-tag`, so it fails instead of creating a tag from
-the default branch.
+pushes the smoke-tested Docker image to GitHub Container Registry, then creates
+the GitHub release with the artifacts and `.sha256` files attached. The publish
+job uses `--verify-tag`, so it fails instead of creating a tag from the default
+branch.
 
 ## Failure Recovery
 
 If a dry run fails, fix the branch and run the dry run again.
 
 If publication fails before the final `Publish GitHub release` step, no GitHub
-release has been created. Fix the issue and rerun publication for the same tag.
+release has been created. If the Docker publish step already ran, inspect the
+GHCR tags before rerunning publication for the same tag.
 
 If publication creates a release and then fails, treat the tag as spent when
 release immutability is enabled. Do not delete and reuse that release tag. Make
@@ -81,5 +83,7 @@ After the workflow completes:
 - confirm the GitHub release shows Linux, macOS, and Windows archives
 - confirm every archive has a matching `.sha256` file
 - download at least one archive and repeat the checksum and `--version` smoke
+- confirm `ghcr.io/sphildreth/oxidebbs:<version>` and
+  `ghcr.io/sphildreth/oxidebbs:v<version>` are visible and pullable
 - confirm the docs site still builds and deploys from the Pages workflow
 - update `design/TASKS.md` if any approval-gated publication checks remain open

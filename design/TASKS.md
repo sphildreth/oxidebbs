@@ -4,6 +4,18 @@ This file tracks active release work and near-term follow-up items. It is not a
 replacement for `design/ROADMAP.md`, `docs/about/changelog.md`, or ADRs; it is a
 short operational checklist for work that needs explicit closure.
 
+## v1.2.2 Docker Publication Patch
+
+- [x] Bump OxideBBS release metadata to `1.2.2`.
+- [x] Publish the smoke-tested Docker image to GitHub Container Registry during
+  non-dry-run release workflow runs.
+- [x] Make the default Compose file consume the published GHCR image.
+- [x] Preserve local Docker source builds through a separate Compose override.
+- [x] Document Docker image pull, tag, and source-build workflows.
+- [ ] After maintainer approval, create and push tag `v1.2.2`, publish the
+  GitHub release, and confirm hosted archives, checksums, docs, Docker image
+  publication, and GHCR pull/run behavior.
+
 ## v1.2.1 Release Automation Patch
 
 - [x] Bump OxideBBS release metadata to `1.2.1`.
@@ -16,7 +28,7 @@ short operational checklist for work that needs explicit closure.
 - [x] Update the versioning guide for immutable-release-safe publication.
 - [x] Finalize the `docs/about/changelog.md` `1.2.1` entry with a release date.
 - [x] Update `SECURITY.md` supported versions for the `v1.2.x` release line.
-- [ ] After maintainer approval, create and push tag `v1.2.1`, publish the
+- [x] After maintainer approval, create and push tag `v1.2.1`, publish the
   GitHub release, and confirm hosted archives, checksums, docs, and Docker
   validation.
 

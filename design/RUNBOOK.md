@@ -13,7 +13,8 @@ the host is Windows, macOS, or any system where the sysop does not want to
 install Rust, DecentDB build headers, or DOSEMU2 natively:
 
 ```bash
-OXIDEBBS_SYSOP_PASSWORD='choose-a-real-password' docker compose up -d --build
+docker compose pull
+OXIDEBBS_SYSOP_PASSWORD='choose-a-real-password' docker compose up -d
 docker compose run --rm oxidebbs status
 docker compose run --rm oxidebbs doors check oxide-check
 ```

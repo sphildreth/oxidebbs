@@ -22,7 +22,8 @@ Docker keeps DecentDB, door runtime files, and DOSEMU2 on a Linux filesystem eve
 when the host is Windows or macOS.
 
 ```bash
-OXIDEBBS_SYSOP_PASSWORD='choose-a-real-password' docker compose up -d --build
+docker compose pull
+OXIDEBBS_SYSOP_PASSWORD='choose-a-real-password' docker compose up -d
 ```
 
 Connect with SyncTERM or another telnet client:

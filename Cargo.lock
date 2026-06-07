@@ -1883,7 +1883,7 @@ dependencies = [
 
 [[package]]
 name = "oxidebbs-binkp"
-version = "1.2.1"
+version = "1.2.2"
 dependencies = [
  "native-tls",
  "rcgen",
@@ -1893,7 +1893,7 @@ dependencies = [
 
 [[package]]
 name = "oxidebbs-core"
-version = "1.2.1"
+version = "1.2.2"
 dependencies = [
  "oxidebbs-network",
  "oxidebbs-transfer",
@@ -1903,14 +1903,14 @@ dependencies = [
 
 [[package]]
 name = "oxidebbs-db"
-version = "1.2.1"
+version = "1.2.2"
 dependencies = [
  "decentdb",
 ]
 
 [[package]]
 name = "oxidebbs-door"
-version = "1.2.1"
+version = "1.2.2"
 dependencies = [
  "oxidebbs-core",
  "serde",
@@ -1920,7 +1920,7 @@ dependencies = [
 
 [[package]]
 name = "oxidebbs-ftn"
-version = "1.2.1"
+version = "1.2.2"
 dependencies = [
  "oxidebbs-db",
  "oxidebbs-network",
@@ -1933,7 +1933,7 @@ dependencies = [
 
 [[package]]
 name = "oxidebbs-network"
-version = "1.2.1"
+version = "1.2.2"
 dependencies = [
  "serde",
  "thiserror 2.0.18",
@@ -1941,7 +1941,7 @@ dependencies = [
 
 [[package]]
 name = "oxidebbs-oxidenet"
-version = "1.2.1"
+version = "1.2.2"
 dependencies = [
  "hex",
  "oxidebbs-db",
@@ -1953,7 +1953,7 @@ dependencies = [
 
 [[package]]
 name = "oxidebbs-server"
-version = "1.2.1"
+version = "1.2.2"
 dependencies = [
  "argon2",
  "axum",
@@ -1990,7 +1990,7 @@ dependencies = [
 
 [[package]]
 name = "oxidebbs-sysop"
-version = "1.2.1"
+version = "1.2.2"
 dependencies = [
  "argon2",
  "crossterm 0.28.1",
@@ -2012,7 +2012,7 @@ dependencies = [
 
 [[package]]
 name = "oxidebbs-telnet"
-version = "1.2.1"
+version = "1.2.2"
 dependencies = [
  "serialport",
  "thiserror 2.0.18",
@@ -2022,11 +2022,11 @@ dependencies = [
 
 [[package]]
 name = "oxidebbs-term"
-version = "1.2.1"
+version = "1.2.2"
 
 [[package]]
 name = "oxidebbs-transfer"
-version = "1.2.1"
+version = "1.2.2"
 dependencies = [
  "oxidebbs-telnet",
  "thiserror 2.0.18",

@@ -31,10 +31,26 @@ files should live on Docker-managed Linux filesystems.
 
 ## First Boot
 
-Build and start:
+Pull the published image and start:
 
 ```bash
-OXIDEBBS_SYSOP_PASSWORD='choose-a-real-password' docker compose up -d --build
+docker compose pull
+OXIDEBBS_SYSOP_PASSWORD='choose-a-real-password' docker compose up -d
+```
+
+The default Compose file uses:
+
+```text
+ghcr.io/sphildreth/oxidebbs:1.2.2
+```
+
+To pin or test another published image tag:
+
+```bash
+OXIDEBBS_IMAGE_TAG=1.2.2 docker compose pull
+OXIDEBBS_IMAGE_TAG=1.2.2 \
+  OXIDEBBS_SYSOP_PASSWORD='choose-a-real-password' \
+  docker compose up -d
 ```
 
 The first boot creates:
@@ -52,7 +68,7 @@ OXIDEBBS_BOARD_NAME='My BBS' \
 OXIDEBBS_SYSOP_ALIAS='cmdrtallen' \
 OXIDEBBS_SYSOP_PASSWORD='choose-a-real-password' \
 OXIDEBBS_NODES=4 \
-docker compose up -d --build
+docker compose up -d
 ```
 
 The Compose file provides a local-evaluation default password so the stack can
@@ -168,19 +184,46 @@ Inspect volumes:
 docker volume ls | grep oxidebbs
 ```
 
-## Image Rebuilds
+## Published Image Tags
 
-Rebuild after pulling source changes:
+Release publication pushes Docker images to GitHub Container Registry after the
+image has built and passed the `oxidebbs-server --version` smoke test.
+
+Preferred stable tags:
+
+```text
+ghcr.io/sphildreth/oxidebbs:1.2.2
+ghcr.io/sphildreth/oxidebbs:v1.2.2
+```
+
+Pull a published image directly:
 
 ```bash
-docker compose build --pull
-docker compose up -d
+docker pull ghcr.io/sphildreth/oxidebbs:1.2.2
+docker run --rm --entrypoint oxidebbs-server ghcr.io/sphildreth/oxidebbs:1.2.2 --version
+```
+
+Stable release publishes also move:
+
+```text
+ghcr.io/sphildreth/oxidebbs:latest
+```
+
+Prefer the exact version tag for production deployments. Use `latest` only when
+you intentionally want to track the newest published stable image.
+
+## Source Builds
+
+Build locally from a source checkout:
+
+```bash
+docker compose -f compose.yaml -f compose.build.yaml up -d --build
 ```
 
 Use a clean rebuild when validating dependency or DOSEMU2 package changes:
 
 ```bash
-docker compose build --no-cache
+docker compose -f compose.yaml -f compose.build.yaml build --no-cache
 ```
 
 ## Windows And macOS Notes

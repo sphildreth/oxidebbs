@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: Release tag to validate or publish, such as v1.2.1
+        description: Release tag to validate or publish, such as v1.2.2
         required: true
       source_ref:
         description: Git ref to build; dry runs default to the workflow commit, publishes default to tag_name
@@ -21,6 +21,7 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 concurrency:
   group: release-${{ github.event.inputs.tag_name }}
@@ -38,6 +39,11 @@ jobs:
       source_ref: ${{ steps.release.outputs.source_ref }}
       dry_run: ${{ steps.release.outputs.dry_run }}
       image: ${{ steps.release.outputs.image }}
+      image_ref: ${{ steps.release.outputs.image_ref }}
+      image_version_tag: ${{ steps.release.outputs.image_version_tag }}
+      image_release_tag: ${{ steps.release.outputs.image_release_tag }}
+      image_latest_tag: ${{ steps.release.outputs.image_latest_tag }}
+      publish_latest: ${{ steps.release.outputs.publish_latest }}
     steps:
       - name: Resolve release inputs
         id: release
@@ -53,7 +59,7 @@ jobs:
           fi
 
           if [[ "${tag}" != v* ]]; then
-            echo "tag_name must include the leading v, such as v1.2.1" >&2
+            echo "tag_name must include the leading v, such as v1.2.2" >&2
             exit 1
           fi
 
@@ -81,12 +87,23 @@ jobs:
 
           image_tag="${tag#v}"
           image_tag="${image_tag//[^a-zA-Z0-9_.-]/-}"
+          repository_lc="$(tr '[:upper:]' '[:lower:]' <<< "${GITHUB_REPOSITORY}")"
+          image_ref="ghcr.io/${repository_lc}"
+          publish_latest="false"
+          if [[ "${image_tag}" != *-* ]]; then
+            publish_latest="true"
+          fi
 
           {
             echo "tag=${tag}"
             echo "source_ref=${source_ref}"
             echo "dry_run=${dry_run}"
             echo "image=oxidebbs:${image_tag}-release"
+            echo "image_ref=${image_ref}"
+            echo "image_version_tag=${image_ref}:${image_tag}"
+            echo "image_release_tag=${image_ref}:v${image_tag}"
+            echo "image_latest_tag=${image_ref}:latest"
+            echo "publish_latest=${publish_latest}"
           } >> "${GITHUB_OUTPUT}"
 
   build:
@@ -252,7 +269,7 @@ jobs:
         run: npm run docs:build
 
   docker-image:
-    name: Build Docker image
+    name: Build and publish Docker image
     needs: prepare-release
     runs-on: ubuntu-latest
     steps:
@@ -262,10 +279,57 @@ jobs:
           ref: ${{ needs.prepare-release.outputs.source_ref }}
 
       - name: Build Docker image
-        run: docker build --pull -t "${{ needs.prepare-release.outputs.image }}" .
+        env:
+          IMAGE_LATEST_TAG: ${{ needs.prepare-release.outputs.image_latest_tag }}
+          IMAGE_RELEASE_TAG: ${{ needs.prepare-release.outputs.image_release_tag }}
+          IMAGE_VERSION_TAG: ${{ needs.prepare-release.outputs.image_version_tag }}
+          LOCAL_IMAGE: ${{ needs.prepare-release.outputs.image }}
+          PUBLISH_LATEST: ${{ needs.prepare-release.outputs.publish_latest }}
+          TAG_NAME: ${{ needs.prepare-release.outputs.tag }}
+        shell: bash
+        run: |
+          source_sha="$(git rev-parse HEAD)"
+          tags=(
+            -t "${LOCAL_IMAGE}"
+            -t "${IMAGE_VERSION_TAG}"
+            -t "${IMAGE_RELEASE_TAG}"
+          )
+          if [[ "${PUBLISH_LATEST}" == "true" ]]; then
+            tags+=(-t "${IMAGE_LATEST_TAG}")
+          fi
+
+          docker build --pull \
+            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            --label "org.opencontainers.image.revision=${source_sha}" \
+            --label "org.opencontainers.image.version=${TAG_NAME#v}" \
+            "${tags[@]}" \
+            .
 
       - name: Smoke Docker image
         run: docker run --rm --entrypoint oxidebbs-server "${{ needs.prepare-release.outputs.image }}" --version
+
+      - name: Login to GitHub Container Registry
+        if: needs.prepare-release.outputs.dry_run != 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Publish Docker image
+        if: needs.prepare-release.outputs.dry_run != 'true'
+        env:
+          IMAGE_LATEST_TAG: ${{ needs.prepare-release.outputs.image_latest_tag }}
+          IMAGE_RELEASE_TAG: ${{ needs.prepare-release.outputs.image_release_tag }}
+          IMAGE_VERSION_TAG: ${{ needs.prepare-release.outputs.image_version_tag }}
+          PUBLISH_LATEST: ${{ needs.prepare-release.outputs.publish_latest }}
+        shell: bash
+        run: |
+          docker push "${IMAGE_VERSION_TAG}"
+          docker push "${IMAGE_RELEASE_TAG}"
+          if [[ "${PUBLISH_LATEST}" == "true" ]]; then
+            docker push "${IMAGE_LATEST_TAG}"
+          fi
 
   dry-run-summary:
     name: Summarize dry-run artifacts

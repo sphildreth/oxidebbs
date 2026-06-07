@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.2] - 2026-06-07
+
+### Added
+- Release publication now pushes the smoke-tested Docker image to GitHub
+  Container Registry as exact version tags plus `latest` for stable releases.
+- Docker deployment docs now show how to pull and run the published GHCR image.
+
+### Changed
+- The default Compose file now runs `ghcr.io/sphildreth/oxidebbs:1.2.2`;
+  source builds use the separate `compose.build.yaml` override.
+
 ## [1.2.1] - 2026-06-07
 
 ### Added
