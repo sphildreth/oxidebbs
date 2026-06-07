@@ -31,6 +31,7 @@ JSON outputs are stable objects for `--json`:
 - `users list`
 - `messages areas list`
 - `doors list`
+- `doors runs list`
 - `files areas list`
 - `files list`
 - `files transfers recent`
@@ -47,6 +48,29 @@ JSON outputs are stable objects for `--json`:
 - `net nodelist list`
 - `net nodelist lookup`
 - `db stats`
+
+## Command Groups
+
+The current top-level command groups are:
+
+| Command | Purpose |
+| --- | --- |
+| `ansi` | Inspect ANSI/CP437 screen assets. |
+| `audit` | Read and purge audit events. |
+| `check` | Validate the configuration file and runtime paths. |
+| `config` | Inspect or edit configuration values. |
+| `db` | Inspect, back up, export, import, compact, and verify DecentDB storage. |
+| `doors` | Inspect, test, enable, disable, and maintain door definitions and runs. |
+| `files` | Manage caller file areas, files, and transfer history. |
+| `logs` | Read local log files. |
+| `messages` | Manage local message areas and messages. |
+| `net` | Toss, scan, poll, inspect, and administer FTN/OxideNet network state. |
+| `nodes` | Inspect and control live or persisted node/session state. |
+| `serve` | Start the BBS server. |
+| `setup` | Create a starter board installation. |
+| `status` | Show board status. |
+| `sysop` | Launch the interactive local sysop TUI. |
+| `users` | Manage users. |
 
 User security levels are documented in
 [User Security Levels](./security-levels.md), including the current defaults,
@@ -416,9 +440,15 @@ author address, network message id, and area network id. `--area`, `--user`,
 Door management:
 
 - `oxidebbs-server doors list`
+- `oxidebbs-server doors show <key>`
 - `oxidebbs-server doors check` (or `doors check <key>`)
+- `oxidebbs-server doors enable <key>`
+- `oxidebbs-server doors disable <key>`
 - `oxidebbs-server doors test <key> --user sysop --dry-run`
 - `oxidebbs-server doors dropfile <key> --user sysop --node 1 --format DORINFO1.DEF`
+- `oxidebbs-server doors runs list`
+- `oxidebbs-server doors runs show <run-id>`
+- `oxidebbs-server doors cleanup`
 
 Meaning:
 
@@ -433,6 +463,10 @@ Meaning:
 - Live launch writes drop files in the node runtime directory, tracks
   `door_started`/`door_finished`/`door_timed_out` events, and returns the caller
   to the menu on completion or timeout.
+- `doors runs list/show` exposes persisted door-run history for operations and
+  troubleshooting.
+- `doors cleanup` removes leftover `node-*` door runtime directories under
+  `paths.runtime`. It does not rewrite persisted door-run history.
 - `doors add` and `doors edit` currently persist local DOS door definitions.
 - `doors add` and `doors edit` also accept remote provider definitions with
   `--provider bbslink` or `--provider doorparty`, `--endpoint <host:port>`, and
@@ -546,16 +580,28 @@ Operational notes:
 - The TUI Files screen reuses the same DecentDB repository state and preserves
   read-only mode by blocking area and entry mutations.
 
-## Database operations
+## Database And Audit Operations
 
 ```bash
+oxidebbs-server db init
+oxidebbs-server db doctor
+oxidebbs-server db stats
+oxidebbs-server db verify
 oxidebbs-server db backup backups/oxidebbs.ddb
 oxidebbs-server db export --format json > backups/oxidebbs.json
 oxidebbs-server db import --format json backups/oxidebbs.json
 oxidebbs-server db compact --output backups/oxidebbs-compacted.ddb
+oxidebbs-server audit recent --limit 50
+oxidebbs-server audit user <user-id-or-alias>
+oxidebbs-server audit node 1
+oxidebbs-server audit door oxide-check
 oxidebbs-server audit purge-retention --dry-run
 ```
 
+- `db init` creates or initializes a schema-only database target.
+- `db doctor` runs the local database health report used by sysop tooling.
+- `db stats` prints summary counts for core runtime tables.
+- `db verify` opens and checks the configured DecentDB file.
 - `db backup` copies the active database file.
 - `db export --format json` is read-only and safe.
 - `db import --format json <path>` performs a full restore only:
@@ -567,8 +613,10 @@ oxidebbs-server audit purge-retention --dry-run
   compacted DecentDB file. It refuses the active database path; stop the server
   before manually replacing the active database with the compacted output.
 - `[audit].retention_days` defaults to `365`. Runtime audit inserts do not
-  purge old rows automatically; use `audit purge-retention` for scheduled
-  maintenance, or `audit purge-before <timestamp>` for an explicit cutoff.
+  purge old rows automatically; use `audit recent`, `audit user`, `audit node`,
+  and `audit door` for read-side inspection. Use `audit purge-retention` for
+  scheduled maintenance, or `audit purge-before <timestamp>` for an explicit
+  cutoff.
 
 ## Schema migration notes
 

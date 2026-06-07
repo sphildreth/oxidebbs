@@ -22,8 +22,11 @@ The parser is tolerant: unknown `KEY: value` control lines are preserved as
 unknown kludges instead of causing an import failure. The composer is stricter
 and emits canonical control-line prefixes for known variants.
 
-Full toss/scan behavior, SEEN-BY/PATH propagation, and duplicate-log writes are
-implemented by later FTN workflow phases.
+The runtime tosser and scanner build on these primitives. `net toss` stores
+imported echomail metadata, SEEN-BY/PATH rows, duplicate-log decisions, packet
+state, and local message rows in DecentDB. `net scan` exports subscribed local
+messages into outbound packets, avoids re-exporting the same local message to
+the same link, and bundles ready packet files for ZIP-compression links.
 
 Duplicate keys follow ADR 0023: MSGID is hashed with SHA-256 as the primary key
 within the network and echo area, while MSGID-less messages use a fallback hash

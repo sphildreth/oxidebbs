@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-06-07
+
+### Added
+- Maintainer release-process documentation linked from the documentation header.
+
+### Changed
+- Release artifact publication now runs through a manual build-first workflow
+  that publishes the GitHub release only after package, checksum, docs, and
+  Docker validation succeed.
+- The version bump script no longer rewrites a hard-coded release workflow tag
+  default.
+
 ## [1.2.0] - 2026-06-06
 
 ### Added

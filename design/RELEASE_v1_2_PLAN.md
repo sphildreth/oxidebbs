@@ -1539,13 +1539,13 @@ Acceptance criteria:
 
 Documentation updates:
 
-- `docs/oxidenet/PRD.md`
+- `docs/oxidenet/prd.md`
 - `docs/oxidenet/policy.md`
-- `docs/oxidenet/SETUP_MEMBER.md`
-- `docs/oxidenet/HUB_ADMIN.md`
+- `docs/oxidenet/setup-member.md`
+- `docs/oxidenet/hub-admin.md`
 - `docs/oxidenet/addressing.md`
 - `docs/oxidenet/areas.md`
-- `docs/oxidenet/CONFIG_PACKAGE.md`
+- `docs/oxidenet/config-package.md`
 - `docs/oxidenet/troubleshooting.md`
 - `design/OXIDENET_PRD.md`
 - `design/OXIDEBBS_SYSOP_INTERFACE_AND_TUI_MASTER_SPEC.md`

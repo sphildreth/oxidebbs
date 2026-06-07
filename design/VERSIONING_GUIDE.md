@@ -53,8 +53,8 @@ When the OxideBBS release version changes:
 
 Use `scripts/bump-version.sh <version>` for routine version bumps. The script
 updates `VERSION`, workspace crate manifests, docs package metadata, generated
-lockfile metadata, the release workflow manual-dispatch default, and verifies
-that the changelog still has an `Unreleased` placeholder.
+lockfile metadata, and verifies that the changelog still has an `Unreleased`
+placeholder.
 
 ### Rust workspace
 
@@ -123,12 +123,20 @@ new DecentDB tag changes schema behavior or data compatibility, document that in
 - `.github/workflows/release.yml`
 
 CI and Pages workflows should not hard-code an OxideBBS release version unless a
-future release process explicitly needs it. Git tags remain the release trigger
-for published versions.
+future release process explicitly needs it.
 
-The release-artifact workflow runs when a GitHub release is published and uploads
-platform packages for the release tag. Use the manual `workflow_dispatch` input
-only to backfill artifacts for an existing GitHub release.
+The release-artifact workflow is manually dispatched. It builds Linux, macOS,
+and Windows archives, verifies checksums, smokes the packaged binaries, builds
+the documentation site, and builds/smokes the Docker image before any GitHub
+release is created. When `dry_run=false`, the final job downloads the completed
+workflow artifacts and creates the GitHub release with all archive and checksum
+assets attached.
+
+Do not publish an empty GitHub release and upload assets afterward. With GitHub
+release immutability enabled, assets must be attached while the release is still
+draft. The workflow relies on `gh release create <tag> <assets...>` so the
+GitHub CLI creates a draft, uploads assets, and publishes only after upload
+succeeds.
 
 ## 3. Files that usually do **not** need a version bump
 
@@ -162,7 +170,10 @@ package version, refresh and commit the lockfile.
    changed.
 7. Re-scan the repository for stale release-version strings.
 8. Run the full Rust and docs validation commands.
-9. Create the release tag when the project is ready to publish.
+9. Run the release workflow with `dry_run=true` against the intended release ref.
+10. After publication approval, create and push the release tag.
+11. Run the release workflow with `dry_run=false` for the existing tag.
+12. Verify hosted archives, checksums, docs, and Docker smoke results.
 
 ## 5. Documentation-site procedure
 
@@ -232,13 +243,17 @@ leading `v` only where a downstream package format requires it.
 
 GitHub release artifacts are built from the release tag by default. The workflow
 builds with Rust target triples but names packages with friendlier platform
-suffixes, such as `oxidebbs-v1.2.0-linux-x86_64-gnu.tar.gz`. Each uploaded
+suffixes, such as `oxidebbs-<version>-linux-x86_64-gnu.tar.gz`. Each uploaded
 archive should include a matching `.sha256` checksum file.
 
 Manual release workflow dispatch defaults to `dry_run = true`. A dry run checks
-out the requested release ref, builds and smokes the Linux, macOS, and Windows
-archives, verifies each generated checksum file, builds the VitePress docs, and
-builds/smokes the Docker image without requiring an existing GitHub release or
-uploading artifacts. Published GitHub release events run the same archive,
-checksum, docs, and Docker validation paths, then upload archives and checksum
-files to the release.
+out the supplied `source_ref`, or the workflow commit when `source_ref` is blank,
+then builds and smokes the Linux, macOS, and Windows archives, verifies each
+generated checksum file, builds the VitePress docs, and builds/smokes the Docker
+image without creating a GitHub release.
+
+For publication, create and push the release tag before running the workflow with
+`dry_run=false`. Leave `source_ref` blank, or set it to the same tag. The publish
+job uses `--verify-tag`, so it fails instead of creating a tag from the default
+branch. If an immutable published release ever reserves a tag name, do not delete
+and reuse that tag; publish the next patch tag instead.

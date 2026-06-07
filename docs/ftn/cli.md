@@ -21,6 +21,7 @@ oxidebbs-server net packets mark-quarantined <packet-id> --reason <text>
 oxidebbs-server net packets inbound [--network <network>] [--limit N]
 oxidebbs-server net packets outbound [--network <network>] [--limit N]
 oxidebbs-server net packets quarantine [--network <network>] [--limit N]
+oxidebbs-server net packets cleanup [--network <network>] [--dry-run]
 oxidebbs-server net logs [link] [--limit N]
 oxidebbs-server net poll <link>
 oxidebbs-server net poll --all
@@ -35,6 +36,20 @@ oxidebbs-server net nodelist count [--network <network>]
 oxidebbs-server net rescan list [--network <network>] [--status <status>]
 oxidebbs-server net rescan process <rescan-id>
 oxidebbs-server net rescan cancel <rescan-id>
+oxidebbs-server net oxidenet status
+oxidebbs-server net oxidenet install-hub --host <host>
+oxidebbs-server net oxidenet apply --board-name <name> --sysop-alias <alias> --contact-email <email> --host <host> --description <text> --reason <text>
+oxidebbs-server net oxidenet applications list
+oxidebbs-server net oxidenet applications approve <application-id> --package-dir <dir>
+oxidebbs-server net oxidenet nodes list
+oxidebbs-server net oxidenet nodes suspend <address>
+oxidebbs-server net oxidenet nodes activate <address>
+oxidebbs-server net oxidenet nodes rotate-password <address>
+oxidebbs-server net oxidenet tokens issue <address>
+oxidebbs-server net oxidenet tokens revoke <credential-id>
+oxidebbs-server net oxidenet package generate <address> --session-password <password> --output <dir>
+oxidebbs-server net oxidenet package import <dir>
+oxidebbs-server net oxidenet nodelist --output <file>
 ```
 
 `--json` is supported through the global CLI flag for these commands.
@@ -98,5 +113,7 @@ terminal processed/failed packet rows and dependent message/path metadata. When
 `--network` is supplied, count, example, and delete operations are scoped to that
 network profile.
 
-Remaining network CLI gaps are OxideNet-specific workflows beyond the BinkP
-transport path.
+OxideNet commands build on the same shared network state. The hub-side commands
+install defaults, review applications, assign addresses, rotate credentials, and
+publish a nodelist. Member-side package import creates the `oxidenet` profile,
+the hub link, local areas, and subscriptions when they are missing.

@@ -88,8 +88,10 @@ Use `poll` when files should be exchanged with a link over BinkP.
 
 Use `toss` when inbound files should be imported into the BBS.
 
-The background scheduler may run the full cycle automatically for enabled
-links, but the separate commands remain important for setup and debugging.
+`poll_schedule_minutes` is stored with each link for operations visibility and
+future automation, but the current runtime does not start a background mail
+scheduler. Run `net scan`, `net poll`, and `net toss` manually or from external
+host scheduling such as systemd timers or cron.
 
 ## File-Only Operation
 
@@ -188,7 +190,6 @@ The following pieces are not part of day-to-day sysop operation:
 
 - nodelist-driven runtime routing integration
 - outbound ARJ bundle creation
-- OxideNet-specific workflows beyond the BinkP transport path
 
 Developer planning notes live under `design/` in the repository; day-to-day
 sysop operation should use the `net` commands documented here.

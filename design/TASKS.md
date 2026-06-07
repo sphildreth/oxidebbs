@@ -4,6 +4,22 @@ This file tracks active release work and near-term follow-up items. It is not a
 replacement for `design/ROADMAP.md`, `docs/about/changelog.md`, or ADRs; it is a
 short operational checklist for work that needs explicit closure.
 
+## v1.2.1 Release Automation Patch
+
+- [x] Bump OxideBBS release metadata to `1.2.1`.
+- [x] Convert the release workflow to manual, build-first publication so release
+  assets are created before the GitHub release is published.
+- [x] Stop uploading assets from matrix jobs after a release has already been
+  published.
+- [x] Add maintainer release-process documentation and expose it from the docs
+  header menu.
+- [x] Update the versioning guide for immutable-release-safe publication.
+- [x] Finalize the `docs/about/changelog.md` `1.2.1` entry with a release date.
+- [x] Update `SECURITY.md` supported versions for the `v1.2.x` release line.
+- [ ] After maintainer approval, create and push tag `v1.2.1`, publish the
+  GitHub release, and confirm hosted archives, checksums, docs, and Docker
+  validation.
+
 ## v1.2.0 Release Work
 
 v1.2 is the deferred-scope release described in

@@ -1,35 +1,101 @@
 name: Release Artifacts
 
 on:
-  release:
-    # `published` covers stable and prerelease publication and avoids the
-    # draft-release caveat on `created`.
-    types: [published]
   workflow_dispatch:
     inputs:
       tag_name:
-        description: Existing release tag to build and upload artifacts for
+        description: Release tag to validate or publish, such as v1.2.1
         required: true
-        default: v1.2.0
       source_ref:
-        description: Git ref to build; defaults to tag_name
+        description: Git ref to build; dry runs default to the workflow commit, publishes default to tag_name
         required: false
         default: ""
       dry_run:
-        description: Build and smoke artifacts without requiring or uploading to a GitHub release
-        required: false
+        description: Build and smoke artifacts without creating a GitHub release
+        required: true
         default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
 
 permissions:
   contents: write
+
+concurrency:
+  group: release-${{ github.event.inputs.tag_name }}
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  prepare-release:
+    name: Prepare release inputs
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      source_ref: ${{ steps.release.outputs.source_ref }}
+      dry_run: ${{ steps.release.outputs.dry_run }}
+      image: ${{ steps.release.outputs.image }}
+    steps:
+      - name: Resolve release inputs
+        id: release
+        shell: bash
+        run: |
+          tag="${{ github.event.inputs.tag_name }}"
+          input_ref="${{ github.event.inputs.source_ref }}"
+          dry_run="${{ github.event.inputs.dry_run }}"
+
+          if [[ -z "${tag}" ]]; then
+            echo "tag_name is required" >&2
+            exit 1
+          fi
+
+          if [[ "${tag}" != v* ]]; then
+            echo "tag_name must include the leading v, such as v1.2.1" >&2
+            exit 1
+          fi
+
+          case "${dry_run}" in
+            true|false) ;;
+            *)
+              echo "dry_run must be true or false" >&2
+              exit 1
+              ;;
+          esac
+
+          source_ref="${input_ref}"
+          if [[ -z "${source_ref}" ]]; then
+            if [[ "${dry_run}" == "true" ]]; then
+              source_ref="${GITHUB_SHA}"
+            else
+              source_ref="${tag}"
+            fi
+          fi
+
+          if [[ "${dry_run}" != "true" && -n "${input_ref}" && "${input_ref}" != "${tag}" && "${input_ref}" != "refs/tags/${tag}" ]]; then
+            echo "non-dry-run releases must build the release tag; leave source_ref empty or set it to ${tag}" >&2
+            exit 1
+          fi
+
+          image_tag="${tag#v}"
+          image_tag="${image_tag//[^a-zA-Z0-9_.-]/-}"
+
+          {
+            echo "tag=${tag}"
+            echo "source_ref=${source_ref}"
+            echo "dry_run=${dry_run}"
+            echo "image=oxidebbs:${image_tag}-release"
+          } >> "${GITHUB_OUTPUT}"
+
   build:
     name: Build ${{ matrix.target }}
+    needs: prepare-release
     runs-on: ${{ matrix.os }}
+    env:
+      SOURCE_REF: ${{ needs.prepare-release.outputs.source_ref }}
+      PACKAGE: oxidebbs-${{ needs.prepare-release.outputs.tag }}-${{ matrix.package_suffix }}
     strategy:
       fail-fast: false
       matrix:
@@ -51,44 +117,10 @@ jobs:
             archive: zip
 
     steps:
-      - name: Resolve release tag
-        id: release
-        shell: bash
-        run: |
-          event_tag="${{ github.event.release.tag_name }}"
-          input_tag="${{ github.event.inputs.tag_name }}"
-          input_ref="${{ github.event.inputs.source_ref }}"
-          input_dry_run="${{ github.event.inputs.dry_run }}"
-          tag="${event_tag:-${input_tag}}"
-          source_ref="${event_tag:-${input_ref}}"
-          dry_run="${input_dry_run:-true}"
-          if [[ "${{ github.event_name }}" != "workflow_dispatch" ]]; then
-            dry_run="false"
-          fi
-          if [[ -z "${source_ref}" ]]; then
-            source_ref="${tag}"
-          fi
-          if [[ -z "${tag}" ]]; then
-            echo "release tag could not be resolved" >&2
-            exit 1
-          fi
-          package="oxidebbs-${tag}-${{ matrix.package_suffix }}"
-          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
-          echo "source_ref=${source_ref}" >> "${GITHUB_OUTPUT}"
-          echo "package=${package}" >> "${GITHUB_OUTPUT}"
-          echo "dry_run=${dry_run}" >> "${GITHUB_OUTPUT}"
-
       - name: Checkout source ref
         uses: actions/checkout@v6
         with:
-          ref: ${{ steps.release.outputs.source_ref }}
-
-      - name: Verify GitHub release exists
-        if: steps.release.outputs.dry_run != 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: gh release view "${{ steps.release.outputs.tag }}" --repo "${GITHUB_REPOSITORY}"
+          ref: ${{ env.SOURCE_REF }}
 
       - name: Install Linux native build dependencies
         if: runner.os == 'Linux'
@@ -127,8 +159,7 @@ jobs:
       - name: Stage package contents
         shell: bash
         run: |
-          package="${{ steps.release.outputs.package }}"
-          stage="dist/${package}"
+          stage="dist/${PACKAGE}"
           binary="target/${{ matrix.target }}/release/oxidebbs-server${{ matrix.exe_suffix }}"
 
           mkdir -p "${stage}"
@@ -147,22 +178,17 @@ jobs:
       - name: Create tarball
         if: matrix.archive == 'tar.gz'
         shell: bash
-        run: |
-          package="${{ steps.release.outputs.package }}"
-          tar -C dist -czf "dist/${package}.tar.gz" "${package}"
+        run: tar -C dist -czf "dist/${PACKAGE}.tar.gz" "${PACKAGE}"
 
       - name: Create zip
         if: matrix.archive == 'zip'
         shell: pwsh
-        run: |
-          $package = "${{ steps.release.outputs.package }}"
-          Compress-Archive -Path "dist/$package" -DestinationPath "dist/$package.zip" -Force
+        run: Compress-Archive -Path "dist/$env:PACKAGE" -DestinationPath "dist/$env:PACKAGE.zip" -Force
 
       - name: Create checksum
         shell: bash
         run: |
-          package="${{ steps.release.outputs.package }}"
-          archive="dist/${package}.${{ matrix.archive }}"
+          archive="dist/${PACKAGE}.${{ matrix.archive }}"
           if command -v sha256sum >/dev/null 2>&1; then
             sha256sum "${archive}" > "${archive}.sha256"
           else
@@ -172,8 +198,7 @@ jobs:
       - name: Verify checksum
         shell: bash
         run: |
-          package="${{ steps.release.outputs.package }}"
-          archive="dist/${package}.${{ matrix.archive }}"
+          archive="dist/${PACKAGE}.${{ matrix.archive }}"
           if command -v sha256sum >/dev/null 2>&1; then
             sha256sum -c "${archive}.sha256"
           else
@@ -183,61 +208,36 @@ jobs:
       - name: Smoke packaged binary
         shell: pwsh
         run: |
-          $package = "${{ steps.release.outputs.package }}"
-          $archive = "dist/$package.${{ matrix.archive }}"
-          $smoke = "dist/smoke-$package"
+          $archive = "dist/$env:PACKAGE.${{ matrix.archive }}"
+          $smoke = "dist/smoke-$env:PACKAGE"
           New-Item -ItemType Directory -Force -Path $smoke | Out-Null
           if ("${{ matrix.archive }}" -eq "zip") {
             Expand-Archive -Path $archive -DestinationPath $smoke -Force
           } else {
             tar -C $smoke -xzf $archive
           }
-          $binary = Join-Path $smoke "$package/oxidebbs-server${{ matrix.exe_suffix }}"
+          $binary = Join-Path $smoke "$env:PACKAGE/oxidebbs-server${{ matrix.exe_suffix }}"
           & $binary --version
 
-      - name: Upload release asset
-        if: steps.release.outputs.dry_run != 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          shopt -s nullglob
-          artifacts=(dist/${{ steps.release.outputs.package }}.*)
-          gh release upload "${{ steps.release.outputs.tag }}" "${artifacts[@]}" --clobber --repo "${GITHUB_REPOSITORY}"
-
-      - name: Report dry-run artifacts
-        if: steps.release.outputs.dry_run == 'true'
-        shell: bash
-        run: |
-          ls -l dist/${{ steps.release.outputs.package }}.*
+      - name: Upload packaged artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PACKAGE }}
+          path: |
+            dist/${{ env.PACKAGE }}.${{ matrix.archive }}
+            dist/${{ env.PACKAGE }}.${{ matrix.archive }}.sha256
+          if-no-files-found: error
+          retention-days: 14
 
   docs-build:
     name: Build docs
+    needs: prepare-release
     runs-on: ubuntu-latest
     steps:
-      - name: Resolve release ref
-        id: release
-        shell: bash
-        run: |
-          event_tag="${{ github.event.release.tag_name }}"
-          input_tag="${{ github.event.inputs.tag_name }}"
-          input_ref="${{ github.event.inputs.source_ref }}"
-          tag="${event_tag:-${input_tag}}"
-          source_ref="${event_tag:-${input_ref}}"
-          if [[ -z "${source_ref}" ]]; then
-            source_ref="${tag}"
-          fi
-          if [[ -z "${tag}" ]]; then
-            echo "release tag could not be resolved" >&2
-            exit 1
-          fi
-          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
-          echo "source_ref=${source_ref}" >> "${GITHUB_OUTPUT}"
-
       - name: Checkout source ref
         uses: actions/checkout@v6
         with:
-          ref: ${{ steps.release.outputs.source_ref }}
+          ref: ${{ needs.prepare-release.outputs.source_ref }}
 
       - name: Setup Node
         uses: actions/setup-node@v6
@@ -253,37 +253,72 @@ jobs:
 
   docker-image:
     name: Build Docker image
+    needs: prepare-release
     runs-on: ubuntu-latest
     steps:
-      - name: Resolve release ref
-        id: release
-        shell: bash
-        run: |
-          event_tag="${{ github.event.release.tag_name }}"
-          input_tag="${{ github.event.inputs.tag_name }}"
-          input_ref="${{ github.event.inputs.source_ref }}"
-          tag="${event_tag:-${input_tag}}"
-          source_ref="${event_tag:-${input_ref}}"
-          if [[ -z "${source_ref}" ]]; then
-            source_ref="${tag}"
-          fi
-          if [[ -z "${tag}" ]]; then
-            echo "release tag could not be resolved" >&2
-            exit 1
-          fi
-          image_tag="${tag#v}"
-          image_tag="${image_tag//[^a-zA-Z0-9_.-]/-}"
-          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
-          echo "source_ref=${source_ref}" >> "${GITHUB_OUTPUT}"
-          echo "image=oxidebbs:${image_tag}-release-dry-run" >> "${GITHUB_OUTPUT}"
-
       - name: Checkout source ref
         uses: actions/checkout@v6
         with:
-          ref: ${{ steps.release.outputs.source_ref }}
+          ref: ${{ needs.prepare-release.outputs.source_ref }}
 
       - name: Build Docker image
-        run: docker build --pull -t "${{ steps.release.outputs.image }}" .
+        run: docker build --pull -t "${{ needs.prepare-release.outputs.image }}" .
 
       - name: Smoke Docker image
-        run: docker run --rm --entrypoint oxidebbs-server "${{ steps.release.outputs.image }}" --version
+        run: docker run --rm --entrypoint oxidebbs-server "${{ needs.prepare-release.outputs.image }}" --version
+
+  dry-run-summary:
+    name: Summarize dry-run artifacts
+    needs:
+      - prepare-release
+      - build
+      - docs-build
+      - docker-image
+    if: needs.prepare-release.outputs.dry_run == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download packaged artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/release-assets
+          merge-multiple: true
+
+      - name: List packaged artifacts
+        shell: bash
+        run: |
+          echo "Dry run completed for ${{ needs.prepare-release.outputs.tag }}"
+          find dist/release-assets -maxdepth 1 -type f -print | sort
+
+  publish-release:
+    name: Publish GitHub release
+    needs:
+      - prepare-release
+      - build
+      - docs-build
+      - docker-image
+    if: needs.prepare-release.outputs.dry_run != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download packaged artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/release-assets
+          merge-multiple: true
+
+      - name: Publish release with assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.prepare-release.outputs.tag }}
+        shell: bash
+        run: |
+          mapfile -t artifacts < <(find dist/release-assets -maxdepth 1 -type f -print | sort)
+          if [[ "${#artifacts[@]}" -eq 0 ]]; then
+            echo "no release artifacts were downloaded" >&2
+            exit 1
+          fi
+
+          gh release create "${RELEASE_TAG}" "${artifacts[@]}" \
+            --verify-tag \
+            --title "${RELEASE_TAG}" \
+            --generate-notes \
+            --repo "${GITHUB_REPOSITORY}"

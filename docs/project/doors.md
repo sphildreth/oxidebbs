@@ -7,8 +7,9 @@ logic.
 Current capabilities:
 
 - Door definitions are stored in DecentDB after setup/config synchronization.
-- `doors list`, `doors check`, `doors test --dry-run`, `doors add`,
-  `doors edit`, and `doors dropfile --format` are available through the sysop
+- `doors list`, `doors show`, `doors check`, `doors enable`, `doors disable`,
+  `doors test --dry-run`, `doors add`, `doors edit`, `doors dropfile --format`,
+  `doors runs list/show`, and `doors cleanup` are available through the sysop
   CLI.
 - Drop-file writers cover `DOOR.SYS`, `DORINFO1.DEF`, `CHAIN.TXT`,
   `DOORFILE.SR`, `PCBOARD.SYS`, and `CALLINFO.BBS` with CRLF byte-output tests.
@@ -90,6 +91,17 @@ oxidebbs-server doors add bbslink-lord "BBSLink LORD" \
 
 The `.` argument satisfies the legacy local working-directory positional; for a
 remote provider door, `--endpoint` is the value stored as the provider endpoint.
+
+Door run history is visible through:
+
+```bash
+oxidebbs-server doors runs list
+oxidebbs-server doors runs show <run-id>
+oxidebbs-server doors cleanup
+```
+
+`doors cleanup` removes leftover `node-*` door runtime directories under
+`paths.runtime`. It does not rewrite persisted door-run history.
 
 OxideBBS does not bundle copyrighted or abandonware DOS doors. Operators provide
 their own door binaries or use the project-owned Oxide Door Check fixture for
