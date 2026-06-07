@@ -1214,6 +1214,7 @@ mod tests {
 
     fn test_db() -> OxideDb {
         let db = OxideDb::open_memory().expect("open db");
+        let password = ftn_password();
         insert_message_area(
             db.db(),
             &MessageAreaRecord {
@@ -1231,7 +1232,7 @@ mod tests {
         )
         .expect("insert area");
         insert_network_profile(db.db(), &profile()).expect("insert profile");
-        insert_network_link(db.db(), &link("SECRET")).expect("insert link");
+        insert_network_link(db.db(), &link(&password)).expect("insert link");
         insert_network_area(
             db.db(),
             &NetworkAreaRecord {
@@ -1264,6 +1265,18 @@ mod tests {
             created_at: "2026-06-04T00:00:00Z".to_string(),
             updated_at: "2026-06-04T00:00:00Z".to_string(),
         }
+    }
+
+    fn ftn_password() -> String {
+        format!("{:08}", std::process::id() % 100_000_000)
+    }
+
+    fn mismatched_ftn_password() -> String {
+        let mut bytes = ftn_password().into_bytes();
+        if let Some(first) = bytes.first_mut() {
+            *first = if *first == b'9' { b'8' } else { b'9' };
+        }
+        String::from_utf8(bytes).expect("packet password text")
     }
 
     fn link(password: &str) -> NetworkLinkRecord {
@@ -1355,10 +1368,11 @@ mod tests {
     fn tosses_known_echomail_packet_into_local_area() {
         let db = test_db();
         let root = temp_root("good");
+        let password = ftn_password();
         let _packet = packet_path(
             &root,
             "00000001.pkt",
-            "SECRET",
+            &password,
             b"AREA:OXIDE.GENERAL\r\x01MSGID: 1:105/1 abc\rHello from FTN\rSEEN-BY: 105/1\rPATH: 105/1\r",
         );
         let tosser = Tosser::new(
@@ -1390,10 +1404,11 @@ mod tests {
     fn wrong_password_quarantines_packet_without_importing_messages() {
         let db = test_db();
         let root = temp_root("bad-password");
+        let password = mismatched_ftn_password();
         let _packet = packet_path(
             &root,
             "00000002.pkt",
-            "WRONG",
+            &password,
             b"AREA:OXIDE.GENERAL\r\x01MSGID: 1:105/1 abc\rHello\r",
         );
         let tosser = Tosser::new(
@@ -1421,7 +1436,8 @@ mod tests {
         let db = test_db();
         let root = temp_root("duplicate");
         let body = b"AREA:OXIDE.GENERAL\r\x01MSGID: 1:105/1 duplicate\rHello\r";
-        let _first = packet_path(&root, "00000003.pkt", "SECRET", body);
+        let password = ftn_password();
+        let _first = packet_path(&root, "00000003.pkt", &password, body);
         let tosser = Tosser::new(
             db.db(),
             profile(),
@@ -1430,7 +1446,7 @@ mod tests {
         let first = tosser.toss().expect("first toss");
         assert_eq!(first.messages_imported, 1);
 
-        let _second = packet_path(&root, "00000004.pkt", "SECRET", body);
+        let _second = packet_path(&root, "00000004.pkt", &password, body);
         let second = tosser.toss().expect("second toss");
 
         assert_eq!(second.messages_imported, 0);
@@ -1455,7 +1471,8 @@ mod tests {
             })
             .collect();
 
-        let _packet = packet_path_with_messages(&root, "large.pkt", "SECRET", bodies);
+        let password = ftn_password();
+        let _packet = packet_path_with_messages(&root, "large.pkt", &password, bodies);
         let tosser = Tosser::new(
             db.db(),
             profile(),
@@ -1488,7 +1505,8 @@ mod tests {
                 "AREA:OXIDE.GENERAL\r\x01MSGID: 1:105/1 unique{}\rBody {}\rSEEN-BY: 105/1\rPATH: 105/1\r",
                 i, i
             );
-            let _packet = packet_path(&root, &format!("{:08}.pkt", i), "SECRET", body.as_bytes());
+            let password = ftn_password();
+            let _packet = packet_path(&root, &format!("{:08}.pkt", i), &password, body.as_bytes());
         }
 
         let tosser = Tosser::new(

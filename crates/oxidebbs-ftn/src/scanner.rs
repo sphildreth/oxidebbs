@@ -788,6 +788,10 @@ mod tests {
         }
     }
 
+    fn ftn_password() -> String {
+        format!("{:08}", std::process::id() % 100_000_000)
+    }
+
     fn link() -> NetworkLinkRecord {
         NetworkLinkRecord {
             id: LINK_ID.to_string(),
@@ -796,7 +800,7 @@ mod tests {
             address: "1:105/1".to_string(),
             host: "hub.example".to_string(),
             binkp_port: 24554,
-            password: "SECRET".to_string(),
+            password: ftn_password(),
             poll_schedule_minutes: 60,
             compression: "none".to_string(),
             transport_security: "plaintext_legacy".to_string(),
@@ -847,8 +851,9 @@ mod tests {
         let body = format!(
             "AREA:OXIDE.GENERAL\r\x01MSGID: 1:105/1 {msgid_suffix}\rInbound body\rSEEN-BY: 105/1\rPATH: 105/1\r"
         );
+        let password = ftn_password();
         let packet = FtnPacket {
-            header: inbound_header("SECRET"),
+            header: inbound_header(&password),
             messages: vec![PacketMessage {
                 to_user: "All".to_string(),
                 from_user: "Hub".to_string(),
