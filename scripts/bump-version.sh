@@ -33,9 +33,6 @@ for (const path of ['package.json', 'package-lock.json']) {
 }
 NODE
 
-perl -0pi -e "s/default: v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?/default: v$VERSION_VALUE/" \
-  .github/workflows/release.yml
-
 if command -v cargo >/dev/null 2>&1; then
   cargo metadata --no-deps --format-version 1 >/dev/null
 else

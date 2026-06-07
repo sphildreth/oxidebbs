@@ -6,8 +6,9 @@ OxideBBS follows Semantic Versioning.
 
 | Version | Supported |
 | --- | --- |
-| `v1.1.x` | Yes |
-| `v1.0.x` | Critical fixes at maintainer discretion |
+| `v1.2.x` | Yes |
+| `v1.1.x` | No |
+| `v1.0.x` | No |
 
 Security reports against unreleased changes on `main` are accepted and handled
 before the next release when applicable.

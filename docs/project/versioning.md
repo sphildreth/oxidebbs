@@ -13,6 +13,7 @@ DecentDB data, ANSI assets, door definitions, or operator workflows.
 
 The full maintainer checklist lives in
 [`design/VERSIONING_GUIDE.md`](https://github.com/sphildreth/oxidebbs/blob/main/design/VERSIONING_GUIDE.md).
+The publication runbook lives in [Release Process](../release.md).
 Routine version bumps use the root `VERSION` file and
 `scripts/bump-version.sh <version>` to keep Cargo metadata, docs package
-metadata, lockfiles, and release workflow defaults aligned.
+metadata, and lockfiles aligned.
