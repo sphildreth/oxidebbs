@@ -1462,6 +1462,20 @@ mod tests {
         test_state_with_rate_limit(30)
     }
 
+    fn test_password() -> String {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time")
+            .as_nanos()
+            .to_string()
+    }
+
+    fn mismatched_password(password: &str) -> String {
+        let mut value = password.to_string();
+        value.push('x');
+        value
+    }
+
     fn test_state_with_rate_limit(rate_limit_per_minute: u32) -> AdminWebState {
         let config: OxideConfig = toml::from_str(&format!(
             r#"
@@ -1696,7 +1710,8 @@ allowed_origins = ["https://admin.example.test"]
     #[tokio::test]
     async fn health_passes_when_doctor_has_no_failures() {
         let state = test_state();
-        seed_user(&state, "Sysop", "secret", true);
+        let password = test_password();
+        seed_user(&state, "Sysop", &password, true);
 
         let response = health_handler(State(state), HeaderMap::new())
             .await
@@ -1736,7 +1751,8 @@ allowed_origins = ["https://admin.example.test"]
     #[tokio::test]
     async fn activity_user_id_tracks_authenticated_unexpired_sessions_only() {
         let state = test_state();
-        let sysop_id = seed_user(&state, "Sysop", "secret", true);
+        let password = test_password();
+        let sysop_id = seed_user(&state, "Sysop", &password, true);
 
         let (pre_auth_cookie, _) = csrf_session(&state).await;
         let mut pre_auth_headers = HeaderMap::new();
@@ -1749,7 +1765,7 @@ allowed_origins = ["https://admin.example.test"]
             None
         );
 
-        let (cookie_pair, _) = login_session(&state, "Sysop", "secret").await;
+        let (cookie_pair, _) = login_session(&state, "Sysop", &password).await;
         let mut headers = HeaderMap::new();
         headers.insert(
             header::COOKIE,
@@ -1781,14 +1797,15 @@ allowed_origins = ["https://admin.example.test"]
     #[tokio::test]
     async fn login_requires_session_cookie_and_csrf() {
         let state = test_state();
-        seed_user(&state, "Sysop", "secret", true);
+        let password = test_password();
+        seed_user(&state, "Sysop", &password, true);
 
         let no_cookie = login_handler(
             State(state.clone()),
             HeaderMap::new(),
             Form(LoginRequest {
                 username: "Sysop".to_string(),
-                password: "secret".to_string(),
+                password: password.clone(),
                 csrf_token: "missing".to_string(),
             }),
         )
@@ -1806,7 +1823,7 @@ allowed_origins = ["https://admin.example.test"]
             headers,
             Form(LoginRequest {
                 username: "Sysop".to_string(),
-                password: "secret".to_string(),
+                password,
                 csrf_token: "bad".to_string(),
             }),
         )
@@ -1817,10 +1834,11 @@ allowed_origins = ["https://admin.example.test"]
     #[tokio::test]
     async fn login_accepts_only_active_sysop_users_and_protects_api_nodes() {
         let state = test_state();
-        let sysop_id = seed_user(&state, "Sysop", "secret", true);
-        seed_user(&state, "Caller", "secret", false);
+        let password = test_password();
+        let sysop_id = seed_user(&state, "Sysop", &password, true);
+        seed_user(&state, "Caller", &password, false);
 
-        let (cookie_pair, csrf_token) = login_session(&state, "Sysop", "secret").await;
+        let (cookie_pair, csrf_token) = login_session(&state, "Sysop", &password).await;
         let mut headers = HeaderMap::new();
         headers.insert(
             header::COOKIE,
@@ -1845,7 +1863,7 @@ allowed_origins = ["https://admin.example.test"]
             caller_headers,
             Form(LoginRequest {
                 username: "Caller".to_string(),
-                password: "secret".to_string(),
+                password,
                 csrf_token: caller_csrf,
             }),
         )
@@ -1866,8 +1884,9 @@ allowed_origins = ["https://admin.example.test"]
     #[tokio::test]
     async fn logout_requires_auth_and_csrf_then_deletes_cookie_session() {
         let state = test_state();
-        seed_user(&state, "Sysop", "secret", true);
-        let (cookie_pair, csrf_token) = login_session(&state, "Sysop", "secret").await;
+        let password = test_password();
+        seed_user(&state, "Sysop", &password, true);
+        let (cookie_pair, csrf_token) = login_session(&state, "Sysop", &password).await;
 
         let response = logout_handler(
             State(state.clone()),
@@ -1896,8 +1915,9 @@ allowed_origins = ["https://admin.example.test"]
     #[tokio::test]
     async fn expired_session_cannot_access_authenticated_api() {
         let state = test_state();
-        seed_user(&state, "Sysop", "secret", true);
-        let (cookie_pair, _) = login_session(&state, "Sysop", "secret").await;
+        let password = test_password();
+        seed_user(&state, "Sysop", &password, true);
+        let (cookie_pair, _) = login_session(&state, "Sysop", &password).await;
         let session_id = cookie_pair
             .split_once('=')
             .expect("session cookie pair")
@@ -1926,8 +1946,9 @@ allowed_origins = ["https://admin.example.test"]
     #[tokio::test]
     async fn mutation_stub_requires_csrf_replay_and_blocks_read_only() {
         let state = test_state();
-        seed_user(&state, "Sysop", "secret", true);
-        let (cookie_pair, csrf_token) = login_session(&state, "Sysop", "secret").await;
+        let password = test_password();
+        seed_user(&state, "Sysop", &password, true);
+        let (cookie_pair, csrf_token) = login_session(&state, "Sysop", &password).await;
 
         let missing_replay = api_node_disconnect_handler(
             State(state.clone()),
@@ -1987,8 +2008,9 @@ allowed_origins = ["https://admin.example.test"]
     #[tokio::test]
     async fn mutation_stub_is_rate_limited_after_valid_security_checks() {
         let state = test_state_with_rate_limit(2);
-        seed_user(&state, "Sysop", "secret", true);
-        let (cookie_pair, csrf_token) = login_session(&state, "Sysop", "secret").await;
+        let password = test_password();
+        seed_user(&state, "Sysop", &password, true);
+        let (cookie_pair, csrf_token) = login_session(&state, "Sysop", &password).await;
 
         for (index, expected) in [
             StatusCode::FORBIDDEN,
@@ -2025,7 +2047,9 @@ allowed_origins = ["https://admin.example.test"]
     #[tokio::test]
     async fn login_is_rate_limited() {
         let state = test_state_with_rate_limit(2);
-        seed_user(&state, "Sysop", "secret", true);
+        let password = test_password();
+        let wrong_password = mismatched_password(&password);
+        seed_user(&state, "Sysop", &password, true);
         let (cookie_pair, csrf_token) = csrf_session(&state).await;
 
         for expected in [
@@ -2043,7 +2067,7 @@ allowed_origins = ["https://admin.example.test"]
                 headers,
                 Form(LoginRequest {
                     username: "Sysop".to_string(),
-                    password: "wrong".to_string(),
+                    password: wrong_password.clone(),
                     csrf_token: csrf_token.clone(),
                 }),
             )

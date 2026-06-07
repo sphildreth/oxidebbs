@@ -4769,6 +4769,31 @@ mod tests {
         handle: SerialHandle,
     }
 
+    fn test_password() -> String {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos()
+            .to_string()
+    }
+
+    fn test_password_with_emoji() -> String {
+        let mut password = test_password();
+        password.push(' ');
+        password.push('🚀');
+        password
+    }
+
+    fn mismatched_password(password: &str) -> String {
+        let mut value = password.to_string();
+        value.push('x');
+        value
+    }
+
+    fn line_input(value: &str) -> Vec<u8> {
+        format!("{value}\r").into_bytes()
+    }
+
     impl ByteTransport for LoopbackClientBytes {
         fn read_byte(
             &mut self,
@@ -5659,11 +5684,12 @@ mod tests {
     #[test]
     fn password_hashing_accepts_unencodable_password_text() {
         let config = Argon2Config::default();
+        let password = test_password_with_emoji();
 
-        let hash = server_hash_password("secret 🚀", &config).expect("hash password");
+        let hash = server_hash_password(&password, &config).expect("hash password");
 
         assert_eq!(
-            verify_stored_password("secret 🚀", &hash, &config).expect("verify"),
+            verify_stored_password(&password, &hash, &config).expect("verify"),
             PasswordVerification::Accepted
         );
     }
@@ -5718,6 +5744,7 @@ mod tests {
         let db_path = base_dir.join("oxidebbs.ddb");
         let config_path = base_dir.join("oxidebbs.toml");
         let bind_addr = free_loopback_addr();
+        let password = test_password();
         let mut config = smoke_config(bind_addr, &base_dir, &db_path);
         config.terminal.clear_screen_on_connect = false;
         std::fs::create_dir_all(&config.paths.ansi).expect("create ANSI dir");
@@ -5755,10 +5782,13 @@ mod tests {
         read_until(&mut client, "Email (optional): ").await;
         client.write_all(b"\r").await.expect("blank email");
         read_until(&mut client, "Choose password: ").await;
-        client.write_all(b"secret\r").await.expect("password");
+        client
+            .write_all(&line_input(&password))
+            .await
+            .expect("password");
         read_until(&mut client, "Confirm password: ").await;
         client
-            .write_all(b"secret\r")
+            .write_all(&line_input(&password))
             .await
             .expect("password confirmation");
         read_until(&mut client, "Command? ").await;
@@ -5965,7 +5995,8 @@ mod tests {
         config.terminal.clear_screen_on_connect = false;
         write_sysop_submenu_smoke_screens(&config);
         let db = Arc::new(OxideDb::open_or_create(&db_path).expect("open db"));
-        seed_login_user(&db, &config, "SerialUser", "secret");
+        let password = test_password();
+        seed_login_user(&db, &config, "SerialUser", &password);
         let runtime = Arc::new(ServerRuntime::new("serial smoke".to_string(), 1, 1, 60));
         let allocation = runtime.try_allocate_node().expect("allocate serial node");
         let mut menus = HashMap::new();
@@ -6008,7 +6039,7 @@ mod tests {
         });
 
         client
-            .write_bytes(b"L\rSerialUser\rsecret\rL\r")
+            .write_bytes(format!("L\rSerialUser\r{password}\rL\r").as_bytes())
             .expect("write serial login flow");
         let output = serial_read_until(&mut client, "Goodbye.").await;
         assert!(output.contains("Login successful. Welcome back."));
@@ -6189,9 +6220,10 @@ mod tests {
     async fn read_line_input_ignores_cp437_policy_for_hidden_input() {
         let (mut transport, client) = LoopbackTransport::new();
         let mut input = InputSession::default();
+        let password = test_password_with_emoji();
 
         client
-            .write_bytes("secret 🚀\r".as_bytes())
+            .write_bytes(&line_input(&password))
             .expect("write value");
 
         let value = read_line_input(
@@ -6205,7 +6237,7 @@ mod tests {
         .expect("read");
 
         match value {
-            PromptLineResult::Value(value) => assert_eq!(value, "secret 🚀"),
+            PromptLineResult::Value(value) => assert_eq!(value, password),
             other => panic!("expected value, got {other:?}"),
         }
     }
@@ -6376,12 +6408,14 @@ mod tests {
         let db = OxideDb::open_memory().expect("open db");
         let base_dir = temp_dir("auth-visible-failure");
         let config = smoke_config(free_loopback_addr(), &base_dir, &base_dir.join("auth.ddb"));
-        seed_login_user(&db, &config, "Alice", "secret");
+        let password = test_password();
+        let wrong_password = mismatched_password(&password);
+        seed_login_user(&db, &config, "Alice", &password);
 
-        let missing = run_login_subflow(&db, &config, "Nobody", "bad", "127.0.0.1")
+        let missing = run_login_subflow(&db, &config, "Nobody", &wrong_password, "127.0.0.1")
             .await
             .1;
-        let wrong = run_login_subflow(&db, &config, "Alice", "bad", "127.0.0.2")
+        let wrong = run_login_subflow(&db, &config, "Alice", &wrong_password, "127.0.0.2")
             .await
             .1;
 
@@ -6397,11 +6431,12 @@ mod tests {
         let db = OxideDb::open_memory().expect("open db");
         let base_dir = temp_dir("auth-loopback-transport");
         let config = smoke_config(free_loopback_addr(), &base_dir, &base_dir.join("auth.ddb"));
-        seed_login_user(&db, &config, "Alice", "secret");
+        let password = test_password();
+        seed_login_user(&db, &config, "Alice", &password);
 
         let (mut transport, mut client) = LoopbackTransport::new();
         client
-            .write_bytes(b"Alice\rsecret\r")
+            .write_bytes(format!("Alice\r{password}\r").as_bytes())
             .expect("write credentials");
 
         let mut input = InputSession::default();
@@ -6444,10 +6479,11 @@ mod tests {
             &base_dir,
             &base_dir.join("duplicate.ddb"),
         );
-        seed_login_user(&db, &config, "Alice", "secret");
+        let password = test_password();
+        seed_login_user(&db, &config, "Alice", &password);
 
         let (result, output) =
-            run_new_user_subflow(&db, &config, "alice", "Alice Clone", "secret").await;
+            run_new_user_subflow(&db, &config, "alice", "Alice Clone", &password).await;
 
         assert!(matches!(result, AuthFlowResult::Retry));
         assert!(output.contains("That alias is already in use."));
@@ -6460,10 +6496,11 @@ mod tests {
         let db = OxideDb::open_memory().expect("open db");
         let base_dir = temp_dir("auth-audit-bound");
         let config = smoke_config(free_loopback_addr(), &base_dir, &base_dir.join("auth.ddb"));
+        let password = test_password();
 
         let mut last_output = String::new();
         for _ in 0..6 {
-            last_output = run_login_subflow(&db, &config, "Nobody", "bad", "127.0.0.1")
+            last_output = run_login_subflow(&db, &config, "Nobody", &password, "127.0.0.1")
                 .await
                 .1;
         }
@@ -6484,7 +6521,8 @@ mod tests {
         let db = OxideDb::open_memory().expect("open db");
         let base_dir = temp_dir("auth-clear");
         let config = smoke_config(free_loopback_addr(), &base_dir, &base_dir.join("auth.ddb"));
-        seed_login_user(&db, &config, "Alice", "secret");
+        let password = test_password();
+        seed_login_user(&db, &config, "Alice", &password);
         let now = current_timestamp(&db).expect("timestamp");
         record_auth_failure(
             db.db(),
@@ -6508,7 +6546,7 @@ mod tests {
         .expect("record alias failure");
 
         let (result, output, authenticated_user) =
-            run_login_subflow(&db, &config, "Alice", "secret", "127.0.0.1").await;
+            run_login_subflow(&db, &config, "Alice", &password, "127.0.0.1").await;
 
         assert!(matches!(result, AuthFlowResult::Success));
         assert!(output.contains("Login successful. Welcome back."));
@@ -6533,15 +6571,17 @@ mod tests {
     #[test]
     fn server_password_hashes_verify_with_argon2() {
         let config = Argon2Config::default();
-        let hash = server_hash_password("secret", &config).expect("hash password");
+        let password = test_password();
+        let wrong_password = mismatched_password(&password);
+        let hash = server_hash_password(&password, &config).expect("hash password");
 
         assert!(hash.starts_with("$argon2id$"));
         assert_eq!(
-            verify_stored_password("secret", &hash, &config).expect("verify"),
+            verify_stored_password(&password, &hash, &config).expect("verify"),
             PasswordVerification::Accepted
         );
         assert_eq!(
-            verify_stored_password("wrong", &hash, &config).expect("verify"),
+            verify_stored_password(&wrong_password, &hash, &config).expect("verify"),
             PasswordVerification::Rejected
         );
     }
@@ -6549,8 +6589,9 @@ mod tests {
     #[test]
     fn invalid_password_hash_runs_dummy_verify_and_fails_closed() {
         let config = Argon2Config::default();
+        let password = test_password();
 
-        let result = verify_stored_password("secret", "not-a-phc", &config).expect("verify");
+        let result = verify_stored_password(&password, "not-a-phc", &config).expect("verify");
 
         assert_eq!(result, PasswordVerification::HashParseFailure);
     }
@@ -6643,7 +6684,8 @@ mod tests {
         let mut config = smoke_config(free_loopback_addr(), &base_dir, &db_path);
         config.file_transfers.enabled = true;
         let db = OxideDb::open_or_create(&db_path).expect("open file flow db");
-        seed_login_user_with_level(&db, &config, "FileUser", "secret", 50, false);
+        let password = test_password();
+        seed_login_user_with_level(&db, &config, "FileUser", &password, 50, false);
         let user_record = find_user_by_alias_ci(db.db(), "FileUser")
             .expect("find file user")
             .expect("file user exists");
@@ -6977,13 +7019,14 @@ mod tests {
         let bind_addr = free_loopback_addr();
         let config = sysop_submenu_smoke_config(bind_addr, &base_dir, &db_path);
         write_sysop_submenu_smoke_screens(&config);
+        let password = test_password();
         {
             let db = OxideDb::open_or_create(&db_path).expect("open db");
             seed_login_user_with_level(
                 &db,
                 &config,
                 "AccessUser",
-                "secret",
+                &password,
                 security_level,
                 is_sysop,
             );
@@ -7006,7 +7049,10 @@ mod tests {
         read_until(&mut client, "Alias: ").await;
         client.write_all(b"AccessUser\r").await.expect("alias");
         read_until(&mut client, "Password: ").await;
-        client.write_all(b"secret\r").await.expect("password");
+        client
+            .write_all(&line_input(&password))
+            .await
+            .expect("password");
         read_until(&mut client, "Command? ").await;
         client.write_all(b"S\r").await.expect("select sysop");
         let output = if security_level >= 255 {

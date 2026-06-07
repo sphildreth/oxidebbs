@@ -1391,9 +1391,18 @@ mod tests {
     use std::io::{Read, Write};
     use std::net::{Shutdown, TcpListener};
     use std::thread::JoinHandle;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_path(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!("oxidebbs-door-{name}-{}", std::process::id()))
+    }
+
+    fn remote_provider_secret() -> String {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time")
+            .as_nanos()
+            .to_string()
     }
 
     fn caller() -> DoorCaller {
@@ -2026,9 +2035,10 @@ command = "LORD.EXE"
 
     #[test]
     fn doorparty_provider_dry_run_validates_config_without_network() {
+        let provider_password = remote_provider_secret();
         let provider = DoorPartyProvider::new(DoorPartyConfig::new(
             "oxide-account",
-            "doorparty-password",
+            provider_password,
             "telnet://doorparty.example:23",
         ));
 
@@ -2047,8 +2057,11 @@ command = "LORD.EXE"
     fn remote_provider_validation_rejects_missing_required_fields() {
         let missing_bbslink_auth =
             BbsLinkProvider::new(BbsLinkConfig::new("oxide-system", "", "bbslink.example:23"));
-        let missing_doorparty_endpoint =
-            DoorPartyProvider::new(DoorPartyConfig::new("oxide-account", "secret", " "));
+        let missing_doorparty_endpoint = DoorPartyProvider::new(DoorPartyConfig::new(
+            "oxide-account",
+            remote_provider_secret(),
+            " ",
+        ));
 
         let bbslink_error = missing_bbslink_auth
             .validate_config()
@@ -2069,9 +2082,10 @@ command = "LORD.EXE"
 
     #[test]
     fn remote_provider_secrets_are_redacted_by_default() {
+        let provider_password = remote_provider_secret();
         let provider = DoorPartyProvider::new(DoorPartyConfig::new(
             "oxide-account",
-            "doorparty-password",
+            provider_password.clone(),
             "doorparty.example:23",
         ));
 
@@ -2080,13 +2094,13 @@ command = "LORD.EXE"
 
         assert_eq!(
             provider.config().password.expose_secret(),
-            "doorparty-password"
+            provider_password.as_str()
         );
         assert_eq!(
             provider.config().password.to_string(),
             REDACTED_PROVIDER_SECRET
         );
-        assert!(!config_debug.contains("doorparty-password"));
+        assert!(!config_debug.contains(&provider_password));
         assert!(config_debug.contains(REDACTED_PROVIDER_SECRET));
         assert_eq!(redacted.provider_key, DOORPARTY_PROVIDER_KEY);
         assert_eq!(redacted.secret, REDACTED_PROVIDER_SECRET);
@@ -2262,9 +2276,10 @@ command = "LORD.EXE"
 
     #[test]
     fn doorparty_provider_launch_session_sends_auth_and_user() {
+        let provider_password = remote_provider_secret();
         let provider = DoorPartyProvider::new(DoorPartyConfig::new(
             "oxide-account",
-            "doorparty-password",
+            provider_password.clone(),
             "doorparty.example:23",
         ));
 
@@ -2278,7 +2293,7 @@ command = "LORD.EXE"
         assert!(!result.timed_out);
 
         let sent = String::from_utf8_lossy(io.remote_received());
-        assert!(sent.contains("ACCT oxide-account PASS doorparty-password"));
+        assert!(sent.contains(&format!("ACCT oxide-account PASS {provider_password}")));
         assert!(sent.contains("USER Alice SEC 50"));
     }
 
@@ -2304,8 +2319,11 @@ command = "LORD.EXE"
 
     #[test]
     fn doorparty_provider_launch_session_rejects_invalid_config() {
-        let provider =
-            DoorPartyProvider::new(DoorPartyConfig::new("", "password", "doorparty.example:23"));
+        let provider = DoorPartyProvider::new(DoorPartyConfig::new(
+            "",
+            remote_provider_secret(),
+            "doorparty.example:23",
+        ));
 
         let mut io = FakeRemoteSessionIo::new(b"", b"");
         let result = provider.launch_session(&caller(), &mut io);
@@ -2338,9 +2356,10 @@ command = "LORD.EXE"
     #[test]
     fn doorparty_provider_live_connector_uses_local_tcp_server() {
         let (endpoint, server) = spawn_fake_provider_server(b"OK\r\nWelcome DoorParty\r\n");
+        let provider_password = remote_provider_secret();
         let provider = DoorPartyProvider::new(DoorPartyConfig::new(
             "oxide-account",
-            "doorparty-password",
+            provider_password.clone(),
             endpoint,
         ));
 
@@ -2352,7 +2371,7 @@ command = "LORD.EXE"
 
         assert_eq!(result.run_result.exit_code, Some(0));
         assert!(!result.run_result.timed_out);
-        assert!(received.contains("ACCT oxide-account PASS doorparty-password"));
+        assert!(received.contains(&format!("ACCT oxide-account PASS {provider_password}")));
         assert!(received.contains("USER Alice SEC 50"));
         assert_eq!(result.caller_output, b"OK\r\nWelcome DoorParty\r\n");
     }

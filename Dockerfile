@@ -13,6 +13,7 @@ RUN dnf -y install \
       git \
       glibc-devel \
       make \
+      openssl-devel \
       pkgconf-pkg-config \
       tar \
       xz \
@@ -31,6 +32,7 @@ COPY rust-toolchain.toml Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY assets ./assets
 COPY tools ./tools
+COPY web-terminal ./web-terminal
 
 RUN cargo build --workspace --locked --release -p oxidebbs-server
 
