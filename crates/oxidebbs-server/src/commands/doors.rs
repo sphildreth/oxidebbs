@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fs;
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use clap::{Args, Subcommand};
 #[cfg(unix)]
@@ -73,6 +73,10 @@ pub enum DoorsCommand {
     },
     Test(DoorTestArgs),
     Dropfile(DoorDropfileArgs),
+    Package {
+        #[command(subcommand)]
+        command: DoorPackageCommand,
+    },
     Add(DoorAddArgs),
     Edit(DoorEditArgs),
     Runs {
@@ -104,6 +108,13 @@ pub struct DoorDropfileArgs {
     pub format: String,
     #[arg(long)]
     pub output: Option<std::path::PathBuf>,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum DoorPackageCommand {
+    Inspect {
+        path: PathBuf,
+    },
 }
 
 #[derive(Debug, Clone, Args)]
@@ -198,6 +209,55 @@ fn print_check_issues(issues: &[CheckIssue]) {
     }
 }
 
+fn run_door_package(args: DoorPackageCommand, ctx: &AppContext) -> CliResult<()> {
+    let summary = oxidebbs_door::inspect_oxide_door_package(&args.path)?;
+    if ctx.json {
+        print_json(&summary)?;
+    } else {
+        println!("package.name: {}", summary.package_name);
+        println!("package.id: {}", summary.package_id);
+        println!("package.version: {}", summary.package_version);
+        println!("package.kind: {}", summary.package_kind);
+        println!("package.legal_status: {}", summary.legal_status);
+        println!("package.requires_key: {}", if summary.requires_key { "yes" } else { "no" });
+        if let Some(source_url) = summary.source_url.as_deref() {
+            println!("package.source_url: {}", source_url);
+        }
+        println!("door.id: {}", summary.door_id);
+        println!("door.name: {}", summary.door_name);
+        println!("door.category: {}", summary.door_category);
+        println!("door.runner: {}", summary.runner);
+        println!("door.command: {}", summary.command);
+        println!("door.working_directory: {}", summary.working_directory);
+        println!(
+            "door.preferred_drop_file: {}",
+            summary.preferred_drop_file
+        );
+        println!(
+            "door.supported_drop_files: {}",
+            summary.supported_drop_files.join(", ")
+        );
+        println!("door.exclusive: {}", if summary.exclusive { "yes" } else { "no" });
+        println!("door.timeout_seconds: {}", summary.timeout_seconds);
+        println!("access.min_security_level: {}", summary.min_security_level);
+        println!(
+            "persistence.enabled_after_import_request: {}",
+            if summary.enabled_after_import_request { "yes" } else { "no" }
+        );
+        println!("files.count: {}", summary.file_count);
+        println!("files.total_unpacked_size: {}", summary.total_unpacked_size);
+        if summary.warnings.is_empty() {
+            println!("warnings: (none)");
+        } else {
+            println!("warnings:");
+            for warning in summary.warnings {
+                println!("  - {warning}");
+            }
+        }
+    }
+    Ok(())
+}
+
 fn command_exists(command: &str) -> bool {
     let path = std::path::Path::new(command);
     if path.components().count() > 1 {
@@ -218,8 +278,21 @@ fn is_quoted_dos_command(command: &str) -> bool {
 }
 
 pub fn run_doors(command: DoorsCommand, ctx: &AppContext) -> CliResult<()> {
-    let db = open_database(&ctx.config)?;
-    sync_configured_doors(&db, &ctx.config)?;
+    match command {
+        DoorsCommand::Package { command } => run_door_package(command, ctx),
+        command => {
+            let db = open_database(&ctx.config)?;
+            sync_configured_doors(&db, &ctx.config)?;
+            run_doors_with_db(command, ctx, db)
+        }
+    }
+}
+
+fn run_doors_with_db(
+    command: DoorsCommand,
+    ctx: &AppContext,
+    db: oxidebbs_db::OxideDb,
+) -> CliResult<()> {
     match command {
         DoorsCommand::List => {
             let doors = effective_doors(&db, &ctx.config)?;

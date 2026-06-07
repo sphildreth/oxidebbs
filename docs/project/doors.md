@@ -8,7 +8,8 @@ Current capabilities:
 
 - Door definitions are stored in DecentDB after setup/config synchronization.
 - `doors list`, `doors show`, `doors check`, `doors enable`, `doors disable`,
-  `doors test --dry-run`, `doors add`, `doors edit`, `doors dropfile --format`,
+  `doors package inspect`, `doors test --dry-run`, `doors add`, `doors edit`,
+  `doors dropfile --format`,
   `doors runs list/show`, and `doors cleanup` are available through the sysop
   CLI.
 - Drop-file writers cover `DOOR.SYS`, `DORINFO1.DEF`, `CHAIN.TXT`,
@@ -95,6 +96,7 @@ remote provider door, `--endpoint` is the value stored as the provider endpoint.
 Door run history is visible through:
 
 ```bash
+oxidebbs-server doors package inspect sample.oxdoor
 oxidebbs-server doors runs list
 oxidebbs-server doors runs show <run-id>
 oxidebbs-server doors cleanup

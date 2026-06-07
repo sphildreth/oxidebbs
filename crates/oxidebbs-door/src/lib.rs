@@ -12,11 +12,16 @@ use std::process::{Command, ExitStatus, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+mod oxdoor_package;
 use oxidebbs_core::door::DoorDefinition;
 use serde::Deserialize;
 use thiserror::Error;
 
 pub const CRATE_NAME: &str = "oxidebbs-door";
+
+pub use crate::oxdoor_package::{
+    inspect_oxide_door_package, OxDoorPackageInspection, OxDoorPackageSummary,
+};
 
 #[derive(Debug, Error)]
 pub enum DoorError {
@@ -40,6 +45,24 @@ pub enum DoorError {
 
     #[error("door process timed out after {timeout:?}")]
     Timeout { timeout: Duration },
+
+    #[error("failed to read door package {path}: {source}")]
+    ReadDoorPackage {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+
+    #[error("failed to parse door package {path}: {source}")]
+    ParseDoorPackage {
+        path: PathBuf,
+        source: toml::de::Error,
+    },
+
+    #[error("invalid door package {path}: {message}")]
+    InvalidDoorPackage {
+        path: PathBuf,
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize)]

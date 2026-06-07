@@ -444,6 +444,7 @@ Door management:
 - `oxidebbs-server doors check` (or `doors check <key>`)
 - `oxidebbs-server doors enable <key>`
 - `oxidebbs-server doors disable <key>`
+- `oxidebbs-server doors package inspect <path-to-package.oxdoor>`
 - `oxidebbs-server doors test <key> --user sysop --dry-run`
 - `oxidebbs-server doors dropfile <key> --user sysop --node 1 --format DORINFO1.DEF`
 - `oxidebbs-server doors runs list`
@@ -453,6 +454,8 @@ Door management:
 Meaning:
 
 - `--dry-run` generates drop files and validates input without launching a child.
+- `doors package inspect` parses `.oxdoor` packages, validates manifest, checksum, and
+  file safety constraints, then prints a read-only summary.
 - `doors dropfile --format` supports `DOOR.SYS`, `DORINFO1.DEF`, `CHAIN.TXT`,
   `DOORFILE.SR`, `PCBOARD.SYS`, and `CALLINFO.BBS`.
 - Live interactive DOS door testing requires a caller session. Start `serve`,
