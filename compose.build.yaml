@@ -1,0 +1,6 @@
+services:
+  oxidebbs:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: oxidebbs:local

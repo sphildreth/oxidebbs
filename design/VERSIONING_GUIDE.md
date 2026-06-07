@@ -100,6 +100,7 @@ operator workflows, or compatibility promises.
 ### Configuration and examples
 
 - `config/oxidebbs.example.toml`
+- `compose.yaml`
 - `assets/ansi/**`
 
 Update example config and bundled ANSI assets when a release changes the
@@ -128,9 +129,10 @@ future release process explicitly needs it.
 The release-artifact workflow is manually dispatched. It builds Linux, macOS,
 and Windows archives, verifies checksums, smokes the packaged binaries, builds
 the documentation site, and builds/smokes the Docker image before any GitHub
-release is created. When `dry_run=false`, the final job downloads the completed
-workflow artifacts and creates the GitHub release with all archive and checksum
-assets attached.
+release is created. When `dry_run=false`, it also publishes the smoke-tested
+Docker image to GitHub Container Registry before the final job downloads the
+completed workflow artifacts and creates the GitHub release with all archive and
+checksum assets attached.
 
 Do not publish an empty GitHub release and upload assets afterward. With GitHub
 release immutability enabled, assets must be attached while the release is still
@@ -173,7 +175,8 @@ package version, refresh and commit the lockfile.
 9. Run the release workflow with `dry_run=true` against the intended release ref.
 10. After publication approval, create and push the release tag.
 11. Run the release workflow with `dry_run=false` for the existing tag.
-12. Verify hosted archives, checksums, docs, and Docker smoke results.
+12. Verify hosted archives, checksums, docs, Docker smoke results, and GHCR
+    image publication.
 
 ## 5. Documentation-site procedure
 
@@ -250,10 +253,16 @@ Manual release workflow dispatch defaults to `dry_run = true`. A dry run checks
 out the supplied `source_ref`, or the workflow commit when `source_ref` is blank,
 then builds and smokes the Linux, macOS, and Windows archives, verifies each
 generated checksum file, builds the VitePress docs, and builds/smokes the Docker
-image without creating a GitHub release.
+image without creating a GitHub release or publishing the image.
 
 For publication, create and push the release tag before running the workflow with
 `dry_run=false`. Leave `source_ref` blank, or set it to the same tag. The publish
 job uses `--verify-tag`, so it fails instead of creating a tag from the default
 branch. If an immutable published release ever reserves a tag name, do not delete
 and reuse that tag; publish the next patch tag instead.
+
+The publish run pushes Docker images to:
+
+- `ghcr.io/sphildreth/oxidebbs:<version>`
+- `ghcr.io/sphildreth/oxidebbs:v<version>`
+- `ghcr.io/sphildreth/oxidebbs:latest` for stable, non-prerelease tags

@@ -119,7 +119,8 @@ Docker Compose is the recommended cross-platform deployment path. It includes
 DOSEMU2 and the bundled Oxide-owned test door fixture.
 
 ```bash
-OXIDEBBS_SYSOP_PASSWORD='choose-a-real-password' docker compose up -d --build
+docker compose pull
+OXIDEBBS_SYSOP_PASSWORD='choose-a-real-password' docker compose up -d
 ```
 
 Connect with SyncTERM, telnet, or a C64/C64 Ultimate terminal client:
@@ -138,7 +139,8 @@ docker compose run --rm oxidebbs doors test oxide-check --user sysop --dry-run
 ```
 
 See [docs/project/docker.md](docs/project/docker.md) for first-boot variables,
-volumes, reset steps, door testing, and Windows/macOS notes.
+published image tags, volumes, reset steps, door testing, and Windows/macOS
+notes.
 
 ## Install From Releases
 
@@ -152,7 +154,9 @@ Each package includes the server binary, bundled assets, example configs, the
 Oxide-owned `oxide-check` test door fixture, license files, and security policy.
 Manual release workflow dispatches default to a dry run that builds and smokes
 all three archive formats, verifies checksums, builds docs, and builds the
-Docker image without uploading artifacts.
+Docker image without publishing artifacts. Publish runs also push Docker images
+to GitHub Container Registry as `ghcr.io/sphildreth/oxidebbs:<version>` and
+`ghcr.io/sphildreth/oxidebbs:v<version>`.
 Docker remains the simplest deployment path for Windows and macOS sysops who
 want DOS door support because live door execution targets a Linux runtime with
 DOSEMU2.

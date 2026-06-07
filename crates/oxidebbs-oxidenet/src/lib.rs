@@ -1441,7 +1441,7 @@ mod tests {
             telnet_host: Some("retro.example.test".to_string()),
             telnet_port: Some(23),
             software: "OxideBBS".to_string(),
-            software_version: "1.2.1".to_string(),
+            software_version: "1.2.2".to_string(),
             timezone: "America/Chicago".to_string(),
             region: "NA".to_string(),
             description: "A retro ANSI board focused on doors and echomail.".to_string(),

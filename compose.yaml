@@ -1,9 +1,6 @@
 services:
   oxidebbs:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: oxidebbs:local
+    image: ghcr.io/sphildreth/oxidebbs:${OXIDEBBS_IMAGE_TAG:-1.2.2}
     init: true
     environment:
       OXIDEBBS_BOARD_NAME: ${OXIDEBBS_BOARD_NAME:-OxideBBS}

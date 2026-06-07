@@ -18,6 +18,20 @@ For each release, the release workflow builds these archives:
 
 Each archive has a matching `.sha256` checksum file on the same GitHub release.
 
+## Docker Images
+
+Release publication also pushes the smoke-tested Docker image to GitHub
+Container Registry:
+
+```text
+ghcr.io/sphildreth/oxidebbs:<version>
+ghcr.io/sphildreth/oxidebbs:v<version>
+```
+
+Stable releases also update `ghcr.io/sphildreth/oxidebbs:latest`. Prefer the
+exact version tag for deployments. See [Docker Deployment](./docker.md) for the
+Compose setup and first-boot variables.
+
 ## What Is Included
 
 Release archives include:

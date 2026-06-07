@@ -31,6 +31,16 @@ for (const path of ['package.json', 'package-lock.json']) {
   }
   fs.writeFileSync(path, `${JSON.stringify(doc, null, 2)}\n`);
 }
+
+const composePath = 'compose.yaml';
+if (fs.existsSync(composePath)) {
+  const compose = fs.readFileSync(composePath, 'utf8')
+    .replace(
+      /ghcr\.io\/sphildreth\/oxidebbs:\$\{OXIDEBBS_IMAGE_TAG:-[^}]+\}/g,
+      `ghcr.io/sphildreth/oxidebbs:\${OXIDEBBS_IMAGE_TAG:-${version}}`,
+    );
+  fs.writeFileSync(composePath, compose);
+}
 NODE
 
 if command -v cargo >/dev/null 2>&1; then
