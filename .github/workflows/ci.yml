@@ -33,6 +33,9 @@ jobs:
         run: ./scripts/dev-check.sh
 
   docs:
+    name: Validate docs build
+    # CI validates documentation on pull requests, but never uploads or deploys
+    # Pages artifacts. Publication lives only in pages.yml.
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

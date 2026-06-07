@@ -25,8 +25,7 @@ Release archives include:
 - `oxidebbs-server` or `oxidebbs-server.exe`
 - `README.md`, `LICENSE`, `NOTICE`, and `SECURITY.md`
 - default `assets/` and `config/`
-- an empty `doors/` directory
-- the Oxide-owned `oxide-check` test door fixture
+- `doors/oxide-door-check/`, the Oxide-owned `oxide-check` test door fixture
 - door helper source under `tools/doors/`
 
 Third-party DOS doors are not bundled.

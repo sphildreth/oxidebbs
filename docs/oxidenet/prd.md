@@ -1,7 +1,9 @@
 # OxideNet PRD
 
-The source PRD lives in `design/OXIDENET_PRD.md`. The implemented
-operational subset is:
+The source PRD lives in
+[`design/OXIDENET_PRD.md`](https://github.com/sphildreth/oxidebbs/blob/main/design/OXIDENET_PRD.md).
+
+The implemented operational subset is:
 
 - application submission and manual review;
 - member address assignment;
@@ -10,3 +12,6 @@ operational subset is:
 - hub/member registry and nodelist publication;
 - BinkP poll integration with suspended-node enforcement;
 - CLI and local sysop TUI operations over the same registry state.
+
+For day-to-day operation, use [OxideNet Overview](./overview.md),
+[Hub Admin](./hub-admin.md), and [Setup Member](./setup-member.md).

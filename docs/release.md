@@ -31,7 +31,7 @@ Run `.github/workflows/release.yml` from GitHub Actions with:
 
 | Input | Value |
 | --- | --- |
-| `tag_name` | the intended tag, such as `v1.2.1` |
+| `tag_name` | the intended tag, such as `vX.Y.Z` |
 | `source_ref` | `main`, a release branch, or a commit SHA |
 | `dry_run` | `true` |
 
@@ -46,8 +46,8 @@ After the dry run passes and publication is approved, create the release tag and
 push it to GitHub:
 
 ```bash
-git tag v1.2.1
-git push origin refs/tags/v1.2.1
+git tag vX.Y.Z
+git push origin refs/tags/vX.Y.Z
 ```
 
 Then run `.github/workflows/release.yml` with:

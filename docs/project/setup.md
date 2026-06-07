@@ -42,7 +42,7 @@ The wizard asks for:
 - telnet bind address
 - node count
 - database path
-- whether to include the placeholder example door definition
+- whether to include the bundled `oxide-check` test door definition
 - whether to install bundled sample ANSI/screen assets
 
 Press Enter at a prompt to accept the value shown in brackets.
