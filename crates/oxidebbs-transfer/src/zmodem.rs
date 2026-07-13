@@ -1557,3 +1557,52 @@ mod tests {
         assert_eq!(file.payload, b"retry");
     }
 }
+
+#[cfg(test)]
+mod broken_nested_tests {
+    use super::*;
+
+    #[test]
+    fn zmodem_header_from_flags_round_trip() {
+        let header = ZmodemHeader::new(ZmodemFrameKind::Zfile, 0x1234_5678);
+        let flags = header.flags;
+        let constructed =
+            ZmodemHeader::from_flags(header.kind, flags[3], flags[2], flags[1], flags[0]);
+        assert_eq!(constructed.kind, header.kind);
+        assert_eq!(constructed.flags, flags);
+        assert_eq!(constructed.position(), header.position());
+    }
+
+    #[test]
+    fn frame_end_to_byte_matches_constants() {
+        assert_eq!(FrameEnd::Zcrce.to_byte(), ZCRCE);
+        assert_eq!(FrameEnd::Zcrcg.to_byte(), ZCRCG);
+        assert_eq!(FrameEnd::Zcrcq.to_byte(), ZCRCQ);
+        assert_eq!(FrameEnd::Zcrcw.to_byte(), ZCRCW);
+    }
+
+    #[test]
+    fn zdle_unescape_incomplete_sequence_returns_error() {
+        let data = vec![ZDLE];
+        assert!(zdle_unescape(&data).is_err());
+    }
+
+    #[test]
+    fn zfile_metadata_parse_missing_optional_fields() {
+        let data = b"file.txt\0".to_vec();
+        let parsed = ZfileMetadata::parse(&data).expect("parse missing fields");
+        assert_eq!(parsed.pathname, "file.txt");
+        assert!(parsed.size.is_none());
+        assert!(parsed.mtime.is_none());
+        assert!(parsed.mode.is_none());
+    }
+
+    #[test]
+    fn zmodem_header_position_zero_round_trip() {
+        let header = ZmodemHeader::new(ZmodemFrameKind::Zdata, 0);
+        assert_eq!(header.position(), 0);
+        let encoded = encode_binary_header(header);
+        let decoded = decode_binary_header(&encoded).expect("decode");
+        assert_eq!(decoded.position(), 0);
+    }
+}

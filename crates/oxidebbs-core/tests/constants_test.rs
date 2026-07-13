@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use oxidebbs_core::*;
 
     #[test]
     fn constants_have_expected_values() {

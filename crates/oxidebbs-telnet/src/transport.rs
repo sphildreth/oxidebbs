@@ -117,7 +117,10 @@ impl LoopbackTransport {
 
 impl Transport for LoopbackTransport {
     async fn read_byte(&mut self) -> Result<Option<u8>, TransportError> {
-        Ok(self.rx.recv().await)
+        match self.rx.recv().await {
+            Some(b) => Ok(Some(b)),
+            None => Ok(None),
+        }
     }
 
     async fn write_all(&mut self, bytes: &[u8]) -> Result<(), TransportError> {
