@@ -20,7 +20,9 @@ use thiserror::Error;
 pub const CRATE_NAME: &str = "oxidebbs-door";
 
 pub use crate::oxdoor_package::{
-    inspect_oxide_door_package, OxDoorPackageInspection, OxDoorPackageSummary,
+    OXDOOR_CHECKSUM_FILE, OXDOOR_MANIFEST_FILE, OXDOOR_PACKAGE_FORMAT, OXDOOR_PACKAGE_KIND_FULL,
+    OXDOOR_SUPPORTED_DROPFILES, OxDoorPackageInspection, OxDoorPackageSummary,
+    inspect_oxide_door_package,
 };
 
 #[derive(Debug, Error)]
@@ -59,10 +61,7 @@ pub enum DoorError {
     },
 
     #[error("invalid door package {path}: {message}")]
-    InvalidDoorPackage {
-        path: PathBuf,
-        message: String,
-    },
+    InvalidDoorPackage { path: PathBuf, message: String },
 }
 
 #[derive(Debug, Clone, Deserialize)]

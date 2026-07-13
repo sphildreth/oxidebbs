@@ -62,6 +62,7 @@ export default defineConfig({
           { text: 'Architecture', link: '/project/architecture' },
           { text: 'Versioning', link: '/project/versioning' },
           { text: 'Release Process', link: '/release' },
+          { text: 'OxDoor Format', link: '/OXDOOR_FORMAT_V1' },
           { text: 'Changelog', link: '/about/changelog' }
         ]
       }
@@ -75,6 +76,7 @@ export default defineConfig({
           { text: 'Docker Deployment', link: '/project/docker' },
           { text: 'Release Binaries', link: '/project/release-binaries' },
           { text: 'Release Process', link: '/release' },
+          { text: 'OxDoor Format', link: '/OXDOOR_FORMAT_V1' },
           { text: 'Setup Wizard', link: '/project/setup' },
           { text: 'DOSEMU2 On Fedora', link: '/project/dosemu2-fedora' },
           { text: 'Architecture', link: '/project/architecture' },

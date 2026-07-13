@@ -1260,7 +1260,7 @@ mod tests {
 
     #[test]
     fn zdle_escape_does_not_escape_normal_bytes() {
-        let data = [b'A', b'B', b'C'];
+        let data = *b"ABC";
         let escaped = zdle_escape(&data, false);
         assert_eq!(escaped, vec![b'A', b'B', b'C']);
     }

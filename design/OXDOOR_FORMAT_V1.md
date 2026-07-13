@@ -14,14 +14,14 @@ oxide-door.toml
 checksums.sha256
 files/
 docs/             optional
-artifacts/        optional
+tests/            optional
 ```
 
 `oxide-door.toml` must include:
 - `package.format = "oxide-door-package-v1"`
 - `package.kind = "full"`
 
-All files under `files/`, `docs/`, and `artifacts/` should be listed in `checksums.sha256` using:
+All files under `files/`, `docs/`, and `tests/` should be listed in `checksums.sha256` using:
 
 ```text
 <sha256-hex>  <relative-path>
@@ -95,7 +95,7 @@ Optional top-level entries:
 
 ```text
 docs/
-artifacts/
+tests/
 ```
 
 Recommended layout:
@@ -111,8 +111,8 @@ doradvnt.oxdoor
 ├── docs/
 │   ├── README.TXT
 │   └── SYSOP.DOC
-└── artifacts/
-    └── inspect-report.md
+└── tests/
+    └── smoke.md
 ```
 
 ## 4. Package kinds
@@ -358,7 +358,7 @@ Rules:
 
 ## 7. `checksums.sha256`
 
-`checksums.sha256` contains SHA-256 hashes for files packaged under `files/`, `docs/`, and `artifacts/` as appropriate.
+`checksums.sha256` contains SHA-256 hashes for files packaged under `files/`, `docs/`, and `tests/` as appropriate.
 
 Format:
 
@@ -433,6 +433,8 @@ Command goal:
 
 ```bash
 oxidebbs-server doors package import <path-to-package.oxdoor>
+oxidebbs-server doors package import <path-to-package.oxdoor> --replace
+oxidebbs-server doors package import <path-to-package.oxdoor> --enable
 ```
 
 Expected behavior:
@@ -440,13 +442,15 @@ Expected behavior:
 - Perform all dry-run validations.
 - Copy `files/` into the configured door root under the package door working directory.
 - Create or update the OxideBBS door definition through existing door service code paths.
-- Default to disabled unless an explicit `--enable` flag is provided and `enabled_after_import = true` is honored by policy.
+- Default to disabled unless an explicit sysop `--enable` flag is provided. A
+  package `enabled_after_import` request is advisory and must not enable a door
+  by itself.
 - Run the same validation used by `doors check` when feasible.
 - Print suggested next commands.
 
 Conflict behavior:
 
-- If a door definition already exists, fail unless `--replace` or a future `--update` flag is provided.
+- If a door definition already exists, fail unless `--replace` is provided.
 - If a target directory already exists, fail unless `--replace` is provided.
 - `--replace` should be conservative and should avoid deleting unknown existing files unless explicitly designed and tested.
 

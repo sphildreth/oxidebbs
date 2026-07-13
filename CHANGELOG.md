@@ -7,3 +7,4 @@ The canonical OxideBBS changelog is maintained in the documentation site source:
 
 Keep this root file as a pointer so package managers, repository browsers, and
 contributors can find the current changelog without duplicating release notes.
+- Added `constants.rs` to centralise default configuration values such as the default door time limit and Binkp port.

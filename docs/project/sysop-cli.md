@@ -446,6 +446,7 @@ Door management:
 - `oxidebbs-server doors disable <key>`
 - `oxidebbs-server doors package inspect <path-to-package.oxdoor>`
 - `oxidebbs-server doors package import <path-to-package.oxdoor> --dry-run`
+- `oxidebbs-server doors package import <path-to-package.oxdoor> [--replace] [--enable]`
 - `oxidebbs-server doors test <key> --user sysop --dry-run`
 - `oxidebbs-server doors dropfile <key> --user sysop --node 1 --format DORINFO1.DEF`
 - `oxidebbs-server doors runs list`
@@ -459,7 +460,15 @@ Meaning:
   file safety constraints, then prints a read-only summary.
 - `doors package import --dry-run` validates packages for import, computes the target
   install directory and door definition, and prints a planned import report with
-  conflicts, warnings, and follow-up commands.
+  planned file copies, conflicts, warnings, and follow-up commands. It does not
+  copy files, create or migrate DecentDB, write door definitions, enable doors,
+  or change menus.
+- `doors package import` copies only package `files/` payloads under the
+  configured door root and creates the door definition disabled by default.
+  Existing target directories or door definitions require `--replace`; `--enable`
+  is the explicit opt-in to make the imported door caller-selectable.
+- `.oxdoor` v1 is declarative only. Import never runs package-provided installer
+  scripts, keygens, setup batches, downloaded commands, or shell hooks.
 - `doors dropfile --format` supports `DOOR.SYS`, `DORINFO1.DEF`, `CHAIN.TXT`,
   `DOORFILE.SR`, `PCBOARD.SYS`, and `CALLINFO.BBS`.
 - Live interactive DOS door testing requires a caller session. Start `serve`,
@@ -467,6 +476,8 @@ Meaning:
 - The bundled test door is `oxide-check` (`OXIDECHK.EXE`) for validating the
   DOSEMU2 serial runtime bridge.
 - Enabled configured doors are the only ones selectable by live caller menu.
+- OxideBBS does not bundle third-party copyrighted, shareware, or abandonware DOS
+  doors; sysops provide door binaries they have rights to run.
 - Live launch writes drop files in the node runtime directory, tracks
   `door_started`/`door_finished`/`door_timed_out` events, and returns the caller
   to the menu on completion or timeout.

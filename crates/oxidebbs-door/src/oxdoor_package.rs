@@ -1,9 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::Read;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Component, Path};
 
-use hex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use zip::ZipArchive;
@@ -24,6 +23,8 @@ pub const OXDOOR_SUPPORTED_DROPFILES: [&str; 6] = [
 ];
 
 const FILES_DIRECTORY: &str = "files/";
+const DOCS_DIRECTORY: &str = "docs/";
+const TESTS_DIRECTORY: &str = "tests/";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct OxDoorPackageSummary {
@@ -123,7 +124,7 @@ struct DoorSection {
     pub enabled_after_import: Option<bool>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct AccessSection {
     #[serde(default)]
     pub min_security_level: i32,
@@ -137,19 +138,7 @@ struct AccessSection {
     pub timeout_seconds: Option<u64>,
 }
 
-impl Default for AccessSection {
-    fn default() -> Self {
-        Self {
-            min_security_level: 0,
-            preferred_drop_file: None,
-            supported_drop_files: Vec::new(),
-            exclusive: None,
-            timeout_seconds: None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct PersistenceSection {
     #[serde(default)]
     pub enabled_after_import_request: Option<bool>,
@@ -157,30 +146,13 @@ struct PersistenceSection {
     pub timeout_seconds: Option<u64>,
 }
 
-impl Default for PersistenceSection {
-    fn default() -> Self {
-        Self {
-            enabled_after_import_request: None,
-            timeout_seconds: None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct TestSection {
     #[serde(default)]
     pub timeout_seconds: Option<u64>,
 }
 
-impl Default for TestSection {
-    fn default() -> Self {
-        Self {
-            timeout_seconds: None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct MenuSection {
     #[serde(default)]
     pub category: Option<String>,
@@ -188,16 +160,6 @@ struct MenuSection {
     pub exclusive: Option<bool>,
     #[serde(default)]
     pub timeout_seconds: Option<u64>,
-}
-
-impl Default for MenuSection {
-    fn default() -> Self {
-        Self {
-            category: None,
-            exclusive: None,
-            timeout_seconds: None,
-        }
-    }
 }
 
 impl DoorSection {
@@ -334,49 +296,44 @@ fn validate_manifest(
         });
     }
 
-    let package_name = trim_required(&manifest.package.name)
-        .ok_or_else(|| DoorError::InvalidDoorPackage {
+    let package_name =
+        trim_required(&manifest.package.name).ok_or_else(|| DoorError::InvalidDoorPackage {
             path: package_path.to_path_buf(),
             message: "package.name is required".to_string(),
         })?;
-    let package_id = trim_required(&manifest.package.id).ok_or_else(|| {
-        DoorError::InvalidDoorPackage {
+    let package_id =
+        trim_required(&manifest.package.id).ok_or_else(|| DoorError::InvalidDoorPackage {
             path: package_path.to_path_buf(),
             message: "package.id is required".to_string(),
-        }
-    })?;
-    let package_version = trim_required(&manifest.package.version).ok_or_else(|| {
-        DoorError::InvalidDoorPackage {
+        })?;
+    let package_version =
+        trim_required(&manifest.package.version).ok_or_else(|| DoorError::InvalidDoorPackage {
             path: package_path.to_path_buf(),
             message: "package.version is required".to_string(),
-        }
-    })?;
+        })?;
     validate_id_characters(package_path, "package.id", &package_id)?;
 
-    let legal_status = trim_required(&manifest.legal.status).ok_or_else(|| {
-        DoorError::InvalidDoorPackage {
+    let legal_status =
+        trim_required(&manifest.legal.status).ok_or_else(|| DoorError::InvalidDoorPackage {
             path: package_path.to_path_buf(),
             message: "legal.status is required".to_string(),
-        }
-    })?;
+        })?;
     let requires_key = manifest
         .legal
         .requires_key
         .or(manifest.package.requires_key)
         .unwrap_or(false);
 
-    let door_id = trim_required(&manifest.door.id).ok_or_else(|| {
-        DoorError::InvalidDoorPackage {
+    let door_id =
+        trim_required(&manifest.door.id).ok_or_else(|| DoorError::InvalidDoorPackage {
             path: package_path.to_path_buf(),
             message: "door.id is required".to_string(),
-        }
-    })?;
-    let door_name = trim_required(&manifest.door.name).ok_or_else(|| {
-        DoorError::InvalidDoorPackage {
+        })?;
+    let door_name =
+        trim_required(&manifest.door.name).ok_or_else(|| DoorError::InvalidDoorPackage {
             path: package_path.to_path_buf(),
             message: "door.name is required".to_string(),
-        }
-    })?;
+        })?;
     validate_id_characters(package_path, "door.id", &door_id)?;
 
     if manifest.door.runner.trim().is_empty() {
@@ -385,7 +342,12 @@ fn validate_manifest(
             message: "door.runner is required".to_string(),
         });
     }
-    if !manifest.door.runner.trim().eq_ignore_ascii_case("local:dosemu2") {
+    if !manifest
+        .door
+        .runner
+        .trim()
+        .eq_ignore_ascii_case("local:dosemu2")
+    {
         return Err(DoorError::InvalidDoorPackage {
             path: package_path.to_path_buf(),
             message: "unsupported runner; v1 packages must set door.runner = \"local:dosemu2\""
@@ -393,12 +355,11 @@ fn validate_manifest(
         });
     }
 
-    let command = trim_required(&manifest.door.command).ok_or_else(|| {
-        DoorError::InvalidDoorPackage {
+    let command =
+        trim_required(&manifest.door.command).ok_or_else(|| DoorError::InvalidDoorPackage {
             path: package_path.to_path_buf(),
             message: "door.command is required".to_string(),
-        }
-    })?;
+        })?;
 
     let working_directory = manifest
         .door
@@ -419,7 +380,8 @@ fn validate_manifest(
         .map(|value| normalize_drop_file(package_path, value))
         .transpose()?
         .or_else(|| {
-            manifest.access
+            manifest
+                .access
                 .supported_drop_files
                 .first()
                 .map(|value| normalize_drop_file(package_path, value))
@@ -427,11 +389,9 @@ fn validate_manifest(
                 .ok()
                 .flatten()
         })
-        .ok_or_else(|| {
-            DoorError::InvalidDoorPackage {
-                path: package_path.to_path_buf(),
-                message: "preferred drop-file format is required".to_string(),
-            }
+        .ok_or_else(|| DoorError::InvalidDoorPackage {
+            path: package_path.to_path_buf(),
+            message: "preferred drop-file format is required".to_string(),
         })?;
 
     let mut supported_drop_files = Vec::new();
@@ -446,13 +406,18 @@ fn validate_manifest(
     }
     supported_drop_files.sort();
     supported_drop_files.dedup();
-    if manifest.door.supported_drop_files.is_empty() && manifest.access.supported_drop_files.is_empty() {
+    if manifest.door.supported_drop_files.is_empty()
+        && manifest.access.supported_drop_files.is_empty()
+    {
         return Err(DoorError::InvalidDoorPackage {
             path: package_path.to_path_buf(),
             message: "door-support section requires supported drop-file formats".to_string(),
         });
     }
-    if !supported_drop_files.iter().any(|value| value == &preferred_drop_file) {
+    if !supported_drop_files
+        .iter()
+        .any(|value| value == &preferred_drop_file)
+    {
         return Err(DoorError::InvalidDoorPackage {
             path: package_path.to_path_buf(),
             message: format!(
@@ -550,10 +515,13 @@ fn verify_files(
     let mut verified = HashSet::new();
 
     for index in 0..archive.len() {
-        let mut entry = archive.by_index(index).map_err(|source| DoorError::InvalidDoorPackage {
-            path: package_path.to_path_buf(),
-            message: format!("invalid archive entry at index {index}: {source}"),
-        })?;
+        let mut entry =
+            archive
+                .by_index(index)
+                .map_err(|source| DoorError::InvalidDoorPackage {
+                    path: package_path.to_path_buf(),
+                    message: format!("invalid archive entry at index {index}: {source}"),
+                })?;
         let entry_name = entry.name().to_string();
         validate_entry_name(package_path, &entry_name)?;
         validate_entry_mode(package_path, &entry_name, &entry)?;
@@ -562,6 +530,30 @@ fn verify_files(
             continue;
         }
         if entry.is_dir() || entry_name.ends_with('/') {
+            if !is_allowed_package_directory(&entry_name) {
+                return Err(DoorError::InvalidDoorPackage {
+                    path: package_path.to_path_buf(),
+                    message: format!("unsupported package directory {entry_name:?}"),
+                });
+            }
+            continue;
+        }
+        if !is_allowed_package_file(&entry_name) {
+            return Err(DoorError::InvalidDoorPackage {
+                path: package_path.to_path_buf(),
+                message: format!("unsupported package file {entry_name:?}"),
+            });
+        }
+        if entry_name.starts_with(DOCS_DIRECTORY) || entry_name.starts_with(TESTS_DIRECTORY) {
+            let expected =
+                checksums
+                    .get(&entry_name)
+                    .ok_or_else(|| DoorError::InvalidDoorPackage {
+                        path: package_path.to_path_buf(),
+                        message: format!("missing checksum for package file {entry_name:?}"),
+                    })?;
+            verify_file_checksum(package_path, &mut entry, expected)?;
+            verified.insert(entry_name);
             continue;
         }
         if !entry_name.starts_with(FILES_DIRECTORY) {
@@ -579,11 +571,9 @@ fn verify_files(
             .or_else(|| checksums.get(&format!("./{entry_name}")))
             .or_else(|| checksums.get(entry_relative))
             .or_else(|| checksums.get(&format!("./{entry_relative}")));
-        let expected = expected.ok_or_else(|| {
-            DoorError::InvalidDoorPackage {
-                path: package_path.to_path_buf(),
-                message: format!("missing checksum for file {entry_relative:?}"),
-            }
+        let expected = expected.ok_or_else(|| DoorError::InvalidDoorPackage {
+            path: package_path.to_path_buf(),
+            message: format!("missing checksum for file {entry_relative:?}"),
         })?;
         verify_file_checksum(package_path, &mut entry, expected)?;
         verified.insert(format!("files/{entry_relative}"));
@@ -593,7 +583,11 @@ fn verify_files(
 
     for expected_path in checksums.keys() {
         let normalized = normalize_for_lookup(expected_path);
-        if normalized.starts_with(FILES_DIRECTORY) && !verified.contains(&normalized) {
+        if (normalized.starts_with(FILES_DIRECTORY)
+            || normalized.starts_with(DOCS_DIRECTORY)
+            || normalized.starts_with(TESTS_DIRECTORY))
+            && !verified.contains(&normalized)
+        {
             return Err(DoorError::InvalidDoorPackage {
                 path: package_path.to_path_buf(),
                 message: format!("checksum entry has no matching files/ payload: {expected_path}"),
@@ -611,22 +605,37 @@ fn verify_files(
     Ok((file_count, total_unpacked_size))
 }
 
+fn is_allowed_package_file(entry_name: &str) -> bool {
+    entry_name.starts_with(FILES_DIRECTORY)
+        || entry_name.starts_with(DOCS_DIRECTORY)
+        || entry_name.starts_with(TESTS_DIRECTORY)
+}
+
+fn is_allowed_package_directory(entry_name: &str) -> bool {
+    matches!(entry_name, "files/" | "docs/" | "tests/")
+        || entry_name.starts_with(FILES_DIRECTORY)
+        || entry_name.starts_with(DOCS_DIRECTORY)
+        || entry_name.starts_with(TESTS_DIRECTORY)
+}
+
 fn read_text_entry(
     archive: &mut ZipArchive<File>,
     package_path: &Path,
     entry_name: &str,
 ) -> Result<String, DoorError> {
-    let mut entry = archive.by_name(entry_name).map_err(|_| DoorError::InvalidDoorPackage {
-        path: package_path.to_path_buf(),
-        message: format!("missing required entry: {entry_name}"),
-    })?;
+    let mut entry = archive
+        .by_name(entry_name)
+        .map_err(|_| DoorError::InvalidDoorPackage {
+            path: package_path.to_path_buf(),
+            message: format!("missing required entry: {entry_name}"),
+        })?;
     let mut text = String::new();
-    entry.read_to_string(&mut text).map_err(|source| {
-        DoorError::ReadDoorPackage {
+    entry
+        .read_to_string(&mut text)
+        .map_err(|source| DoorError::ReadDoorPackage {
             path: package_path.to_path_buf(),
             source,
-        }
-    })?;
+        })?;
     Ok(text)
 }
 
@@ -693,6 +702,21 @@ fn validate_entry_name(package_path: &Path, entry_name: &str) -> Result<(), Door
             path: package_path.to_path_buf(),
             message: format!(
                 "invalid path {entry_name:?}: windows drive-style paths are not allowed"
+            ),
+        });
+    }
+    let trimmed = entry_name.trim_end_matches('/');
+    if trimmed.is_empty() || trimmed.split('/').any(str::is_empty) {
+        return Err(DoorError::InvalidDoorPackage {
+            path: package_path.to_path_buf(),
+            message: format!("invalid path {entry_name:?}: empty path components are not allowed"),
+        });
+    }
+    if trimmed.split('/').any(is_windows_drive_path) {
+        return Err(DoorError::InvalidDoorPackage {
+            path: package_path.to_path_buf(),
+            message: format!(
+                "invalid path {entry_name:?}: windows drive-style path components are not allowed"
             ),
         });
     }
@@ -766,12 +790,12 @@ fn verify_file_checksum(
     let mut hasher = Sha256::new();
     let mut buffer = [0u8; 8192];
     loop {
-        let count = entry.read(&mut buffer).map_err(|source| {
-            DoorError::ReadDoorPackage {
+        let count = entry
+            .read(&mut buffer)
+            .map_err(|source| DoorError::ReadDoorPackage {
                 path: package_path.to_path_buf(),
                 source,
-            }
-        })?;
+            })?;
         if count == 0 {
             break;
         }
@@ -807,23 +831,18 @@ fn validate_id_characters(package_path: &Path, field: &str, value: &str) -> Resu
 
 fn trim_required(value: &str) -> Option<String> {
     let value = value.trim().to_string();
-    if value.is_empty() {
-        None
-    } else {
-        Some(value)
-    }
+    if value.is_empty() { None } else { Some(value) }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::HashMap;
-    use std::io;
+    use std::io::{self, Write};
+    use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
-    use zip::write::{FileOptions, SimpleFileOptions};
     use zip::ZipWriter;
-
-    use crate::OXDOOR_PACKAGE_FORMAT;
+    use zip::write::{FileOptions, SimpleFileOptions};
 
     fn build_manifest(override_runner: &str, preferred_drop_file: &str, kind: &str) -> String {
         format!(
@@ -929,6 +948,45 @@ timeout_seconds = 120
         Ok(())
     }
 
+    fn write_fixture_with_extra_entries(
+        path: &Path,
+        extra_entries: &[(&str, &[u8], Option<u32>)],
+    ) -> io::Result<()> {
+        let file = File::create(path)?;
+        let mut writer = ZipWriter::new(file);
+        let options: FileOptions<'_, ()> =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        let manifest = build_manifest("local:dosemu2", "DOOR.SYS", "full");
+
+        writer.start_file(OXDOOR_MANIFEST_FILE, options)?;
+        writer.write_all(manifest.as_bytes())?;
+
+        let mut checksums = HashMap::new();
+        writer.start_file(format!("{FILES_DIRECTORY}readme.txt"), options)?;
+        writer.write_all(b"hello")?;
+        checksums.insert(
+            format!("{FILES_DIRECTORY}readme.txt"),
+            hex::encode(Sha256::digest(b"hello")),
+        );
+
+        for (name, bytes, mode) in extra_entries {
+            let entry_options = mode.map_or(options, |mode| options.unix_permissions(mode));
+            writer.start_file(*name, entry_options)?;
+            writer.write_all(bytes)?;
+            checksums.insert((*name).to_string(), hex::encode(Sha256::digest(bytes)));
+        }
+
+        let checksum_contents = checksums
+            .into_iter()
+            .map(|(name, digest)| format!("{digest}  {name}\n"))
+            .collect::<String>();
+        writer.start_file(OXDOOR_CHECKSUM_FILE, options)?;
+        writer.write_all(checksum_contents.as_bytes())?;
+
+        writer.finish()?;
+        Ok(())
+    }
+
     fn temp_dir() -> PathBuf {
         let path = std::env::temp_dir().join(format!(
             "oxidebbs-oxdoor-test-{}-{}",
@@ -971,7 +1029,10 @@ timeout_seconds = 120
         assert_eq!(summary.file_count, 2);
         assert_eq!(summary.total_unpacked_size, 12);
         assert_eq!(summary.preferred_drop_file, "DOOR.SYS");
-        assert_eq!(summary.supported_drop_files, vec!["CHAIN.TXT","DORINFO1.DEF","DOOR.SYS"]);
+        assert_eq!(
+            summary.supported_drop_files,
+            vec!["CHAIN.TXT", "DOOR.SYS", "DORINFO1.DEF"]
+        );
         cleanup(&temp);
     }
 
@@ -1041,6 +1102,26 @@ timeout_seconds = 120
     }
 
     #[test]
+    fn inspect_package_rejects_invalid_format() {
+        let temp = temp_dir();
+        let package_path = temp.join("bad-format.oxdoor");
+        let manifest = build_manifest("local:dosemu2", "DOOR.SYS", "full")
+            .replace(OXDOOR_PACKAGE_FORMAT, "oxide-door-package-v2");
+        write_fixture(
+            &package_path,
+            &manifest,
+            &[("readme.txt", b"hello")],
+            true,
+            false,
+            None,
+        )
+        .expect("write");
+        let error = inspect_oxide_door_package(&package_path).expect_err("bad format");
+        assert!(error.to_string().contains("unsupported package format"));
+        cleanup(&temp);
+    }
+
+    #[test]
     fn inspect_package_rejects_unsupported_runner() {
         let temp = temp_dir();
         let package_path = temp.join("bad-runner.oxdoor");
@@ -1080,8 +1161,7 @@ timeout_seconds = 120
     fn inspect_package_rejects_checksum_mismatch() {
         let temp = temp_dir();
         let package_path = temp.join("bad-checksum.oxdoor");
-        let overrides =
-            HashMap::from([("files/readme.txt".to_string(), "ff".repeat(32) + "11")]);
+        let overrides = HashMap::from([("files/readme.txt".to_string(), "00".repeat(32))]);
         write_fixture(
             &package_path,
             &build_manifest("local:dosemu2", "DOOR.SYS", "full"),
@@ -1113,6 +1193,61 @@ timeout_seconds = 120
         assert!(
             error.to_string().contains("traversal") || error.to_string().contains("not allowed")
         );
+        cleanup(&temp);
+    }
+
+    #[test]
+    fn inspect_package_rejects_absolute_path_entry() {
+        let temp = temp_dir();
+        let package_path = temp.join("absolute-path.oxdoor");
+        write_fixture_with_extra_entries(&package_path, &[("/tmp/evil.exe", b"bad", None)])
+            .expect("write");
+        let error = inspect_oxide_door_package(&package_path).expect_err("absolute path");
+        assert!(error.to_string().contains("absolute paths"));
+        cleanup(&temp);
+    }
+
+    #[test]
+    fn inspect_package_rejects_backslash_path_entry() {
+        let temp = temp_dir();
+        let package_path = temp.join("backslash-path.oxdoor");
+        write_fixture_with_extra_entries(&package_path, &[("files\\..\\evil.exe", b"bad", None)])
+            .expect("write");
+        let error = inspect_oxide_door_package(&package_path).expect_err("backslash path");
+        assert!(error.to_string().contains("backslashes"));
+        cleanup(&temp);
+    }
+
+    #[test]
+    fn inspect_package_rejects_double_slash_under_files() {
+        let temp = temp_dir();
+        let package_path = temp.join("double-slash.oxdoor");
+        write_fixture_with_extra_entries(&package_path, &[("files//tmp/evil.exe", b"bad", None)])
+            .expect("write");
+        let error = inspect_oxide_door_package(&package_path).expect_err("double slash");
+        assert!(error.to_string().contains("empty path components"));
+        cleanup(&temp);
+    }
+
+    #[test]
+    fn inspect_package_rejects_nested_windows_drive_path_entry() {
+        let temp = temp_dir();
+        let package_path = temp.join("windows-drive.oxdoor");
+        write_fixture_with_extra_entries(&package_path, &[("files/C:/evil.exe", b"bad", None)])
+            .expect("write");
+        let error = inspect_oxide_door_package(&package_path).expect_err("windows drive");
+        assert!(error.to_string().contains("windows drive-style"));
+        cleanup(&temp);
+    }
+
+    #[test]
+    fn inspect_package_rejects_extra_root_files() {
+        let temp = temp_dir();
+        let package_path = temp.join("extra-root.oxdoor");
+        write_fixture_with_extra_entries(&package_path, &[("postinstall.sh", b"echo bad", None)])
+            .expect("write");
+        let error = inspect_oxide_door_package(&package_path).expect_err("extra root file");
+        assert!(error.to_string().contains("unsupported package file"));
         cleanup(&temp);
     }
 }
