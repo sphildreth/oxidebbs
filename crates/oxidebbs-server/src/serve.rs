@@ -43,8 +43,8 @@ use oxidebbs_telnet::{
     TransportError,
 };
 use oxidebbs_term::{
-    LoadedScreen, ScreenAsset as TermScreenAsset, TerminalCapabilities, TerminalProfile,
-    encode_cp437,
+    LoadedScreen, ScreenAsset as TermScreenAsset, TerminalCapabilities, TerminalCharset,
+    TerminalProfile, char_to_petscii_byte, encode_cp437, render_petscii_lossy,
 };
 use oxidebbs_transfer::adapter::TransportAdapter;
 use oxidebbs_transfer::{
@@ -457,7 +457,7 @@ where
 }
 
 async fn reject_connection(mut stream: TcpStream) -> ServeResult<()> {
-    let bytes = encode_text(REJECTION_MESSAGE);
+    let bytes = encode_text(REJECTION_MESSAGE, TerminalCharset::Cp437);
     stream.write_all(&bytes).await?;
     stream.shutdown().await?;
     Ok(())
@@ -803,6 +803,7 @@ async fn handle_caller_transport<T: Transport>(
             &mut transport,
             runtime.take_node_commands(node_number_u16),
             &mut disconnect_reason,
+            capabilities.charset,
         )
         .await?
         {
@@ -820,8 +821,13 @@ async fn handle_caller_transport<T: Transport>(
 
         let event = match wait {
             CallerWait::Runtime(commands) => {
-                if process_runtime_commands(&mut transport, commands, &mut disconnect_reason)
-                    .await?
+                if process_runtime_commands(
+                    &mut transport,
+                    commands,
+                    &mut disconnect_reason,
+                    capabilities.charset,
+                )
+                .await?
                 {
                     break;
                 }
@@ -839,7 +845,12 @@ async fn handle_caller_transport<T: Transport>(
             }
             Ok(CallerInput::IdleTimeout) => {
                 disconnect_reason = "idle_timeout".to_string();
-                send_text(&mut transport, "Idle timeout. Goodbye.\r\n").await?;
+                send_text(
+                    &mut transport,
+                    "Idle timeout. Goodbye.\r\n",
+                    capabilities.charset,
+                )
+                .await?;
                 break;
             }
             Err(error) => {
@@ -879,7 +890,13 @@ async fn handle_caller_transport<T: Transport>(
                         &screen_context,
                     )
                     .await?;
-                    send_menu_prompt(&mut transport, &current_menu, &screen_context).await?;
+                    send_menu_prompt(
+                        &mut transport,
+                        &current_menu,
+                        &screen_context,
+                        capabilities.charset,
+                    )
+                    .await?;
                     continue;
                 }
                 if key == "R" && current_menu.route_entry("R").is_none() {
@@ -891,7 +908,13 @@ async fn handle_caller_transport<T: Transport>(
                         &screen_context,
                     )
                     .await?;
-                    send_menu_prompt(&mut transport, &current_menu, &screen_context).await?;
+                    send_menu_prompt(
+                        &mut transport,
+                        &current_menu,
+                        &screen_context,
+                        capabilities.charset,
+                    )
+                    .await?;
                     continue;
                 }
 
@@ -901,8 +924,15 @@ async fn handle_caller_transport<T: Transport>(
                         && let Some(entry) = current_menu.route_entry(&key)
                         && entry.min_security_level > 0
                     {
-                        send_text(&mut transport, ACCESS_DENIED_MESSAGE).await?;
-                        send_menu_prompt(&mut transport, &current_menu, &screen_context).await?;
+                        send_text(&mut transport, ACCESS_DENIED_MESSAGE, capabilities.charset)
+                            .await?;
+                        send_menu_prompt(
+                            &mut transport,
+                            &current_menu,
+                            &screen_context,
+                            capabilities.charset,
+                        )
+                        .await?;
                         continue;
                     }
                     match route {
@@ -919,8 +949,13 @@ async fn handle_caller_transport<T: Transport>(
                                 idle_timeout,
                                 disconnect_reason: &mut disconnect_reason,
                             };
-                            match run_login_flow(&mut transport, &mut input, &mut auth_state)
-                                .await?
+                            match run_login_flow(
+                                &mut transport,
+                                &mut input,
+                                &mut auth_state,
+                                capabilities.charset,
+                            )
+                            .await?
                             {
                                 AuthFlowResult::Success => {
                                     if let Some(user) = authenticated_user.as_ref() {
@@ -956,6 +991,7 @@ async fn handle_caller_transport<T: Transport>(
                                         &mut transport,
                                         &current_menu,
                                         &screen_context,
+                                        capabilities.charset,
                                     )
                                     .await?;
                                 }
@@ -975,8 +1011,13 @@ async fn handle_caller_transport<T: Transport>(
                                 idle_timeout,
                                 disconnect_reason: &mut disconnect_reason,
                             };
-                            match run_new_user_flow(&mut transport, &mut input, &mut auth_state)
-                                .await?
+                            match run_new_user_flow(
+                                &mut transport,
+                                &mut input,
+                                &mut auth_state,
+                                capabilities.charset,
+                            )
+                            .await?
                             {
                                 AuthFlowResult::Success => {
                                     if let Some(user) = authenticated_user.as_ref() {
@@ -1012,6 +1053,7 @@ async fn handle_caller_transport<T: Transport>(
                                         &mut transport,
                                         &current_menu,
                                         &screen_context,
+                                        capabilities.charset,
                                     )
                                     .await?;
                                 }
@@ -1034,23 +1076,43 @@ async fn handle_caller_transport<T: Transport>(
                             debug!(node = %node_number, submenu = %menu_id, "caller selected submenu");
                             if let Some(submenu) = resolve_submenu(&menus, &menu_id) {
                                 current_menu = Arc::clone(&submenu);
-                                send_menu_prompt(&mut transport, &current_menu, &screen_context)
-                                    .await?;
+                                send_menu_prompt(
+                                    &mut transport,
+                                    &current_menu,
+                                    &screen_context,
+                                    capabilities.charset,
+                                )
+                                .await?;
                             } else {
                                 send_text(
                                     &mut transport,
                                     "Configured submenu menu is missing.\r\n",
+                                    capabilities.charset,
                                 )
                                 .await?;
-                                send_menu_prompt(&mut transport, &current_menu, &screen_context)
-                                    .await?;
+                                send_menu_prompt(
+                                    &mut transport,
+                                    &current_menu,
+                                    &screen_context,
+                                    capabilities.charset,
+                                )
+                                .await?;
                             }
                         }
                         _ => {
-                            send_text(&mut transport, "Select Login, New User, or Goodbye.\r\n")
-                                .await?;
-                            send_menu_prompt(&mut transport, &current_menu, &screen_context)
-                                .await?;
+                            send_text(
+                                &mut transport,
+                                "Select Login, New User, or Goodbye.\r\n",
+                                capabilities.charset,
+                            )
+                            .await?;
+                            send_menu_prompt(
+                                &mut transport,
+                                &current_menu,
+                                &screen_context,
+                                capabilities.charset,
+                            )
+                            .await?;
                         }
                     }
                 } else {
@@ -1066,8 +1128,15 @@ async fn handle_caller_transport<T: Transport>(
                             node = %node_number,
                             "caller denied by menu item min_security_level"
                         );
-                        send_text(&mut transport, ACCESS_DENIED_MESSAGE).await?;
-                        send_menu_prompt(&mut transport, &current_menu, &screen_context).await?;
+                        send_text(&mut transport, ACCESS_DENIED_MESSAGE, capabilities.charset)
+                            .await?;
+                        send_menu_prompt(
+                            &mut transport,
+                            &current_menu,
+                            &screen_context,
+                            capabilities.charset,
+                        )
+                        .await?;
                         continue;
                     }
                     match current_menu.route(&key) {
@@ -1086,6 +1155,7 @@ async fn handle_caller_transport<T: Transport>(
                                 &mut transport,
                                 &mut input,
                                 &mut door_state,
+                                capabilities.charset,
                             )
                             .await?
                             {
@@ -1095,6 +1165,7 @@ async fn handle_caller_transport<T: Transport>(
                                         &mut transport,
                                         &current_menu,
                                         &screen_context,
+                                        capabilities.charset,
                                     )
                                     .await?;
                                 }
@@ -1116,6 +1187,7 @@ async fn handle_caller_transport<T: Transport>(
                                 &mut transport,
                                 &mut input,
                                 &mut message_state,
+                                capabilities.charset,
                             )
                             .await?
                             {
@@ -1125,6 +1197,7 @@ async fn handle_caller_transport<T: Transport>(
                                         &mut transport,
                                         &current_menu,
                                         &screen_context,
+                                        capabilities.charset,
                                     )
                                     .await?;
                                 }
@@ -1145,6 +1218,7 @@ async fn handle_caller_transport<T: Transport>(
                                 idle_timeout,
                                 &mut disconnect_reason,
                                 node_number_u16,
+                                capabilities.charset,
                             )
                             .await?
                             {
@@ -1154,6 +1228,7 @@ async fn handle_caller_transport<T: Transport>(
                                         &mut transport,
                                         &current_menu,
                                         &screen_context,
+                                        capabilities.charset,
                                     )
                                     .await?;
                                 }
@@ -1162,10 +1237,19 @@ async fn handle_caller_transport<T: Transport>(
                         }
                         Some(MenuAction::NewUser) => {
                             debug!(node = %node_number, "authenticated caller selected new-user action");
-                            send_text(&mut transport, "Already signed in. Return to menu.\r\n")
-                                .await?;
-                            send_menu_prompt(&mut transport, &current_menu, &screen_context)
-                                .await?;
+                            send_text(
+                                &mut transport,
+                                "Already signed in. Return to menu.\r\n",
+                                capabilities.charset,
+                            )
+                            .await?;
+                            send_menu_prompt(
+                                &mut transport,
+                                &current_menu,
+                                &screen_context,
+                                capabilities.charset,
+                            )
+                            .await?;
                         }
                         Some(MenuAction::Logoff) => {
                             debug!(node = %node_number, "caller selected main-menu logoff");
@@ -1189,31 +1273,56 @@ async fn handle_caller_transport<T: Transport>(
                                 &screen_context,
                             )
                             .await?;
-                            send_menu_prompt(&mut transport, &current_menu, &screen_context)
-                                .await?;
+                            send_menu_prompt(
+                                &mut transport,
+                                &current_menu,
+                                &screen_context,
+                                capabilities.charset,
+                            )
+                            .await?;
                         }
                         Some(MenuAction::Submenu { menu_id }) => {
                             debug!(node = %node_number, submenu = %menu_id, "caller selected submenu");
                             if let Some(submenu) = resolve_submenu(&menus, &menu_id) {
                                 current_menu = Arc::clone(&submenu);
-                                send_menu_prompt(&mut transport, &current_menu, &screen_context)
-                                    .await?;
+                                send_menu_prompt(
+                                    &mut transport,
+                                    &current_menu,
+                                    &screen_context,
+                                    capabilities.charset,
+                                )
+                                .await?;
                             } else {
                                 send_text(
                                     &mut transport,
                                     "Configured submenu menu is missing.\r\n",
+                                    capabilities.charset,
                                 )
                                 .await?;
-                                send_menu_prompt(&mut transport, &current_menu, &screen_context)
-                                    .await?;
+                                send_menu_prompt(
+                                    &mut transport,
+                                    &current_menu,
+                                    &screen_context,
+                                    capabilities.charset,
+                                )
+                                .await?;
                             }
                         }
                         Some(MenuAction::Login) => {
                             debug!(node = %node_number, "authenticated caller selected login action");
-                            send_text(&mut transport, "Already signed in. Return to menu.\r\n")
-                                .await?;
-                            send_menu_prompt(&mut transport, &current_menu, &screen_context)
-                                .await?;
+                            send_text(
+                                &mut transport,
+                                "Already signed in. Return to menu.\r\n",
+                                capabilities.charset,
+                            )
+                            .await?;
+                            send_menu_prompt(
+                                &mut transport,
+                                &current_menu,
+                                &screen_context,
+                                capabilities.charset,
+                            )
+                            .await?;
                         }
                         Some(MenuAction::Noop) => {
                             debug!(node = %node_number, "caller selected noop action");
@@ -1225,9 +1334,15 @@ async fn handle_caller_transport<T: Transport>(
                                 key = %key,
                                 "caller selected unknown menu key"
                             );
-                            send_text(&mut transport, "Unknown option.\r\n").await?;
-                            send_menu_prompt(&mut transport, &current_menu, &screen_context)
+                            send_text(&mut transport, "Unknown option.\r\n", capabilities.charset)
                                 .await?;
+                            send_menu_prompt(
+                                &mut transport,
+                                &current_menu,
+                                &screen_context,
+                                capabilities.charset,
+                            )
+                            .await?;
                         }
                     }
                 }
@@ -1514,6 +1629,7 @@ async fn run_login_flow<T: Transport>(
     transport: &mut T,
     input: &mut InputSession,
     state: &mut AuthFlowState<'_>,
+    charset: TerminalCharset,
 ) -> ServeResult<AuthFlowResult> {
     let db = state.db;
     let node_number = state.node_number;
@@ -1522,41 +1638,59 @@ async fn run_login_flow<T: Transport>(
     let disconnect_reason = &mut *state.disconnect_reason;
     let authenticated_user = &mut *state.authenticated_user;
 
-    send_text(transport, "\r\n-- Login --\r\n").await?;
+    send_text(transport, "\r\n-- Login --\r\n", charset).await?;
 
-    let alias =
-        match prompt_for_line(transport, input, idle_timeout, false, false, "Alias: ").await? {
-            PromptLineResult::Value(value) => value,
-            PromptLineResult::Disconnected => {
-                *disconnect_reason = "caller_dropped_during_login".to_string();
-                return Ok(AuthFlowResult::Exit);
-            }
-            PromptLineResult::IdleTimeout => {
-                *disconnect_reason = "idle_timeout".to_string();
-                send_text(transport, "Idle timeout. Goodbye.\r\n").await?;
-                return Ok(AuthFlowResult::Exit);
-            }
-            PromptLineResult::Rejected => {
-                unreachable!("prompt_for_line handles rejected input internally");
-            }
-        };
+    let alias = match prompt_for_line(
+        transport,
+        input,
+        idle_timeout,
+        false,
+        false,
+        "Alias: ",
+        charset,
+    )
+    .await?
+    {
+        PromptLineResult::Value(value) => value,
+        PromptLineResult::Disconnected => {
+            *disconnect_reason = "caller_dropped_during_login".to_string();
+            return Ok(AuthFlowResult::Exit);
+        }
+        PromptLineResult::IdleTimeout => {
+            *disconnect_reason = "idle_timeout".to_string();
+            send_text(transport, "Idle timeout. Goodbye.\r\n", charset).await?;
+            return Ok(AuthFlowResult::Exit);
+        }
+        PromptLineResult::Rejected => {
+            unreachable!("prompt_for_line handles rejected input internally");
+        }
+    };
 
-    let password =
-        match prompt_for_line(transport, input, idle_timeout, false, true, "Password: ").await? {
-            PromptLineResult::Value(value) => value,
-            PromptLineResult::Disconnected => {
-                *disconnect_reason = "caller_dropped_during_login".to_string();
-                return Ok(AuthFlowResult::Exit);
-            }
-            PromptLineResult::IdleTimeout => {
-                *disconnect_reason = "idle_timeout".to_string();
-                send_text(transport, "Idle timeout. Goodbye.\r\n").await?;
-                return Ok(AuthFlowResult::Exit);
-            }
-            PromptLineResult::Rejected => {
-                unreachable!("prompt_for_line handles rejected input internally");
-            }
-        };
+    let password = match prompt_for_line(
+        transport,
+        input,
+        idle_timeout,
+        false,
+        true,
+        "Password: ",
+        charset,
+    )
+    .await?
+    {
+        PromptLineResult::Value(value) => value,
+        PromptLineResult::Disconnected => {
+            *disconnect_reason = "caller_dropped_during_login".to_string();
+            return Ok(AuthFlowResult::Exit);
+        }
+        PromptLineResult::IdleTimeout => {
+            *disconnect_reason = "idle_timeout".to_string();
+            send_text(transport, "Idle timeout. Goodbye.\r\n", charset).await?;
+            return Ok(AuthFlowResult::Exit);
+        }
+        PromptLineResult::Rejected => {
+            unreachable!("prompt_for_line handles rejected input internally");
+        }
+    };
 
     let login_at = current_timestamp(db)?;
     let alias_scope_key = normalize_alias(&alias);
@@ -1569,7 +1703,7 @@ async fn run_login_flow<T: Transport>(
             alias_scope = %alias_scope_key,
             "login rejected by rate limiter"
         );
-        send_text(transport, LOGIN_LOCKOUT_MESSAGE).await?;
+        send_text(transport, LOGIN_LOCKOUT_MESSAGE, charset).await?;
         return Ok(AuthFlowResult::Retry);
     }
 
@@ -1597,7 +1731,7 @@ async fn run_login_flow<T: Transport>(
             alias_scope = %alias_scope_key,
             "login rejected for unknown alias"
         );
-        send_text(transport, INVALID_LOGIN_MESSAGE).await?;
+        send_text(transport, INVALID_LOGIN_MESSAGE, charset).await?;
         return Ok(AuthFlowResult::Retry);
     };
 
@@ -1644,7 +1778,7 @@ async fn run_login_flow<T: Transport>(
             verification = ?verification,
             "login rejected for user"
         );
-        send_text(transport, INVALID_LOGIN_MESSAGE).await?;
+        send_text(transport, INVALID_LOGIN_MESSAGE, charset).await?;
         return Ok(AuthFlowResult::Retry);
     }
 
@@ -1704,7 +1838,7 @@ async fn run_login_flow<T: Transport>(
     );
 
     *authenticated_user = Some(user);
-    send_text(transport, "Login successful. Welcome back.\r\n").await?;
+    send_text(transport, "Login successful. Welcome back.\r\n", charset).await?;
     Ok(AuthFlowResult::Success)
 }
 
@@ -1712,6 +1846,7 @@ async fn run_new_user_flow<T: Transport>(
     transport: &mut T,
     input: &mut InputSession,
     state: &mut AuthFlowState<'_>,
+    charset: TerminalCharset,
 ) -> ServeResult<AuthFlowResult> {
     let db = state.db;
     let node_number = state.node_number;
@@ -1720,7 +1855,7 @@ async fn run_new_user_flow<T: Transport>(
     let disconnect_reason = &mut *state.disconnect_reason;
     let authenticated_user = &mut *state.authenticated_user;
 
-    send_text(transport, "\r\n-- Registration --\r\n").await?;
+    send_text(transport, "\r\n-- Registration --\r\n", charset).await?;
 
     let alias = match prompt_for_line(
         transport,
@@ -1729,6 +1864,7 @@ async fn run_new_user_flow<T: Transport>(
         false,
         false,
         "Choose an alias: ",
+        charset,
     )
     .await?
     {
@@ -1739,7 +1875,7 @@ async fn run_new_user_flow<T: Transport>(
         }
         PromptLineResult::IdleTimeout => {
             *disconnect_reason = "idle_timeout".to_string();
-            send_text(transport, "Idle timeout. Goodbye.\r\n").await?;
+            send_text(transport, "Idle timeout. Goodbye.\r\n", charset).await?;
             return Ok(AuthFlowResult::Exit);
         }
         PromptLineResult::Rejected => {
@@ -1747,22 +1883,31 @@ async fn run_new_user_flow<T: Transport>(
         }
     };
 
-    let real_name =
-        match prompt_for_line(transport, input, idle_timeout, false, false, "Real name: ").await? {
-            PromptLineResult::Value(value) => value,
-            PromptLineResult::Disconnected => {
-                *disconnect_reason = "caller_dropped_during_login".to_string();
-                return Ok(AuthFlowResult::Exit);
-            }
-            PromptLineResult::IdleTimeout => {
-                *disconnect_reason = "idle_timeout".to_string();
-                send_text(transport, "Idle timeout. Goodbye.\r\n").await?;
-                return Ok(AuthFlowResult::Exit);
-            }
-            PromptLineResult::Rejected => {
-                unreachable!("prompt_for_line handles rejected input internally");
-            }
-        };
+    let real_name = match prompt_for_line(
+        transport,
+        input,
+        idle_timeout,
+        false,
+        false,
+        "Real name: ",
+        charset,
+    )
+    .await?
+    {
+        PromptLineResult::Value(value) => value,
+        PromptLineResult::Disconnected => {
+            *disconnect_reason = "caller_dropped_during_login".to_string();
+            return Ok(AuthFlowResult::Exit);
+        }
+        PromptLineResult::IdleTimeout => {
+            *disconnect_reason = "idle_timeout".to_string();
+            send_text(transport, "Idle timeout. Goodbye.\r\n", charset).await?;
+            return Ok(AuthFlowResult::Exit);
+        }
+        PromptLineResult::Rejected => {
+            unreachable!("prompt_for_line handles rejected input internally");
+        }
+    };
 
     let email = match prompt_for_line(
         transport,
@@ -1771,6 +1916,7 @@ async fn run_new_user_flow<T: Transport>(
         true,
         false,
         "Email (optional): ",
+        charset,
     )
     .await?
     {
@@ -1788,7 +1934,7 @@ async fn run_new_user_flow<T: Transport>(
         }
         PromptLineResult::IdleTimeout => {
             *disconnect_reason = "idle_timeout".to_string();
-            send_text(transport, "Idle timeout. Goodbye.\r\n").await?;
+            send_text(transport, "Idle timeout. Goodbye.\r\n", charset).await?;
             return Ok(AuthFlowResult::Exit);
         }
         PromptLineResult::Rejected => {
@@ -1803,6 +1949,7 @@ async fn run_new_user_flow<T: Transport>(
         false,
         true,
         "Choose password: ",
+        charset,
     )
     .await?
     {
@@ -1813,7 +1960,7 @@ async fn run_new_user_flow<T: Transport>(
         }
         PromptLineResult::IdleTimeout => {
             *disconnect_reason = "idle_timeout".to_string();
-            send_text(transport, "Idle timeout. Goodbye.\r\n").await?;
+            send_text(transport, "Idle timeout. Goodbye.\r\n", charset).await?;
             return Ok(AuthFlowResult::Exit);
         }
         PromptLineResult::Rejected => {
@@ -1828,6 +1975,7 @@ async fn run_new_user_flow<T: Transport>(
         false,
         true,
         "Confirm password: ",
+        charset,
     )
     .await?
     {
@@ -1838,7 +1986,7 @@ async fn run_new_user_flow<T: Transport>(
         }
         PromptLineResult::IdleTimeout => {
             *disconnect_reason = "idle_timeout".to_string();
-            send_text(transport, "Idle timeout. Goodbye.\r\n").await?;
+            send_text(transport, "Idle timeout. Goodbye.\r\n", charset).await?;
             return Ok(AuthFlowResult::Exit);
         }
         PromptLineResult::Rejected => {
@@ -1847,7 +1995,7 @@ async fn run_new_user_flow<T: Transport>(
     };
 
     if password != password_confirmation {
-        send_text(transport, "Passwords did not match.\r\n").await?;
+        send_text(transport, "Passwords did not match.\r\n", charset).await?;
         return Ok(AuthFlowResult::Retry);
     }
 
@@ -1864,7 +2012,12 @@ async fn run_new_user_flow<T: Transport>(
     }) {
         Ok(user) => user,
         Err(error) => {
-            send_text(transport, &format!("Unable to create account: {error}\r\n")).await?;
+            send_text(
+                transport,
+                &format!("Unable to create account: {error}\r\n"),
+                charset,
+            )
+            .await?;
             return Ok(AuthFlowResult::Retry);
         }
     };
@@ -1892,7 +2045,7 @@ async fn run_new_user_flow<T: Transport>(
                     alias = %user.alias,
                     "new-user alias rejected as duplicate"
                 );
-                send_text(transport, "That alias is already in use.\r\n").await?;
+                send_text(transport, "That alias is already in use.\r\n", charset).await?;
                 return Ok(AuthFlowResult::Retry);
             }
             UserInsertError::Db(error) => {
@@ -1972,7 +2125,7 @@ async fn run_new_user_flow<T: Transport>(
         "new user created and signed in"
     );
 
-    send_text(transport, "Account created. Welcome.\r\n").await?;
+    send_text(transport, "Account created. Welcome.\r\n", charset).await?;
     Ok(AuthFlowResult::Success)
 }
 
@@ -1981,21 +2134,27 @@ async fn run_doors_flow(
     transport: &mut impl Transport,
     input: &mut InputSession,
     state: &mut DoorFlowState<'_>,
+    charset: TerminalCharset,
 ) -> ServeResult<MenuFlowResult> {
     let Some(user) = authenticated_user else {
-        send_text(transport, "You must be signed in to use doors.\r\n").await?;
+        send_text(
+            transport,
+            "You must be signed in to use doors.\r\n",
+            charset,
+        )
+        .await?;
         return Ok(MenuFlowResult::Continue);
     };
 
     let service = DoorService::new(state.db, state.config);
     let doors = service.list_enabled_doors()?;
     if doors.is_empty() {
-        send_text(transport, "No doors are available.\r\n").await?;
+        send_text(transport, "No doors are available.\r\n", charset).await?;
         return Ok(MenuFlowResult::Continue);
     }
 
     loop {
-        send_text(transport, &render_door_menu(&doors)).await?;
+        send_text(transport, &render_door_menu(&doors), charset).await?;
         let selected = match prompt_for_line(
             transport,
             input,
@@ -2003,6 +2162,7 @@ async fn run_doors_flow(
             true,
             false,
             "Door key or number (blank to return): ",
+            charset,
         )
         .await?
         {
@@ -2013,7 +2173,7 @@ async fn run_doors_flow(
             }
             PromptLineResult::IdleTimeout => {
                 *state.disconnect_reason = "idle_timeout".to_string();
-                send_text(transport, "Idle timeout. Goodbye.\r\n").await?;
+                send_text(transport, "Idle timeout. Goodbye.\r\n", charset).await?;
                 return Ok(MenuFlowResult::Exit);
             }
             PromptLineResult::Rejected => {
@@ -2025,7 +2185,7 @@ async fn run_doors_flow(
             DoorSelection::Return => return Ok(MenuFlowResult::Continue),
             DoorSelection::Door(door) => door,
             DoorSelection::Invalid => {
-                send_text(transport, "Unknown door.\r\n").await?;
+                send_text(transport, "Unknown door.\r\n", charset).await?;
                 continue;
             }
         };
@@ -2046,7 +2206,7 @@ async fn run_doors_flow(
                 door_key = %door.key,
                 "caller denied by door min_security_level"
             );
-            send_text(transport, ACCESS_DENIED_MESSAGE).await?;
+            send_text(transport, ACCESS_DENIED_MESSAGE, charset).await?;
             continue;
         }
 
@@ -2067,12 +2227,18 @@ async fn run_doors_flow(
             send_text(
                 transport,
                 "This door is not available right now. Contact the sysop.\r\n",
+                charset,
             )
             .await?;
             continue;
         }
 
-        send_text(transport, &format!("\r\nLaunching {}...\r\n", door.name)).await?;
+        send_text(
+            transport,
+            &format!("\r\nLaunching {}...\r\n", door.name),
+            charset,
+        )
+        .await?;
         let summary = service
             .execute_interactive(transport, state.runtime, user, state.node_number, door)
             .await?;
@@ -2102,7 +2268,7 @@ async fn run_doors_flow(
         }
 
         state.runtime.mark_node_main_menu(state.node_number);
-        send_text(transport, &door_summary_text(&summary)).await?;
+        send_text(transport, &door_summary_text(&summary), charset).await?;
         return Ok(MenuFlowResult::Continue);
     }
 }
@@ -2156,6 +2322,7 @@ async fn run_messages_flow(
     transport: &mut impl Transport,
     input: &mut InputSession,
     state: &mut MessageFlowState<'_>,
+    charset: TerminalCharset,
 ) -> ServeResult<MenuFlowResult> {
     let db = state.db;
     let idle_timeout = state.idle_timeout;
@@ -2164,26 +2331,32 @@ async fn run_messages_flow(
     let disconnect_reason = &mut *state.disconnect_reason;
 
     let Some(user) = authenticated_user else {
-        send_text(transport, "You must be signed in to use messages.\r\n").await?;
+        send_text(
+            transport,
+            "You must be signed in to use messages.\r\n",
+            charset,
+        )
+        .await?;
         return Ok(MenuFlowResult::Continue);
     };
 
-    ensure_default_message_area(db, transport).await?;
+    ensure_default_message_area(db, transport, charset).await?;
     let area_records = list_message_areas(db.db())?
         .into_iter()
         .filter(|area| area.enabled)
         .collect::<Vec<_>>();
     if area_records.is_empty() {
-        send_text(transport, "No message areas are configured.\r\n").await?;
+        send_text(transport, "No message areas are configured.\r\n", charset).await?;
         return Ok(MenuFlowResult::Continue);
     }
 
     loop {
-        send_text(transport, "\r\nMessage areas:\r\n").await?;
+        send_text(transport, "\r\nMessage areas:\r\n", charset).await?;
         for area in &area_records {
             send_text(
                 transport,
                 &format!("{} - {}\r\n", area.key, area.description),
+                charset,
             )
             .await?;
         }
@@ -2195,6 +2368,7 @@ async fn run_messages_flow(
             true,
             false,
             "Area key (blank to return): ",
+            charset,
         )
         .await?
         {
@@ -2205,7 +2379,7 @@ async fn run_messages_flow(
             }
             PromptLineResult::IdleTimeout => {
                 *disconnect_reason = "idle_timeout".to_string();
-                send_text(transport, "Idle timeout. Goodbye.\r\n").await?;
+                send_text(transport, "Idle timeout. Goodbye.\r\n", charset).await?;
                 return Ok(MenuFlowResult::Exit);
             }
             PromptLineResult::Rejected => {
@@ -2223,7 +2397,7 @@ async fn run_messages_flow(
         {
             Some(area) => area,
             None => {
-                send_text(transport, "Unknown area.\r\n").await?;
+                send_text(transport, "Unknown area.\r\n", charset).await?;
                 continue;
             }
         };
@@ -2240,7 +2414,7 @@ async fn run_messages_flow(
         loop {
             runtime.mark_node_reading_messages(node_number);
             let visible = visible_messages_for_user(db, &area, user.security_level)?;
-            display_message_list(transport, db, &area, &visible).await?;
+            display_message_list(transport, db, &area, &visible, charset).await?;
 
             let action = match prompt_for_line(
                 transport,
@@ -2249,6 +2423,7 @@ async fn run_messages_flow(
                 true,
                 false,
                 "Read (R), Post (P), Reply (Y), Back (blank): ",
+                charset,
             )
             .await?
             {
@@ -2259,7 +2434,7 @@ async fn run_messages_flow(
                 }
                 PromptLineResult::IdleTimeout => {
                     *disconnect_reason = "idle_timeout".to_string();
-                    send_text(transport, "Idle timeout. Goodbye.\r\n").await?;
+                    send_text(transport, "Idle timeout. Goodbye.\r\n", charset).await?;
                     return Ok(MenuFlowResult::Exit);
                 }
                 PromptLineResult::Rejected => {
@@ -2282,6 +2457,7 @@ async fn run_messages_flow(
                         disconnect_reason,
                         visible.len(),
                         "Message number to read: ",
+                        charset,
                     )
                     .await?
                     {
@@ -2298,7 +2474,7 @@ async fn run_messages_flow(
                         action = "read",
                         "caller selected message"
                     );
-                    display_message(transport, db, &visible[index]).await?;
+                    display_message(transport, db, &visible[index], charset).await?;
                 }
                 Some('P') => {
                     runtime.mark_node_posting_message(node_number);
@@ -2309,6 +2485,7 @@ async fn run_messages_flow(
                         false,
                         false,
                         "Message subject: ",
+                        charset,
                     )
                     .await?
                     {
@@ -2319,7 +2496,7 @@ async fn run_messages_flow(
                         }
                         PromptLineResult::IdleTimeout => {
                             *disconnect_reason = "idle_timeout".to_string();
-                            send_text(transport, "Idle timeout. Goodbye.\r\n").await?;
+                            send_text(transport, "Idle timeout. Goodbye.\r\n", charset).await?;
                             return Ok(MenuFlowResult::Exit);
                         }
                         PromptLineResult::Rejected => {
@@ -2327,11 +2504,17 @@ async fn run_messages_flow(
                         }
                     };
                     if validate_caller_cp437_text(&subject).is_err() {
-                        send_text(transport, CP437_INPUT_REJECT_LINE).await?;
+                        send_text(transport, CP437_INPUT_REJECT_LINE, charset).await?;
                         continue;
                     }
 
-                    let body = match prompt_for_message_body(transport, input, idle_timeout).await?
+                    let body = match prompt_for_message_body(
+                        transport,
+                        input,
+                        idle_timeout,
+                        charset,
+                    )
+                    .await?
                     {
                         PromptLineResult::Value(value) => value,
                         PromptLineResult::Disconnected => {
@@ -2340,7 +2523,7 @@ async fn run_messages_flow(
                         }
                         PromptLineResult::IdleTimeout => {
                             *disconnect_reason = "idle_timeout".to_string();
-                            send_text(transport, "Idle timeout. Goodbye.\r\n").await?;
+                            send_text(transport, "Idle timeout. Goodbye.\r\n", charset).await?;
                             return Ok(MenuFlowResult::Exit);
                         }
                         PromptLineResult::Rejected => {
@@ -2350,7 +2533,7 @@ async fn run_messages_flow(
                         }
                     };
                     if validate_caller_cp437_text(&body).is_err() {
-                        send_text(transport, CP437_INPUT_REJECT_LINE).await?;
+                        send_text(transport, CP437_INPUT_REJECT_LINE, charset).await?;
                         continue;
                     }
 
@@ -2366,8 +2549,12 @@ async fn run_messages_flow(
                     let message = match post_message(&area, draft) {
                         Ok(message) => message,
                         Err(error) => {
-                            send_text(transport, &format!("Cannot post message: {error}\r\n"))
-                                .await?;
+                            send_text(
+                                transport,
+                                &format!("Cannot post message: {error}\r\n"),
+                                charset,
+                            )
+                            .await?;
                             continue;
                         }
                     };
@@ -2394,12 +2581,12 @@ async fn run_messages_flow(
                         action = "post",
                         "caller posted message"
                     );
-                    send_text(transport, "Message posted.\r\n").await?;
+                    send_text(transport, "Message posted.\r\n", charset).await?;
                     runtime.mark_node_reading_messages(node_number);
                 }
                 Some('Y') => {
                     if visible.is_empty() {
-                        send_text(transport, "No messages to reply to.\r\n").await?;
+                        send_text(transport, "No messages to reply to.\r\n", charset).await?;
                         continue;
                     }
 
@@ -2411,6 +2598,7 @@ async fn run_messages_flow(
                         disconnect_reason,
                         visible.len(),
                         "Message number to reply to: ",
+                        charset,
                     )
                     .await?
                     {
@@ -2419,7 +2607,13 @@ async fn run_messages_flow(
                         MessageIndexPromptResult::Exit => return Ok(MenuFlowResult::Exit),
                     };
 
-                    let body = match prompt_for_message_body(transport, input, idle_timeout).await?
+                    let body = match prompt_for_message_body(
+                        transport,
+                        input,
+                        idle_timeout,
+                        charset,
+                    )
+                    .await?
                     {
                         PromptLineResult::Value(value) => value,
                         PromptLineResult::Disconnected => {
@@ -2428,7 +2622,7 @@ async fn run_messages_flow(
                         }
                         PromptLineResult::IdleTimeout => {
                             *disconnect_reason = "idle_timeout".to_string();
-                            send_text(transport, "Idle timeout. Goodbye.\r\n").await?;
+                            send_text(transport, "Idle timeout. Goodbye.\r\n", charset).await?;
                             return Ok(MenuFlowResult::Exit);
                         }
                         PromptLineResult::Rejected => {
@@ -2438,7 +2632,7 @@ async fn run_messages_flow(
                         }
                     };
                     if validate_caller_cp437_text(&body).is_err() {
-                        send_text(transport, CP437_INPUT_REJECT_LINE).await?;
+                        send_text(transport, CP437_INPUT_REJECT_LINE, charset).await?;
                         continue;
                     }
 
@@ -2452,7 +2646,8 @@ async fn run_messages_flow(
                     let message = match reply_message(&area, &visible[index], draft) {
                         Ok(message) => message,
                         Err(error) => {
-                            send_text(transport, &format!("Cannot reply: {error}\r\n")).await?;
+                            send_text(transport, &format!("Cannot reply: {error}\r\n"), charset)
+                                .await?;
                             continue;
                         }
                     };
@@ -2480,11 +2675,11 @@ async fn run_messages_flow(
                         action = "reply",
                         "caller posted reply"
                     );
-                    send_text(transport, "Reply posted.\r\n").await?;
+                    send_text(transport, "Reply posted.\r\n", charset).await?;
                     runtime.mark_node_reading_messages(node_number);
                 }
                 Some(_) => {
-                    send_text(transport, "Unknown command.\r\n").await?;
+                    send_text(transport, "Unknown command.\r\n", charset).await?;
                 }
             }
         }
@@ -2502,14 +2697,20 @@ async fn run_files_flow<T: Transport>(
     idle_timeout: Duration,
     disconnect_reason: &mut String,
     node_number: u16,
+    charset: TerminalCharset,
 ) -> ServeResult<MenuFlowResult> {
     let Some(user) = authenticated_user else {
-        send_text(transport, "You must be signed in to use file areas.\r\n").await?;
+        send_text(
+            transport,
+            "You must be signed in to use file areas.\r\n",
+            charset,
+        )
+        .await?;
         return Ok(MenuFlowResult::Continue);
     };
 
     if !config.file_transfers.enabled {
-        send_text(transport, "File transfers are disabled.\r\n").await?;
+        send_text(transport, "File transfers are disabled.\r\n", charset).await?;
         return Ok(MenuFlowResult::Continue);
     }
 
@@ -2519,12 +2720,12 @@ async fn run_files_flow<T: Transport>(
         .collect::<Vec<_>>();
 
     if file_areas.is_empty() {
-        send_text(transport, "No file areas are configured.\r\n").await?;
+        send_text(transport, "No file areas are configured.\r\n", charset).await?;
         return Ok(MenuFlowResult::Continue);
     }
 
     loop {
-        send_text(transport, "\r\nFile areas:\r\n").await?;
+        send_text(transport, "\r\nFile areas:\r\n", charset).await?;
         for (index, area) in file_areas.iter().enumerate() {
             let accessible = user.security_level >= area.read_security_level as i32;
             let marker = if accessible { " " } else { "*" };
@@ -2537,6 +2738,7 @@ async fn run_files_flow<T: Transport>(
                     area.key,
                     area.description
                 ),
+                charset,
             )
             .await?;
         }
@@ -2548,6 +2750,7 @@ async fn run_files_flow<T: Transport>(
             true,
             false,
             "Area number (blank to return): ",
+            charset,
         )
         .await?
         {
@@ -2558,11 +2761,11 @@ async fn run_files_flow<T: Transport>(
             }
             PromptLineResult::IdleTimeout => {
                 *disconnect_reason = "idle_timeout".to_string();
-                send_text(transport, "Idle timeout. Goodbye.\r\n").await?;
+                send_text(transport, "Idle timeout. Goodbye.\r\n", charset).await?;
                 return Ok(MenuFlowResult::Exit);
             }
             PromptLineResult::Rejected => {
-                send_text(transport, CP437_INPUT_REJECT_LINE).await?;
+                send_text(transport, CP437_INPUT_REJECT_LINE, charset).await?;
                 continue;
             }
         };
@@ -2575,22 +2778,32 @@ async fn run_files_flow<T: Transport>(
         let area_index = match trimmed.parse::<usize>() {
             Ok(n) if n >= 1 && n <= file_areas.len() => n - 1,
             _ => {
-                send_text(transport, "Invalid selection.\r\n").await?;
+                send_text(transport, "Invalid selection.\r\n", charset).await?;
                 continue;
             }
         };
 
         let area = &file_areas[area_index];
         if user.security_level < area.read_security_level as i32 {
-            send_text(transport, "Access denied. Security level too low.\r\n").await?;
+            send_text(
+                transport,
+                "Access denied. Security level too low.\r\n",
+                charset,
+            )
+            .await?;
             continue;
         }
 
         loop {
             let files = approved_files_for_area(db, area)?;
-            send_text(transport, &format!("\r\nFiles in {}:\r\n", area.name)).await?;
+            send_text(
+                transport,
+                &format!("\r\nFiles in {}:\r\n", area.name),
+                charset,
+            )
+            .await?;
             if files.is_empty() {
-                send_text(transport, "No approved files in this area.\r\n").await?;
+                send_text(transport, "No approved files in this area.\r\n", charset).await?;
             } else {
                 for (index, file) in files.iter().enumerate() {
                     send_text(
@@ -2601,6 +2814,7 @@ async fn run_files_flow<T: Transport>(
                             file.display_name,
                             file.size_bytes
                         ),
+                        charset,
                     )
                     .await?;
                 }
@@ -2613,6 +2827,7 @@ async fn run_files_flow<T: Transport>(
                 true,
                 false,
                 "Files: D)ownload U)pload R)eturn: ",
+                charset,
             )
             .await?
             {
@@ -2623,11 +2838,11 @@ async fn run_files_flow<T: Transport>(
                 }
                 PromptLineResult::IdleTimeout => {
                     *disconnect_reason = "idle_timeout".to_string();
-                    send_text(transport, "Idle timeout. Goodbye.\r\n").await?;
+                    send_text(transport, "Idle timeout. Goodbye.\r\n", charset).await?;
                     return Ok(MenuFlowResult::Exit);
                 }
                 PromptLineResult::Rejected => {
-                    send_text(transport, CP437_INPUT_REJECT_LINE).await?;
+                    send_text(transport, CP437_INPUT_REJECT_LINE, charset).await?;
                     continue;
                 }
             };
@@ -2639,7 +2854,12 @@ async fn run_files_flow<T: Transport>(
             match action.as_str() {
                 "D" => {
                     if files.is_empty() {
-                        send_text(transport, "No files are available for download.\r\n").await?;
+                        send_text(
+                            transport,
+                            "No files are available for download.\r\n",
+                            charset,
+                        )
+                        .await?;
                         continue;
                     }
                     run_file_download(
@@ -2653,6 +2873,7 @@ async fn run_files_flow<T: Transport>(
                         idle_timeout,
                         disconnect_reason,
                         node_number,
+                        charset,
                     )
                     .await?;
                 }
@@ -2668,11 +2889,12 @@ async fn run_files_flow<T: Transport>(
                         idle_timeout,
                         disconnect_reason,
                         node_number,
+                        charset,
                     )
                     .await?;
                 }
                 _ => {
-                    send_text(transport, "Unknown file command.\r\n").await?;
+                    send_text(transport, "Unknown file command.\r\n", charset).await?;
                 }
             }
         }
@@ -2701,11 +2923,13 @@ async fn run_file_download<T: Transport>(
     idle_timeout: Duration,
     disconnect_reason: &mut String,
     node_number: u16,
+    charset: TerminalCharset,
 ) -> ServeResult<()> {
     if user.security_level < area.download_security_level as i32 {
         send_text(
             transport,
             "Access denied. Security level too low for download.\r\n",
+            charset,
         )
         .await?;
         return Ok(());
@@ -2718,6 +2942,7 @@ async fn run_file_download<T: Transport>(
         true,
         false,
         "File number (blank to return): ",
+        charset,
     )
     .await?
     {
@@ -2728,11 +2953,11 @@ async fn run_file_download<T: Transport>(
         }
         PromptLineResult::IdleTimeout => {
             *disconnect_reason = "idle_timeout".to_string();
-            send_text(transport, "Idle timeout. Goodbye.\r\n").await?;
+            send_text(transport, "Idle timeout. Goodbye.\r\n", charset).await?;
             return Ok(());
         }
         PromptLineResult::Rejected => {
-            send_text(transport, CP437_INPUT_REJECT_LINE).await?;
+            send_text(transport, CP437_INPUT_REJECT_LINE, charset).await?;
             return Ok(());
         }
     };
@@ -2743,11 +2968,11 @@ async fn run_file_download<T: Transport>(
     let file_index = match file_trimmed.parse::<usize>() {
         Ok(n) if n >= 1 && n <= files.len() => n - 1,
         _ => {
-            send_text(transport, "Invalid selection.\r\n").await?;
+            send_text(transport, "Invalid selection.\r\n", charset).await?;
             return Ok(());
         }
     };
-    let protocol = match prompt_transfer_protocol(transport, input, idle_timeout).await? {
+    let protocol = match prompt_transfer_protocol(transport, input, idle_timeout, charset).await? {
         Some(protocol) => protocol,
         None => return Ok(()),
     };
@@ -2755,13 +2980,13 @@ async fn run_file_download<T: Transport>(
     let file = &files[file_index];
     let file_path = file_entry_path(area, file);
     if !file_path.exists() {
-        send_text(transport, "File not found on disk.\r\n").await?;
+        send_text(transport, "File not found on disk.\r\n", charset).await?;
         return Ok(());
     }
     let file_bytes = match std::fs::read(&file_path) {
         Ok(bytes) => bytes,
         Err(_) => {
-            send_text(transport, "Cannot read file.\r\n").await?;
+            send_text(transport, "Cannot read file.\r\n", charset).await?;
             return Ok(());
         }
     };
@@ -2774,13 +2999,13 @@ async fn run_file_download<T: Transport>(
             file.size_bytes,
             transfer_protocol_label(protocol)
         ),
+        charset,
     )
     .await?;
     if protocol == TransferProtocol::XmodemCrc {
         send_text(
             transport,
-            "Start XMODEM receive in your terminal now. CRC is used when the terminal requests it.\r\n",
-        )
+            "Start XMODEM receive in your terminal now. CRC is used when the terminal requests it.\r\n", charset)
         .await?;
     }
 
@@ -2838,7 +3063,7 @@ async fn run_file_download<T: Transport>(
                     retry_count: i64::from(retry_count),
                 },
             )?;
-            send_text(transport, "\r\nTransfer complete.\r\n").await?;
+            send_text(transport, "\r\nTransfer complete.\r\n", charset).await?;
             debug!(node = %node_number, user_id = %user.id, file_id = %file.id, "caller downloaded file");
         }
         Err(error) => {
@@ -2864,7 +3089,12 @@ async fn run_file_download<T: Transport>(
                     retry_count: 0,
                 },
             )?;
-            send_text(transport, &format!("\r\nTransfer failed: {error}\r\n")).await?;
+            send_text(
+                transport,
+                &format!("\r\nTransfer failed: {error}\r\n"),
+                charset,
+            )
+            .await?;
             debug!(node = %node_number, user_id = %user.id, file_id = %file.id, %error, "file transfer failed");
         }
     }
@@ -2883,16 +3113,18 @@ async fn run_file_upload<T: Transport>(
     idle_timeout: Duration,
     disconnect_reason: &mut String,
     node_number: u16,
+    charset: TerminalCharset,
 ) -> ServeResult<()> {
     if user.security_level < area.upload_security_level as i32 {
         send_text(
             transport,
             "Access denied. Security level too low for upload.\r\n",
+            charset,
         )
         .await?;
         return Ok(());
     }
-    let protocol = match prompt_transfer_protocol(transport, input, idle_timeout).await? {
+    let protocol = match prompt_transfer_protocol(transport, input, idle_timeout, charset).await? {
         Some(protocol) => protocol,
         None => return Ok(()),
     };
@@ -2907,6 +3139,7 @@ async fn run_file_upload<T: Transport>(
             idle_timeout,
             "Upload filename: ",
             disconnect_reason,
+            charset,
         )
         .await?;
         let Some(filename) = filename else {
@@ -2915,7 +3148,7 @@ async fn run_file_upload<T: Transport>(
         let safe_name = match sanitize_filename(filename.trim()) {
             Ok(name) => name,
             Err(_) => {
-                send_text(transport, "Invalid upload filename.\r\n").await?;
+                send_text(transport, "Invalid upload filename.\r\n", charset).await?;
                 return Ok(());
             }
         };
@@ -2926,6 +3159,7 @@ async fn run_file_upload<T: Transport>(
             true,
             false,
             "Declared size bytes (blank if unknown): ",
+            charset,
         )
         .await?;
         if let PromptLineResult::Value(value) = declared {
@@ -2934,7 +3168,7 @@ async fn run_file_upload<T: Transport>(
                 match trimmed.parse::<u64>() {
                     Ok(size) => declared_size = Some(size),
                     Err(_) => {
-                        send_text(transport, "Invalid declared size.\r\n").await?;
+                        send_text(transport, "Invalid declared size.\r\n", charset).await?;
                         return Ok(());
                     }
                 }
@@ -2949,6 +3183,7 @@ async fn run_file_upload<T: Transport>(
             "\r\nReady to receive via {}...\r\n",
             transfer_protocol_label(protocol)
         ),
+        charset,
     )
     .await?;
 
@@ -3000,7 +3235,12 @@ async fn run_file_upload<T: Transport>(
             if let Some(limit) = upload_limit
                 && payload.len() as u64 > limit
             {
-                send_text(transport, "Upload exceeds configured size limit.\r\n").await?;
+                send_text(
+                    transport,
+                    "Upload exceeds configured size limit.\r\n",
+                    charset,
+                )
+                .await?;
                 record_file_transfer(
                     db,
                     FileTransferInput {
@@ -3028,7 +3268,7 @@ async fn run_file_upload<T: Transport>(
             let safe_name = match sanitize_filename(&requested_name) {
                 Ok(name) => name,
                 Err(_) => {
-                    send_text(transport, "Invalid upload filename.\r\n").await?;
+                    send_text(transport, "Invalid upload filename.\r\n", charset).await?;
                     return Ok(());
                 }
             };
@@ -3087,6 +3327,7 @@ async fn run_file_upload<T: Transport>(
             send_text(
                 transport,
                 "\r\nUpload complete. File is pending sysop review.\r\n",
+                charset,
             )
             .await?;
         }
@@ -3113,7 +3354,12 @@ async fn run_file_upload<T: Transport>(
                     retry_count: 0,
                 },
             )?;
-            send_text(transport, &format!("\r\nUpload failed: {error}\r\n")).await?;
+            send_text(
+                transport,
+                &format!("\r\nUpload failed: {error}\r\n"),
+                charset,
+            )
+            .await?;
         }
     }
     Ok(())
@@ -3123,6 +3369,7 @@ async fn prompt_transfer_protocol<T: Transport>(
     transport: &mut T,
     input: &mut InputSession,
     idle_timeout: Duration,
+    charset: TerminalCharset,
 ) -> ServeResult<Option<TransferProtocol>> {
     let protocol = match prompt_for_line(
         transport,
@@ -3131,13 +3378,14 @@ async fn prompt_transfer_protocol<T: Transport>(
         true,
         false,
         "Protocol: Z) ZMODEM  X) XMODEM  blank to return: ",
+        charset,
     )
     .await?
     {
         PromptLineResult::Value(value) => value.trim().to_ascii_uppercase(),
         PromptLineResult::Disconnected | PromptLineResult::IdleTimeout => return Ok(None),
         PromptLineResult::Rejected => {
-            send_text(transport, CP437_INPUT_REJECT_LINE).await?;
+            send_text(transport, CP437_INPUT_REJECT_LINE, charset).await?;
             return Ok(None);
         }
     };
@@ -3147,7 +3395,7 @@ async fn prompt_transfer_protocol<T: Transport>(
         "Z" => Ok(Some(TransferProtocol::Zmodem)),
         "X" => Ok(Some(TransferProtocol::XmodemCrc)),
         _ => {
-            send_text(transport, "Unsupported transfer protocol.\r\n").await?;
+            send_text(transport, "Unsupported transfer protocol.\r\n", charset).await?;
             Ok(None)
         }
     }
@@ -3159,8 +3407,19 @@ async fn prompt_required_value<T: Transport>(
     idle_timeout: Duration,
     prompt: &str,
     disconnect_reason: &mut String,
+    charset: TerminalCharset,
 ) -> ServeResult<Option<String>> {
-    match prompt_for_line(transport, input, idle_timeout, false, false, prompt).await? {
+    match prompt_for_line(
+        transport,
+        input,
+        idle_timeout,
+        false,
+        false,
+        prompt,
+        charset,
+    )
+    .await?
+    {
         PromptLineResult::Value(value) => Ok(Some(value)),
         PromptLineResult::Disconnected => {
             *disconnect_reason = "caller_dropped_during_files".to_string();
@@ -3168,11 +3427,11 @@ async fn prompt_required_value<T: Transport>(
         }
         PromptLineResult::IdleTimeout => {
             *disconnect_reason = "idle_timeout".to_string();
-            send_text(transport, "Idle timeout. Goodbye.\r\n").await?;
+            send_text(transport, "Idle timeout. Goodbye.\r\n", charset).await?;
             Ok(None)
         }
         PromptLineResult::Rejected => {
-            send_text(transport, CP437_INPUT_REJECT_LINE).await?;
+            send_text(transport, CP437_INPUT_REJECT_LINE, charset).await?;
             Ok(None)
         }
     }
@@ -3306,6 +3565,7 @@ fn record_file_transfer(db: &OxideDb, input: FileTransferInput<'_>) -> ServeResu
 async fn ensure_default_message_area<T: Transport>(
     db: &OxideDb,
     transport: &mut T,
+    charset: TerminalCharset,
 ) -> ServeResult<()> {
     if !list_message_areas(db.db())?.is_empty() {
         return Ok(());
@@ -3322,7 +3582,12 @@ async fn ensure_default_message_area<T: Transport>(
             None,
         );
         warn!("failed to seed default message area: {error}");
-        send_text(transport, "Messages are not available right now.\r\n").await?;
+        send_text(
+            transport,
+            "Messages are not available right now.\r\n",
+            charset,
+        )
+        .await?;
     }
     Ok(())
 }
@@ -3341,11 +3606,17 @@ async fn display_message_list<T: Transport>(
     db: &OxideDb,
     area: &MessageArea,
     messages: &[Message],
+    charset: TerminalCharset,
 ) -> ServeResult<()> {
     let author_aliases = message_author_aliases(db, messages);
-    send_text(transport, &format!("\r\n{} messages:\r\n", area.name)).await?;
+    send_text(
+        transport,
+        &format!("\r\n{} messages:\r\n", area.name),
+        charset,
+    )
+    .await?;
     if messages.is_empty() {
-        send_text(transport, "No messages in this area.\r\n").await?;
+        send_text(transport, "No messages in this area.\r\n", charset).await?;
         return Ok(());
     }
 
@@ -3354,6 +3625,7 @@ async fn display_message_list<T: Transport>(
         send_text(
             transport,
             &format!("  {}) {} (from {})\r\n", index + 1, message.subject, author),
+            charset,
         )
         .await?;
     }
@@ -3364,6 +3636,7 @@ async fn display_message<T: Transport>(
     transport: &mut T,
     db: &OxideDb,
     message: &Message,
+    charset: TerminalCharset,
 ) -> ServeResult<()> {
     let author_aliases = message_author_aliases(db, std::slice::from_ref(message));
     let author = author_alias_from_map(&author_aliases, &message.author_user_id);
@@ -3377,6 +3650,7 @@ async fn display_message<T: Transport>(
             "-".repeat(40),
             message.body
         ),
+        charset,
     )
     .await
 }
@@ -3388,35 +3662,45 @@ async fn prompt_for_message_index<T: Transport>(
     disconnect_reason: &mut String,
     message_count: usize,
     prompt: &str,
+    charset: TerminalCharset,
 ) -> ServeResult<MessageIndexPromptResult> {
     if message_count == 0 {
-        send_text(transport, "No messages are available.\r\n").await?;
+        send_text(transport, "No messages are available.\r\n", charset).await?;
         return Ok(MessageIndexPromptResult::Retry);
     }
 
-    let selected =
-        match prompt_for_line(transport, input, idle_timeout, false, false, prompt).await? {
-            PromptLineResult::Value(value) => value,
-            PromptLineResult::Disconnected => {
-                *disconnect_reason = "caller_dropped_during_messages".to_string();
-                return Ok(MessageIndexPromptResult::Exit);
-            }
-            PromptLineResult::IdleTimeout => {
-                *disconnect_reason = "idle_timeout".to_string();
-                send_text(transport, "Idle timeout. Goodbye.\r\n").await?;
-                return Ok(MessageIndexPromptResult::Exit);
-            }
-            PromptLineResult::Rejected => {
-                unreachable!("prompt_for_line handles rejected input internally");
-            }
-        };
+    let selected = match prompt_for_line(
+        transport,
+        input,
+        idle_timeout,
+        false,
+        false,
+        prompt,
+        charset,
+    )
+    .await?
+    {
+        PromptLineResult::Value(value) => value,
+        PromptLineResult::Disconnected => {
+            *disconnect_reason = "caller_dropped_during_messages".to_string();
+            return Ok(MessageIndexPromptResult::Exit);
+        }
+        PromptLineResult::IdleTimeout => {
+            *disconnect_reason = "idle_timeout".to_string();
+            send_text(transport, "Idle timeout. Goodbye.\r\n", charset).await?;
+            return Ok(MessageIndexPromptResult::Exit);
+        }
+        PromptLineResult::Rejected => {
+            unreachable!("prompt_for_line handles rejected input internally");
+        }
+    };
 
     match selected.trim().parse::<usize>() {
         Ok(index) if (1..=message_count).contains(&index) => {
             Ok(MessageIndexPromptResult::Index(index - 1))
         }
         Ok(_) | Err(_) => {
-            send_text(transport, "Invalid message number.\r\n").await?;
+            send_text(transport, "Invalid message number.\r\n", charset).await?;
             Ok(MessageIndexPromptResult::Retry)
         }
     }
@@ -3426,18 +3710,20 @@ async fn prompt_for_message_body<T: Transport>(
     transport: &mut T,
     input: &mut InputSession,
     idle_timeout: Duration,
+    charset: TerminalCharset,
 ) -> ServeResult<PromptLineResult> {
     let mut output = Vec::new();
     write_text_buffered(
         transport,
         "Enter message body. End with a single . on its own line.\r\n",
         &mut output,
+        charset,
     )
     .await?;
     let mut lines = Vec::new();
 
     loop {
-        match prompt_for_line(transport, input, idle_timeout, true, false, "> ").await? {
+        match prompt_for_line(transport, input, idle_timeout, true, false, "> ", charset).await? {
             PromptLineResult::Value(value) if value.trim() == "." => break,
             PromptLineResult::Value(value) => lines.push(value),
             PromptLineResult::Disconnected => return Ok(PromptLineResult::Disconnected),
@@ -3503,13 +3789,23 @@ async fn prompt_for_line<T: Transport>(
     allow_empty: bool,
     hide_input: bool,
     prompt: &str,
+    charset: TerminalCharset,
 ) -> ServeResult<PromptLineResult> {
     let mut output = Vec::new();
     loop {
-        write_text_buffered(transport, prompt, &mut output).await?;
-        match read_line_input(transport, input, idle_timeout, allow_empty, hide_input).await? {
+        write_text_buffered(transport, prompt, &mut output, charset).await?;
+        match read_line_input(
+            transport,
+            input,
+            idle_timeout,
+            allow_empty,
+            hide_input,
+            charset,
+        )
+        .await?
+        {
             PromptLineResult::Rejected => {
-                send_text(transport, CP437_INPUT_REJECT_LINE).await?;
+                send_text(transport, CP437_INPUT_REJECT_LINE, charset).await?;
             }
             result => return Ok(result),
         }
@@ -3522,6 +3818,7 @@ async fn read_line_input<T: Transport>(
     idle_timeout: Duration,
     allow_empty: bool,
     hide_input: bool,
+    charset: TerminalCharset,
 ) -> ServeResult<PromptLineResult> {
     let mut line = Vec::new();
     let mut output = Vec::new();
@@ -3536,12 +3833,13 @@ async fn read_line_input<T: Transport>(
                     b'\0' | b'\n' if line.is_empty() => {}
                     b'\r' if line.is_empty() && !allow_empty => {}
                     b'\r' | b'\n' => {
-                        write_text_buffered(transport, "\r\n", &mut output).await?;
+                        write_text_buffered(transport, "\r\n", &mut output, charset).await?;
                         break;
                     }
                     b'\x08' | b'\x7f' => {
                         if line.pop().is_some() {
-                            write_text_buffered(transport, "\x08 \x08", &mut output).await?;
+                            write_text_buffered(transport, "\x08 \x08", &mut output, charset)
+                                .await?;
                         }
                     }
                     b'\t' => {}
@@ -3549,13 +3847,14 @@ async fn read_line_input<T: Transport>(
                         line.push(raw);
                         match raw {
                             raw if hide_input && (raw.is_ascii_graphic() || raw == b' ') => {
-                                write_text_buffered(transport, "*", &mut output).await?
+                                write_text_buffered(transport, "*", &mut output, charset).await?
                             }
                             raw if !hide_input && (raw.is_ascii_graphic() || raw == b' ') => {
                                 write_text_buffered(
                                     transport,
                                     &String::from_utf8_lossy(&[raw]),
                                     &mut output,
+                                    charset,
                                 )
                                 .await?
                             }
@@ -3793,7 +4092,7 @@ async fn send_login_flow<T: Transport>(
         context,
     )
     .await?;
-    send_menu_prompt(transport, login_menu, context).await
+    send_menu_prompt(transport, login_menu, context, capabilities.charset).await
 }
 
 async fn send_main_menu<T: Transport>(
@@ -3804,19 +4103,20 @@ async fn send_main_menu<T: Transport>(
     context: &ScreenRenderContext,
 ) -> ServeResult<()> {
     send_screen(transport, config, &menu.screen.asset, capabilities, context).await?;
-    send_menu_prompt(transport, menu, context).await
+    send_menu_prompt(transport, menu, context, capabilities.charset).await
 }
 
 async fn send_menu_prompt<T: Transport>(
     transport: &mut T,
     menu: &Menu,
     context: &ScreenRenderContext,
+    charset: TerminalCharset,
 ) -> ServeResult<()> {
     let prompt = menu
         .description
         .clone()
         .unwrap_or_else(|| "Command? ".to_string());
-    let payload = expand_screen_runtime_tokens(encode_text(&prompt), context);
+    let payload = expand_screen_runtime_tokens(encode_text(&prompt, charset), context, charset);
     transport.write_all(&payload).await?;
     Ok(())
 }
@@ -3830,7 +4130,7 @@ async fn show_post_login_screens<T: Transport>(
     for screen in &config.flow.post_login_screens {
         send_screen(transport, config, screen, capabilities, context).await?;
     }
-    send_text(transport, MAIN_MENU_POST_LOGIN).await
+    send_text(transport, MAIN_MENU_POST_LOGIN, capabilities.charset).await
 }
 
 async fn send_terminal_asset<T: Transport>(
@@ -3848,9 +4148,9 @@ async fn send_terminal_asset<T: Transport>(
                 capabilities,
                 &error,
             );
-            fallback_screen_payload(asset_name, &error)
+            fallback_screen_payload(asset_name, &error, capabilities.charset)
         });
-    let payload = expand_screen_runtime_tokens(payload, context);
+    let payload = expand_screen_runtime_tokens(payload, context, capabilities.charset);
     transport.write_all(&payload).await?;
     Ok(())
 }
@@ -3869,9 +4169,9 @@ async fn send_logoff_screen<T: Transport>(
                 supports_ansi = capabilities.supports_ansi,
                 "failed to load configured logoff screen; falling back to plain goodbye: {error}"
             );
-            normalize_caller_line_endings(&encode_text("Goodbye.\r\n"))
+            normalize_caller_line_endings(&encode_text("Goodbye.\r\n", capabilities.charset))
         });
-    let payload = expand_screen_runtime_tokens(payload, context);
+    let payload = expand_screen_runtime_tokens(payload, context, capabilities.charset);
     let _ = transport.write_all(&payload).await;
 }
 
@@ -3899,6 +4199,7 @@ fn load_terminal_asset_payload(
     } else {
         Ok(normalize_caller_line_endings(&encode_text(
             &oxidebbs_term::render_plain_text(&bytes),
+            capabilities.charset,
         )))
     }
 }
@@ -3913,7 +4214,7 @@ fn load_plain_terminal_asset_payload(
         match std::fs::read(&asset_path) {
             Ok(bytes) => {
                 let text = String::from_utf8_lossy(&bytes);
-                return Ok(Some(encode_text(&text)));
+                return Ok(Some(encode_text(&text, capabilities.charset)));
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => {
@@ -3974,9 +4275,9 @@ async fn send_screen<T: Transport>(
 ) -> ServeResult<()> {
     let payload = load_screen_payload(config, screen_key, *capabilities).unwrap_or_else(|error| {
         report_configured_asset_load_failure("screen", screen_key, *capabilities, &error);
-        fallback_screen_payload(screen_key, &error)
+        fallback_screen_payload(screen_key, &error, capabilities.charset)
     });
-    let payload = expand_screen_runtime_tokens(payload, context);
+    let payload = expand_screen_runtime_tokens(payload, context, capabilities.charset);
     transport.write_all(&payload).await?;
     Ok(())
 }
@@ -4021,25 +4322,36 @@ fn load_screen_payload(
 
     match term_screen.load(&config.paths.screens, capabilities) {
         Ok(LoadedScreen::Ansi(bytes)) => Ok(normalize_caller_line_endings(&bytes)),
-        Ok(LoadedScreen::PlainText(text)) => Ok(normalize_caller_line_endings(&encode_text(&text))),
+        Ok(LoadedScreen::PlainText(text)) => Ok(normalize_caller_line_endings(&encode_text(
+            &text,
+            capabilities.charset,
+        ))),
         Err(error) => Err(error.to_string()),
     }
 }
 
-fn fallback_screen_payload(screen_key: &str, details: &str) -> Vec<u8> {
+fn fallback_screen_payload(screen_key: &str, details: &str, charset: TerminalCharset) -> Vec<u8> {
     let mut message = String::new();
     let _ = writeln!(&mut message, "[{}]", screen_key);
     let _ = write!(&mut message, "{details}");
     message.push_str(PROMPT_TERMINATOR);
-    normalize_caller_line_endings(&encode_text(&message))
+    normalize_caller_line_endings(&encode_text(&message, charset))
 }
 
-fn expand_screen_runtime_tokens(payload: Vec<u8>, context: &ScreenRenderContext) -> Vec<u8> {
-    let payload = expand_oxide_display_codes(&payload, context);
+fn expand_screen_runtime_tokens(
+    payload: Vec<u8>,
+    context: &ScreenRenderContext,
+    charset: TerminalCharset,
+) -> Vec<u8> {
+    let payload = expand_oxide_display_codes(&payload, context, charset);
     expand_legacy_screen_tokens(&payload, context)
 }
 
-fn expand_oxide_display_codes(payload: &[u8], context: &ScreenRenderContext) -> Vec<u8> {
+fn expand_oxide_display_codes(
+    payload: &[u8],
+    context: &ScreenRenderContext,
+    charset: TerminalCharset,
+) -> Vec<u8> {
     const MAX_DISPLAY_CODE_LENGTH: usize = 48;
 
     let mut output = Vec::with_capacity(payload.len());
@@ -4070,7 +4382,7 @@ fn expand_oxide_display_codes(payload: &[u8], context: &ScreenRenderContext) -> 
         let display_code = &payload[cursor + 1..end];
 
         if display_code.len() <= MAX_DISPLAY_CODE_LENGTH
-            && let Some(expanded) = expand_display_code(display_code, context)
+            && let Some(expanded) = expand_display_code(display_code, context, charset)
         {
             output.extend_from_slice(&expanded);
             cursor = end + 1;
@@ -4084,7 +4396,11 @@ fn expand_oxide_display_codes(payload: &[u8], context: &ScreenRenderContext) -> 
     output
 }
 
-fn expand_display_code(display_code: &[u8], context: &ScreenRenderContext) -> Option<Vec<u8>> {
+fn expand_display_code(
+    display_code: &[u8],
+    context: &ScreenRenderContext,
+    charset: TerminalCharset,
+) -> Option<Vec<u8>> {
     if display_code.is_empty()
         || !display_code
             .iter()
@@ -4096,7 +4412,7 @@ fn expand_display_code(display_code: &[u8], context: &ScreenRenderContext) -> Op
     let display_code = std::str::from_utf8(display_code).ok()?;
     let (name, format) = display_code.split_once(':').unwrap_or((display_code, ""));
     let value = display_code_value(&name.to_ascii_uppercase(), context)?;
-    format_display_code_value(encode_text(&value), format)
+    format_display_code_value(encode_text(&value, charset), format)
 }
 
 fn display_code_value(name: &str, context: &ScreenRenderContext) -> Option<String> {
@@ -4215,6 +4531,7 @@ mod display_code_tests {
         let output = expand_screen_runtime_tokens(
             b"Node @NODE:03@/@NT:03@ User @USER:-8@ Sec @SEC:03@".to_vec(),
             &display_context(),
+            TerminalCharset::Cp437,
         );
 
         assert_eq!(output, b"Node 002/008 User Cmdr     Sec 010");
@@ -4225,6 +4542,7 @@ mod display_code_tests {
         let output = expand_screen_runtime_tokens(
             b"Email sysop@example.com @@ @NOPE@ @BBS@".to_vec(),
             &display_context(),
+            TerminalCharset::Cp437,
         );
 
         assert_eq!(output, b"Email sysop@example.com @ @NOPE@ Blackboard");
@@ -4250,8 +4568,9 @@ async fn send_text_buffered<T: Transport>(
     transport: &mut T,
     message: &str,
     output: &mut Vec<u8>,
+    charset: TerminalCharset,
 ) -> ServeResult<()> {
-    encode_text_into(message, output);
+    encode_text_into(message, output, charset);
     *output = normalize_caller_line_endings(output);
     transport.write_all(output).await?;
     output.clear();
@@ -4262,13 +4581,18 @@ async fn write_text_buffered<T: Transport>(
     transport: &mut T,
     message: &str,
     output: &mut Vec<u8>,
+    charset: TerminalCharset,
 ) -> ServeResult<()> {
-    send_text_buffered(transport, message, output).await
+    send_text_buffered(transport, message, output, charset).await
 }
 
-async fn send_text<T: Transport>(transport: &mut T, message: &str) -> ServeResult<()> {
+async fn send_text<T: Transport>(
+    transport: &mut T,
+    message: &str,
+    charset: TerminalCharset,
+) -> ServeResult<()> {
     let mut output = Vec::new();
-    send_text_buffered(transport, message, &mut output).await?;
+    send_text_buffered(transport, message, &mut output, charset).await?;
     Ok(())
 }
 
@@ -4276,29 +4600,47 @@ async fn process_runtime_commands<T: Transport>(
     transport: &mut T,
     commands: RuntimeNodeCommands,
     disconnect_reason: &mut String,
+    charset: TerminalCharset,
 ) -> ServeResult<bool> {
     let mut output = Vec::new();
     for message in commands.messages {
-        send_text_buffered(transport, &format!("\r\n{message}\r\n"), &mut output).await?;
+        send_text_buffered(
+            transport,
+            &format!("\r\n{message}\r\n"),
+            &mut output,
+            charset,
+        )
+        .await?;
     }
 
     if let Some(reason) = commands.disconnect_reason {
         *disconnect_reason = reason;
-        send_text_buffered(transport, "\r\nDisconnected by sysop.\r\n", &mut output).await?;
+        send_text_buffered(
+            transport,
+            "\r\nDisconnected by sysop.\r\n",
+            &mut output,
+            charset,
+        )
+        .await?;
         return Ok(true);
     }
 
     Ok(false)
 }
 
-fn encode_text(text: &str) -> Vec<u8> {
+fn encode_text(text: &str, charset: TerminalCharset) -> Vec<u8> {
     let mut output = Vec::new();
-    encode_text_into(text, &mut output);
+    encode_text_into(text, &mut output, charset);
     output
 }
 
-fn encode_text_into(text: &str, output: &mut Vec<u8>) {
+fn encode_text_into(text: &str, output: &mut Vec<u8>, charset: TerminalCharset) {
     output.clear();
+    if let TerminalCharset::Petscii = charset {
+        output.extend_from_slice(&render_petscii_lossy(text));
+        return;
+    }
+
     if text.is_ascii() {
         output.reserve(text.len());
         output.extend_from_slice(text.as_bytes());
@@ -4307,14 +4649,18 @@ fn encode_text_into(text: &str, output: &mut Vec<u8>) {
 
     match encode_cp437(text) {
         Ok(bytes) => output.extend_from_slice(&bytes),
-        Err(_) => encode_text_lossy_into(text, output),
+        Err(_) => encode_text_lossy_into(text, output, charset),
     }
 }
 
-fn encode_text_lossy_into(text: &str, output: &mut Vec<u8>) {
+fn encode_text_lossy_into(text: &str, output: &mut Vec<u8>, charset: TerminalCharset) {
     output.clear();
     output.reserve(text.len());
     for character in text.chars() {
+        if let TerminalCharset::Petscii = charset {
+            output.push(char_to_petscii_byte(character).unwrap_or(b'?'));
+            continue;
+        }
         let mut buffer = [0_u8; 4];
         let encoded = character.encode_utf8(&mut buffer);
         match encode_cp437(encoded) {
@@ -4564,7 +4910,7 @@ async fn send_menu_help<T: Transport>(
     }
     help.push_str("\r\n");
 
-    send_text(transport, &help).await
+    send_text(transport, &help, capabilities.charset).await
 }
 
 fn menu_entry_visible_to_security_level(
@@ -5345,7 +5691,7 @@ mod tests {
 
     #[test]
     fn fallback_payload_includes_context() {
-        let payload = fallback_screen_payload("login", "missing file");
+        let payload = fallback_screen_payload("login", "missing file", TerminalCharset::Cp437);
         let decoded = String::from_utf8_lossy(&payload);
 
         assert!(decoded.contains("[login]"));
@@ -5655,9 +6001,35 @@ mod tests {
     fn ascii_text_encodes_without_cp437_lookup() {
         let mut output = Vec::new();
 
-        encode_text_into("Main menu? ", &mut output);
+        encode_text_into("Main menu? ", &mut output, TerminalCharset::Cp437);
 
         assert_eq!(output, b"Main menu? ");
+    }
+
+    #[test]
+    fn petscii_charset_encodes_text_to_petscii_bytes() {
+        let c64 = TerminalCapabilities::c64();
+        assert_eq!(c64.charset, TerminalCharset::Petscii);
+
+        assert_eq!(
+            encode_text("ABC", TerminalCharset::Petscii),
+            [0x41, 0x42, 0x43]
+        );
+
+        let box_drawing = encode_text("\u{250c}\u{2500}\u{2510}", TerminalCharset::Petscii);
+        assert_eq!(box_drawing, [0xb4, 0xb1, 0xb5]);
+    }
+
+    #[test]
+    fn petscii_lossy_replaces_unsupported_glyphs_instead_of_failing() {
+        let bytes = encode_text("C64 \u{1f680}", TerminalCharset::Petscii);
+        assert_eq!(bytes, [b'C', b'6', b'4', b' ', b'?']);
+    }
+
+    #[test]
+    fn non_petscii_charset_keeps_cp437_box_drawing_bytes() {
+        let bytes = encode_text("\u{2554}\u{2550}", TerminalCharset::Cp437);
+        assert_eq!(bytes, [0xc9, 0xcd]);
     }
 
     #[test]
@@ -5699,21 +6071,24 @@ mod tests {
         let text = "┌─┐";
 
         assert_eq!(
-            encode_text(text),
+            encode_text(text, TerminalCharset::Cp437),
             encode_cp437(text).expect("box drawing is CP437-compatible")
         );
     }
 
     #[test]
     fn generated_output_replaces_unencodable_text_with_question_mark() {
-        assert_eq!(encode_text("Diagnostic 🚀"), b"Diagnostic ?");
+        assert_eq!(
+            encode_text("Diagnostic 🚀", TerminalCharset::Cp437),
+            b"Diagnostic ?"
+        );
     }
 
     #[tokio::test]
     async fn send_text_normalizes_bare_lf_to_crlf() {
         let (mut transport, mut client) = LoopbackTransport::new();
 
-        send_text(&mut transport, "One\nTwo\n")
+        send_text(&mut transport, "One\nTwo\n", TerminalCharset::Cp437)
             .await
             .expect("send text");
 
@@ -5878,6 +6253,7 @@ mod tests {
                     Duration::from_secs(1),
                     &mut disconnect_reason,
                     1,
+                    TerminalCharset::Cp437,
                 ),
             )
             .await;
@@ -5952,6 +6328,7 @@ mod tests {
                     Duration::from_secs(1),
                     &mut disconnect_reason,
                     1,
+                    TerminalCharset::Cp437,
                 ),
             )
             .await;
@@ -6161,6 +6538,7 @@ mod tests {
             Duration::from_secs(1),
             true,
             false,
+            TerminalCharset::Cp437,
         )
         .await
         .expect("read");
@@ -6184,6 +6562,7 @@ mod tests {
             Duration::from_secs(1),
             false,
             false,
+            TerminalCharset::Cp437,
         )
         .await
         .expect("read");
@@ -6209,6 +6588,7 @@ mod tests {
             Duration::from_secs(1),
             false,
             false,
+            TerminalCharset::Cp437,
         )
         .await
         .expect("read");
@@ -6232,6 +6612,7 @@ mod tests {
             Duration::from_secs(1),
             false,
             true,
+            TerminalCharset::Cp437,
         )
         .await
         .expect("read");
@@ -6255,6 +6636,7 @@ mod tests {
             Duration::from_secs(1),
             false,
             false,
+            TerminalCharset::Cp437,
         )
         .await
         .expect("read");
@@ -6278,6 +6660,7 @@ mod tests {
             Duration::from_secs(1),
             false,
             false,
+            TerminalCharset::Cp437,
         )
         .await
         .expect("read");
@@ -6351,6 +6734,7 @@ mod tests {
             Duration::from_secs(1),
             true,
             false,
+            TerminalCharset::Cp437,
         )
         .await
         .expect("read");
@@ -6374,6 +6758,7 @@ mod tests {
             Duration::from_secs(1),
             true,
             false,
+            TerminalCharset::Cp437,
         )
         .await
         .expect("read");
@@ -6393,9 +6778,14 @@ mod tests {
             .write_bytes(b"First line\r\n\r\nLast line\r\n.\r\n")
             .expect("write body");
 
-        let value = prompt_for_message_body(&mut transport, &mut input, Duration::from_secs(1))
-            .await
-            .expect("read body");
+        let value = prompt_for_message_body(
+            &mut transport,
+            &mut input,
+            Duration::from_secs(1),
+            TerminalCharset::Cp437,
+        )
+        .await
+        .expect("read body");
 
         match value {
             PromptLineResult::Value(value) => assert_eq!(value, "First line\r\n\r\nLast line"),
@@ -6455,9 +6845,14 @@ mod tests {
             disconnect_reason: &mut disconnect_reason,
         };
 
-        let result = run_login_flow(&mut transport, &mut input, &mut state)
-            .await
-            .expect("login flow");
+        let result = run_login_flow(
+            &mut transport,
+            &mut input,
+            &mut state,
+            TerminalCharset::Cp437,
+        )
+        .await
+        .expect("login flow");
         let output = String::from_utf8_lossy(&client.read_output_bytes()).into_owned();
 
         assert!(matches!(result, AuthFlowResult::Success));
@@ -6646,9 +7041,15 @@ mod tests {
         ];
         let (mut transport, mut client) = LoopbackTransport::new();
 
-        display_message_list(&mut transport, &db, &area, &messages)
-            .await
-            .expect("display");
+        display_message_list(
+            &mut transport,
+            &db,
+            &area,
+            &messages,
+            TerminalCharset::Cp437,
+        )
+        .await
+        .expect("display");
         let output = String::from_utf8_lossy(&client.read_output_bytes()).to_string();
 
         assert!(output.contains("1) One (from alice)"));
@@ -6666,9 +7067,15 @@ mod tests {
         )];
         let (mut transport, mut client) = LoopbackTransport::new();
 
-        display_message_list(&mut transport, &db, &area, &messages)
-            .await
-            .expect("display");
+        display_message_list(
+            &mut transport,
+            &db,
+            &area,
+            &messages,
+            TerminalCharset::Cp437,
+        )
+        .await
+        .expect("display");
         let output = String::from_utf8_lossy(&client.read_output_bytes()).to_string();
 
         assert!(output.contains("1) Missing (from Unknown)"));
@@ -6916,9 +7323,14 @@ mod tests {
             idle_timeout: Duration::from_secs(1),
             disconnect_reason: &mut disconnect_reason,
         };
-        let result = run_login_flow(&mut transport, &mut input, &mut state)
-            .await
-            .expect("login flow");
+        let result = run_login_flow(
+            &mut transport,
+            &mut input,
+            &mut state,
+            TerminalCharset::Cp437,
+        )
+        .await
+        .expect("login flow");
         let output = client_task.await.expect("client task");
         (result, output, authenticated_user)
     }
@@ -6968,9 +7380,14 @@ mod tests {
             idle_timeout: Duration::from_secs(1),
             disconnect_reason: &mut disconnect_reason,
         };
-        let result = run_new_user_flow(&mut transport, &mut input, &mut state)
-            .await
-            .expect("new user flow");
+        let result = run_new_user_flow(
+            &mut transport,
+            &mut input,
+            &mut state,
+            TerminalCharset::Cp437,
+        )
+        .await
+        .expect("new user flow");
         let output = client_task.await.expect("client task");
         (result, output)
     }

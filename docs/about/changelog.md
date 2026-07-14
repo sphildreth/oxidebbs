@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `oxidebbs-core::constants` to centralise default configuration values such as
+  the default door time limit and the default BinkP port.
+- Full PETSCII encode/decode for the C64 terminal profile in `oxidebbs-term`,
+  replacing the previous ASCII-only fallback. The C64 "upper case and graphics"
+  screen set is covered for printable text, shifted/unshifted letters, CR/LF
+  newlines, and standard C64 line-drawing and block graphics, with a
+  lossy-replacement policy for unsupported glyphs. See ADR 0034.
+- `TerminalCharset::Petscii` (config string `"petscii"`) and config support for
+  selecting it; `petscii_ascii_fallback` remains supported for operators.
+
+### Changed
+- The built-in C64 terminal profile and default/example C64 config now select
+  real PETSCII rendering instead of the ASCII fallback.
+- Caller output is now charset-aware at the central text-encoding chokepoint, so
+  C64 callers receive PETSCII-encoded menus, messages, file lists, and logoff
+  screens. ANSI/CP437 and plain-ASCII behavior is unchanged, and binary
+  file-transfer and telnet negotiation bytes are never re-encoded.
+
 ## [1.2.2] - 2026-06-07
 
 ### Added

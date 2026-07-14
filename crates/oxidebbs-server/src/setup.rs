@@ -644,7 +644,7 @@ fn generated_terminal_profiles() -> BTreeMap<String, GeneratedTerminalProfileCon
             height: 25,
             supports_ansi: false,
             supports_color: false,
-            charset: "petscii_ascii_fallback".to_string(),
+            charset: "petscii".to_string(),
             line_endings: "crlf".to_string(),
             backspace_mode: "backspace_or_delete".to_string(),
             output_pacing_bytes_per_second: Some(1_200),
