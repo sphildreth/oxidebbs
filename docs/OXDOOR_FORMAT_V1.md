@@ -1,7 +1,7 @@
 # Oxide Door Package Format v1 (`.oxdoor`)
 
 See the canonical specification in
-[`design/OXDOOR_FORMAT_V1.md`](../design/OXDOOR_FORMAT_V1.md).
+[`design/OXDOOR_FORMAT_V1.md`](https://github.com/sphildreth/oxidebbs/blob/main/design/OXDOOR_FORMAT_V1.md).
 
 In short:
 

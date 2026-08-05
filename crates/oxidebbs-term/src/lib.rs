@@ -31,6 +31,45 @@ const CP437_HIGH: [char; 128] = [
     '\u{00b0}', '\u{2219}', '\u{00b7}', '\u{221a}', '\u{207f}', '\u{00b2}', '\u{25a0}', '\u{00a0}',
 ];
 
+/// CP437/VGA glyphs for bytes `0x01..=0x1F` and `0x7F`.
+///
+/// Bytes `0x09` (tab), `0x0A` (LF), `0x0D` (CR), and `0x1B` (ESC) are
+/// deliberately absent from this table: they are structural controls in `.ans`
+/// files and keep their ASCII control meaning in both directions. As a
+/// consequence the glyphs that share those bytes on real CP437 hardware
+/// (`○` U+25CB, `◙` U+25D9, `♪` U+266A, `←` U+2190) decode to the control
+/// meaning and are not encodable.
+const CP437_LOW: [(u8, char); 28] = [
+    (0x01, '\u{263A}'),
+    (0x02, '\u{263B}'),
+    (0x03, '\u{2665}'),
+    (0x04, '\u{2666}'),
+    (0x05, '\u{2663}'),
+    (0x06, '\u{2660}'),
+    (0x07, '\u{2022}'),
+    (0x08, '\u{25D8}'),
+    (0x0B, '\u{2642}'),
+    (0x0C, '\u{2640}'),
+    (0x0E, '\u{266B}'),
+    (0x0F, '\u{263C}'),
+    (0x10, '\u{25BA}'),
+    (0x11, '\u{25C4}'),
+    (0x12, '\u{2195}'),
+    (0x13, '\u{203C}'),
+    (0x14, '\u{00B6}'),
+    (0x15, '\u{00A7}'),
+    (0x16, '\u{25AC}'),
+    (0x17, '\u{21A8}'),
+    (0x18, '\u{2191}'),
+    (0x19, '\u{2193}'),
+    (0x1A, '\u{2192}'),
+    (0x1C, '\u{221F}'),
+    (0x1D, '\u{2194}'),
+    (0x1E, '\u{25B2}'),
+    (0x1F, '\u{25BC}'),
+    (0x7F, '\u{2302}'),
+];
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum TerminalProfile {
     Ansi80,
@@ -488,17 +527,46 @@ pub fn encode_cp437(input: &str) -> Result<Vec<u8>, Cp437EncodeError> {
     Ok(bytes)
 }
 
+/// Decode a CP437 byte to its Unicode character.
+///
+/// Policy for the low range (`0x00..=0x7F`):
+/// - `0x00` decodes to NUL (U+0000).
+/// - The structural control bytes `0x09` (tab), `0x0A` (LF), `0x0D` (CR), and
+///   `0x1B` (ESC) keep their ASCII control meaning: `.ans` files use them
+///   structurally and downstream plain-text rendering relies on their line
+///   handling.
+/// - All other bytes in `0x01..=0x1F`, plus `0x7F`, decode to their CP437/VGA
+///   glyphs (smileys, card suits, arrows, etc.) via [`CP437_LOW`]; printable
+///   ASCII passes through unchanged.
 pub fn cp437_byte_to_char(byte: u8) -> char {
-    if byte < 0x80 {
-        char::from(byte)
-    } else {
-        CP437_HIGH[usize::from(byte - 0x80)]
+    match byte {
+        0x00 | 0x09 | 0x0a | 0x0d | 0x1b | 0x20..=0x7e => char::from(byte),
+        0x80..=0xff => CP437_HIGH[usize::from(byte - 0x80)],
+        _ => CP437_LOW
+            .iter()
+            .find(|(mapped_byte, _)| *mapped_byte == byte)
+            .map(|(_, character)| *character)
+            .unwrap_or('\u{FFFD}'),
     }
 }
 
+/// Encode a Unicode character to its CP437 byte, if representable.
+///
+/// The asymmetry with [`cp437_byte_to_char`] is intentional: bytes
+/// `0x09`/`0x0A`/`0x0D`/`0x1B` are reserved for their structural control
+/// meaning, so the glyphs that would share those bytes on real CP437 hardware
+/// (`○` U+25CB, `◙` U+25D9, `♪` U+266A, `←` U+2190) are not encodable and
+/// return `None`.
 pub fn char_to_cp437_byte(character: char) -> Option<u8> {
     if character.is_ascii() {
         return Some(character as u8);
+    }
+
+    if let Some((byte, _)) = CP437_LOW
+        .iter()
+        .find(|(_, mapped_character)| *mapped_character == character)
+    {
+        return Some(*byte);
     }
 
     CP437_HIGH
@@ -651,6 +719,49 @@ mod tests {
         let encoded = encode_cp437("\u{255a}\u{2550}\u{255d}").expect("encode CP437");
 
         assert_eq!(encoded, [0xc8, 0xcd, 0xbc]);
+    }
+
+    #[test]
+    fn decodes_cp437_low_range_glyphs() {
+        assert_eq!(cp437_byte_to_char(0x01), '\u{263A}');
+        assert_eq!(cp437_byte_to_char(0x03), '\u{2665}');
+        assert_eq!(cp437_byte_to_char(0x10), '\u{25BA}');
+        assert_eq!(cp437_byte_to_char(0x7f), '\u{2302}');
+    }
+
+    #[test]
+    fn preserves_structural_control_bytes_in_cp437_decode() {
+        assert_eq!(cp437_byte_to_char(0x00), '\u{0000}');
+        assert_eq!(cp437_byte_to_char(0x09), '\t');
+        assert_eq!(cp437_byte_to_char(0x0a), '\n');
+        assert_eq!(cp437_byte_to_char(0x0d), '\r');
+        assert_eq!(cp437_byte_to_char(0x1b), '\u{001b}');
+    }
+
+    #[test]
+    fn round_trips_cp437_low_range_glyphs() {
+        for (character, byte) in [
+            ('\u{263A}', 0x01),
+            ('\u{25BA}', 0x10),
+            ('\u{2302}', 0x7f),
+            ('\u{2665}', 0x03),
+        ] {
+            assert_eq!(char_to_cp437_byte(character), Some(byte));
+            assert_eq!(cp437_byte_to_char(byte), character);
+        }
+    }
+
+    #[test]
+    fn rejects_glyphs_colliding_with_preserved_control_bytes() {
+        // These glyphs share bytes 0x09/0x0A/0x0D/0x1B with preserved
+        // structural controls, so they intentionally cannot round-trip.
+        for glyph in ['\u{25CB}', '\u{25D9}', '\u{266A}', '\u{2190}'] {
+            assert_eq!(char_to_cp437_byte(glyph), None);
+        }
+
+        let error = encode_cp437("\u{266A}").expect_err("eighth note collides with CR byte 0x0D");
+        assert_eq!(error.character(), '\u{266A}');
+        assert_eq!(error.byte_index(), 0);
     }
 
     #[test]

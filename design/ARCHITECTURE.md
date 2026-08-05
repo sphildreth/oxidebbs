@@ -90,6 +90,11 @@ Owns BinkP network-mail transport framing and client/server session primitives.
 Owns OxideNet-specific profile data, addressing defaults, applications, node
 registry, and config package structures.
 
+### `oxidebbs-transfer`
+
+Owns caller file transfer protocols (XMODEM-CRC and ZMODEM) built on the
+byte-oriented transport layer provided by `oxidebbs-telnet`.
+
 ## Dependency rule
 
 Higher-level crates may depend on lower-level crates. Lower-level crates should not depend on the server binary.
@@ -97,8 +102,13 @@ Higher-level crates may depend on lower-level crates. Lower-level crates should 
 Preferred direction:
 
 ```text
-server -> core -> term/db/door/telnet
-sysop  -> core/db
+server    -> core/term/telnet/db/door/sysop/transfer/ftn/binkp/oxidenet
+core      -> network
+door      -> core
+sysop     -> db/door/oxidenet
+ftn       -> network/db
+oxidenet  -> network/db
+transfer  -> telnet
 ```
 
 ## Important design principle

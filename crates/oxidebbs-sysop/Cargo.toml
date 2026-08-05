@@ -1,19 +1,17 @@
 [package]
 name = "oxidebbs-sysop"
-version = "1.2.2"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 
 [dependencies]
-oxidebbs-core = { path = "../oxidebbs-core" }
 oxidebbs-db = { path = "../oxidebbs-db" }
 oxidebbs-door = { path = "../oxidebbs-door" }
 oxidebbs-oxidenet = { path = "../oxidebbs-oxidenet" }
-oxidebbs-term = { path = "../oxidebbs-term" }
 ratatui = { version = "0.30.0", default-features = false, features = ["crossterm"] }
 crossterm.workspace = true
-tokio = { version = "1", features = ["full"] }
+tokio.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true

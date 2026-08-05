@@ -41,14 +41,14 @@ OXIDEBBS_SYSOP_PASSWORD='choose-a-real-password' docker compose up -d
 The default Compose file uses:
 
 ```text
-ghcr.io/sphildreth/oxidebbs:1.2.2
+ghcr.io/sphildreth/oxidebbs:1.3.0
 ```
 
 To pin or test another published image tag:
 
 ```bash
-OXIDEBBS_IMAGE_TAG=1.2.2 docker compose pull
-OXIDEBBS_IMAGE_TAG=1.2.2 \
+OXIDEBBS_IMAGE_TAG=1.3.0 docker compose pull
+OXIDEBBS_IMAGE_TAG=1.3.0 \
   OXIDEBBS_SYSOP_PASSWORD='choose-a-real-password' \
   docker compose up -d
 ```
@@ -192,15 +192,15 @@ image has built and passed the `oxidebbs-server --version` smoke test.
 Preferred stable tags:
 
 ```text
-ghcr.io/sphildreth/oxidebbs:1.2.2
-ghcr.io/sphildreth/oxidebbs:v1.2.2
+ghcr.io/sphildreth/oxidebbs:1.3.0
+ghcr.io/sphildreth/oxidebbs:v1.3.0
 ```
 
 Pull a published image directly:
 
 ```bash
-docker pull ghcr.io/sphildreth/oxidebbs:1.2.2
-docker run --rm --entrypoint oxidebbs-server ghcr.io/sphildreth/oxidebbs:1.2.2 --version
+docker pull ghcr.io/sphildreth/oxidebbs:1.3.0
+docker run --rm --entrypoint oxidebbs-server ghcr.io/sphildreth/oxidebbs:1.3.0 --version
 ```
 
 Stable release publishes also move:

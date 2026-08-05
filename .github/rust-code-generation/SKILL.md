@@ -65,11 +65,9 @@ Before writing code:
 
 In this repository, consult these files when relevant:
 
-- `AGENTS.md`
-- `.github/copilot-instructions.md`
+- `AGENTS.md` (including the `scripts/dev-check.sh` validation gate it defines)
 - `design/PRD.md`
 - `design/SPEC.md`
-- `design/TESTING_STRATEGY.md`
 - relevant files in `design/adr/`
 
 ## Rust Generation Rules

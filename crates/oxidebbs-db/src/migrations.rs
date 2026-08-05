@@ -98,10 +98,13 @@ fn migrate_4_to_5(db: &Db) -> decentdb::Result<()> {
 fn migrate_5_to_6(db: &Db) -> decentdb::Result<()> {
     match existing_schema_version(db)? {
         Some(5) => {
-            if doors_needs_security_level_rebuild(db)? {
-                rebuild_doors_for_security_level(db, 5)?;
-            }
-            set_schema_version(db, 6)
+            run_migration_transaction(db, || {
+                if doors_needs_security_level_rebuild(db)? {
+                    rebuild_doors_for_security_level(db, 5)?;
+                }
+                set_schema_version(db, 6)
+            })?;
+            Ok(())
         }
         Some(other) => Err(DbError::sql(format!(
             "Cannot apply migration 5 -> 6 from schema version {other}"
@@ -115,20 +118,23 @@ fn migrate_5_to_6(db: &Db) -> decentdb::Result<()> {
 fn migrate_6_to_7(db: &Db) -> decentdb::Result<()> {
     match existing_schema_version(db)? {
         Some(6) => {
-            db.execute_batch(
-                "CREATE TABLE IF NOT EXISTS door_provider_credentials (
-                    id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
-                    door_id UUID NOT NULL REFERENCES doors(id) ON DELETE CASCADE,
-                    provider_name TEXT NOT NULL CHECK (LENGTH(TRIM(provider_name)) > 0),
-                    credential_ref TEXT NOT NULL CHECK (LENGTH(TRIM(credential_ref)) > 0),
-                    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE (door_id, provider_name)
-                );
+            run_migration_transaction(db, || {
+                db.execute_batch(
+                    "CREATE TABLE IF NOT EXISTS door_provider_credentials (
+                        id UUID PRIMARY KEY DEFAULT GEN_RANDOM_UUID(),
+                        door_id UUID NOT NULL REFERENCES doors(id) ON DELETE CASCADE,
+                        provider_name TEXT NOT NULL CHECK (LENGTH(TRIM(provider_name)) > 0),
+                        credential_ref TEXT NOT NULL CHECK (LENGTH(TRIM(credential_ref)) > 0),
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE (door_id, provider_name)
+                    );
 
-                CREATE INDEX IF NOT EXISTS idx_door_provider_credentials_door_id ON door_provider_credentials (door_id);",
-            )?;
-            set_schema_version(db, 7)
+                    CREATE INDEX IF NOT EXISTS idx_door_provider_credentials_door_id ON door_provider_credentials (door_id);",
+                )?;
+                set_schema_version(db, 7)
+            })?;
+            Ok(())
         }
         Some(other) => Err(DbError::sql(format!(
             "Cannot apply migration 6 -> 7 from schema version {other}"

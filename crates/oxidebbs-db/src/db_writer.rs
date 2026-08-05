@@ -34,7 +34,6 @@ impl DbWriter {
     }
 
     pub fn with_capacity(db: Db, capacity: usize) -> Self {
-        let db = db.clone();
         let (command_tx, command_rx) = mpsc::sync_channel::<QueuedWork>(capacity);
         let worker = thread::spawn(move || {
             process_writes(db, command_rx);
@@ -67,8 +66,7 @@ impl DbWriter {
     }
 
     pub fn shutdown(mut self) -> DbWriterResult<()> {
-        if let Err(error) = self.command_tx.send(QueuedWork::Shutdown) {
-            let _ = error;
+        if self.command_tx.send(QueuedWork::Shutdown).is_err() {
             return Err(DbWriterError::Shutdown);
         }
 

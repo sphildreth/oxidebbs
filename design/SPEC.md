@@ -14,6 +14,10 @@ It should ship as one primary server binary with internal crates for domain boun
 - `oxidebbs-door`
 - `oxidebbs-sysop`
 - `oxidebbs-network`
+- `oxidebbs-transfer`
+- `oxidebbs-ftn`
+- `oxidebbs-binkp`
+- `oxidebbs-oxidenet`
 
 This keeps the system easy to run while keeping the codebase clean.
 
@@ -139,6 +143,20 @@ The terminal layer should support:
 - Safe line editor for caller input
 - Output paging
 
+CP437 decode policy for the low range (`0x01..=0x1F`, `0x7F`): bytes decode to
+their CP437/VGA glyphs (smileys, card suits, arrows, `⌂`), because `.ans` art
+uses those bytes as graphics. The structural control bytes `0x09` (tab), `0x0A`
+(LF), `0x0D` (CR), and `0x1B` (ESC) keep their control meaning in both
+directions, so the four glyphs that share those bytes on real hardware (`○`,
+`◙`, `♪`, `←`) decode to the control meaning and are intentionally not
+encodable.
+
+The ANSI parser accepts ECMA-48 private parameter bytes (`<`, `=`, `>`, `?`)
+on CSI sequences (e.g. `ESC[?25h` cursor visibility) and strips them cleanly
+in plain-text fallbacks. Parser accumulation is bounded (parameter count,
+intermediate count, OSC payload size, and saturating numeric parameters) so
+malformed or hostile input cannot panic or exhaust memory.
+
 The named caller terminal profiles are:
 
 | Profile | Purpose | Width x height | Charset | ANSI/control policy |
@@ -158,9 +176,10 @@ Menus and generated caller text should wrap or truncate at the active profile
 width instead of assuming 80 columns. ANSI/CP437 art must have an ASCII,
 40-column, or C64-safe fallback path for basic navigation.
 
-PETSCII translation is not complete yet. The terminal abstraction must keep the
-charset field explicit and route C64 callers through ASCII/PETSCII-friendly
-fallback assets until full PETSCII encode/decode support is implemented.
+PETSCII encode/decode support is implemented (ADR 0034), including a lossy
+replacement policy for characters with no PETSCII representation. The terminal
+abstraction keeps the charset field explicit and routes C64 callers through
+PETSCII with ASCII-friendly fallback assets.
 
 Plain and C64 profiles must avoid advanced ANSI escape sequences for screen
 clear, cursor movement, color, and box drawing unless a sysop deliberately

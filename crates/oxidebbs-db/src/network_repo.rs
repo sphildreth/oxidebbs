@@ -23,6 +23,11 @@ pub struct NetworkLinkRecord {
     pub address: String,
     pub host: String,
     pub binkp_port: i64,
+    /// BinkP session password, stored in cleartext by design: BinkP password
+    /// authentication (the M_PWD exchange, and CRAM-MD5-style challenge-response
+    /// variants) is a shared-secret protocol that requires the cleartext password
+    /// on both peers, so it cannot be stored as a one-way hash. Protect the
+    /// DecentDB file at the filesystem level (permissions, full-disk encryption).
     pub password: String,
     pub poll_schedule_minutes: i64,
     pub compression: String,
@@ -380,11 +385,26 @@ pub fn insert_network_path_node(db: &Db, node: &NetworkPathNode) -> decentdb::Re
 
 pub fn insert_network_path(db: &Db, path: &[NetworkPathNode]) -> decentdb::Result<()> {
     db.begin_transaction()?;
-    for node in path {
-        insert_network_path_node(db, node)?;
+    let result = (|| {
+        for node in path {
+            insert_network_path_node(db, node)?;
+        }
+        Ok(())
+    })();
+
+    match result {
+        Ok(()) => match db.commit_transaction() {
+            Ok(_) => Ok(()),
+            Err(error) => {
+                let _ = db.rollback_transaction();
+                Err(error)
+            }
+        },
+        Err(error) => {
+            let _ = db.rollback_transaction();
+            Err(error)
+        }
     }
-    db.commit_transaction()?;
-    Ok(())
 }
 
 pub fn insert_network_duplicate_log(
@@ -414,7 +434,6 @@ pub fn insert_network_duplicate_log(
     Ok(())
 }
 
-#[allow(dead_code)]
 pub fn insert_network_poll_log(db: &Db, log: &NetworkPollLogRecord) -> decentdb::Result<()> {
     db.execute_with_params(
         "INSERT INTO network_poll_log (id, link_id, started_at, ended_at, direction, status, bytes_in, bytes_out, packets_in, packets_out, error_message)
@@ -1999,6 +2018,33 @@ mod tests {
     }
 
     #[test]
+    fn insert_network_path_rolls_back_on_mid_insert_failure() {
+        let db = test_db();
+        let profile = profile();
+        insert_network_profile(&db, &profile).expect("insert profile");
+        insert_message_area(&db);
+        insert_network_message(&db, &message(&profile.id)).expect("insert message");
+
+        // The second node references a nonexistent message, forcing a
+        // foreign-key failure after the first node has already been inserted.
+        let mut dangling = path_node(MESSAGE_ID, &profile.id, 1);
+        dangling.message_id = "00000000-0000-4000-8000-999999999999".to_string();
+        let nodes = vec![path_node(MESSAGE_ID, &profile.id, 0), dangling];
+
+        insert_network_path(&db, &nodes).expect_err("dangling message_id must fail");
+
+        // The transaction rolled back: no partial rows survive...
+        let paths = list_network_path(&db).expect("list path after rollback");
+        assert!(paths.is_empty());
+
+        // ...and the shared connection is usable for a fresh transaction.
+        insert_network_path(&db, &[path_node(MESSAGE_ID, &profile.id, 0)])
+            .expect("insert after rollback");
+        let paths = list_network_path(&db).expect("list path after retry");
+        assert_eq!(paths.len(), 1);
+    }
+
+    #[test]
     fn duplicate_and_poll_logs_are_queryable() {
         let db = test_db();
         let profile = profile();
@@ -2225,7 +2271,10 @@ mod tests {
         assert_eq!(stats.packets_scanned, 1);
     }
 
+    /// Inserts 50,000 nodelist rows; too slow for the default test run.
+    /// Run explicitly with `cargo test -p oxidebbs-db -- --ignored`.
     #[test]
+    #[ignore]
     fn stress_test_50000_entry_nodelist() {
         let db = test_db();
         let profile = profile();

@@ -1,8 +1,22 @@
+/// Maximum number of parameters collected for a single CSI sequence before
+/// the sequence is aborted.
+const MAX_CSI_PARAMS: usize = 32;
+
+/// Maximum number of intermediate bytes collected for a single sequence before
+/// the sequence is aborted.
+const MAX_INTERMEDIATES: usize = 8;
+
+/// Maximum OSC payload size in bytes before the sequence is aborted.
+const MAX_OSC_PAYLOAD: usize = 4096;
+
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum AnsiSequence {
     Csi {
         params: Vec<i64>,
         intermediates: Vec<u8>,
+        /// ECMA-48 private parameter marker (`<`, `=`, `>`, or `?`), when the
+        /// sequence starts with one (e.g. `ESC[?25h` cursor visibility).
+        private_marker: Option<u8>,
         final_byte: u8,
     },
     Osc {
@@ -32,6 +46,7 @@ pub struct AnsiParser {
     params: Vec<i64>,
     current_param: Option<i64>,
     intermediates: Vec<u8>,
+    private_marker: Option<u8>,
     osc_payload: Vec<u8>,
 }
 
@@ -42,6 +57,7 @@ impl AnsiParser {
             params: Vec::new(),
             current_param: None,
             intermediates: Vec::new(),
+            private_marker: None,
             osc_payload: Vec::new(),
         }
     }
@@ -75,6 +91,7 @@ impl AnsiParser {
                 self.params.clear();
                 self.current_param = None;
                 self.intermediates.clear();
+                self.private_marker = None;
                 None
             }
             b']' => {
@@ -83,7 +100,12 @@ impl AnsiParser {
                 None
             }
             0x20..=0x2f => {
-                self.intermediates.push(byte);
+                if self.intermediates.len() >= MAX_INTERMEDIATES {
+                    self.state = ParseState::Ground;
+                    self.intermediates.clear();
+                } else {
+                    self.intermediates.push(byte);
+                }
                 None
             }
             0x30..=0x7e => {
@@ -101,35 +123,66 @@ impl AnsiParser {
         match byte {
             b'0'..=b'9' => {
                 let digit = i64::from(byte - b'0');
-                self.current_param = Some(self.current_param.unwrap_or(0) * 10 + digit);
+                self.current_param = Some(
+                    self.current_param
+                        .unwrap_or(0)
+                        .saturating_mul(10)
+                        .saturating_add(digit),
+                );
                 None
             }
             b';' => {
+                if self.params.len() >= MAX_CSI_PARAMS {
+                    return self.abort_csi();
+                }
                 self.params.push(self.current_param.unwrap_or(0));
                 self.current_param = None;
                 None
             }
+            0x3c..=0x3f => {
+                // ECMA-48 private parameter bytes; only valid as the leading
+                // parameter byte before any numeric parameters.
+                if self.private_marker.is_none()
+                    && self.params.is_empty()
+                    && self.current_param.is_none()
+                {
+                    self.private_marker = Some(byte);
+                    None
+                } else {
+                    self.abort_csi()
+                }
+            }
             0x20..=0x2f => {
+                if self.intermediates.len() >= MAX_INTERMEDIATES {
+                    return self.abort_csi();
+                }
                 self.intermediates.push(byte);
                 None
             }
             0x40..=0x7e => {
+                if self.params.len() >= MAX_CSI_PARAMS {
+                    return self.abort_csi();
+                }
                 self.params.push(self.current_param.unwrap_or(0));
                 self.state = ParseState::Ground;
                 Some(ParseEvent::Sequence(AnsiSequence::Csi {
                     params: std::mem::take(&mut self.params),
                     intermediates: std::mem::take(&mut self.intermediates),
+                    private_marker: self.private_marker.take(),
                     final_byte: byte,
                 }))
             }
-            _ => {
-                self.state = ParseState::Ground;
-                self.params.clear();
-                self.current_param = None;
-                self.intermediates.clear();
-                None
-            }
+            _ => self.abort_csi(),
         }
+    }
+
+    fn abort_csi(&mut self) -> Option<ParseEvent> {
+        self.state = ParseState::Ground;
+        self.params.clear();
+        self.current_param = None;
+        self.intermediates.clear();
+        self.private_marker = None;
+        None
     }
 
     fn feed_osc(&mut self, byte: u8) -> Option<ParseEvent> {
@@ -152,7 +205,14 @@ impl AnsiParser {
                 }))
             }
             _ => {
-                self.osc_payload.push(byte);
+                if self.osc_payload.len() >= MAX_OSC_PAYLOAD {
+                    // Unterminated or hostile OSC stream: abort instead of
+                    // growing the payload buffer without bound.
+                    self.state = ParseState::Ground;
+                    self.osc_payload.clear();
+                } else {
+                    self.osc_payload.push(byte);
+                }
                 None
             }
         }
@@ -206,6 +266,7 @@ mod tests {
             vec![ParseEvent::Sequence(AnsiSequence::Csi {
                 params: vec![12, 40],
                 intermediates: vec![],
+                private_marker: None,
                 final_byte: b'H',
             })]
         );
@@ -220,6 +281,7 @@ mod tests {
             vec![ParseEvent::Sequence(AnsiSequence::Csi {
                 params: vec![31, 1],
                 intermediates: vec![],
+                private_marker: None,
                 final_byte: b'm',
             })]
         );
@@ -234,6 +296,7 @@ mod tests {
             vec![ParseEvent::Sequence(AnsiSequence::Csi {
                 params: vec![0, 0],
                 intermediates: vec![],
+                private_marker: None,
                 final_byte: b'H',
             })]
         );
@@ -262,12 +325,14 @@ mod tests {
                 ParseEvent::Sequence(AnsiSequence::Csi {
                     params: vec![1],
                     intermediates: vec![],
+                    private_marker: None,
                     final_byte: b'm',
                 }),
                 ParseEvent::Char(b'!'),
                 ParseEvent::Sequence(AnsiSequence::Csi {
                     params: vec![0],
                     intermediates: vec![],
+                    private_marker: None,
                     final_byte: b'm',
                 }),
             ]
@@ -302,8 +367,65 @@ mod tests {
             vec![ParseEvent::Sequence(AnsiSequence::Csi {
                 params: vec![0],
                 intermediates: vec![],
+                private_marker: None,
                 final_byte: b'c',
             })]
         );
+    }
+
+    #[test]
+    fn parses_csi_private_marker() {
+        let mut parser = AnsiParser::new();
+        let events = parser.feed_all(b"\x1b[?25h");
+        assert_eq!(
+            events,
+            vec![ParseEvent::Sequence(AnsiSequence::Csi {
+                params: vec![25],
+                intermediates: vec![],
+                private_marker: Some(b'?'),
+                final_byte: b'h',
+            })]
+        );
+    }
+
+    #[test]
+    fn strip_ansi_removes_private_csi_without_leaking_bytes() {
+        assert_eq!(strip_ansi(b"\x1b[?25h"), b"");
+        assert_eq!(strip_ansi(b"\x1b[?25lHidden?\x1b[?25h"), b"Hidden?");
+    }
+
+    #[test]
+    fn saturates_overflowing_csi_param_instead_of_panicking() {
+        let mut parser = AnsiParser::new();
+        let mut input = b"\x1b[".to_vec();
+        input.extend_from_slice(&[b'9'; 25]);
+        input.push(b'H');
+        let events = parser.feed_all(&input);
+        assert_eq!(
+            events,
+            vec![ParseEvent::Sequence(AnsiSequence::Csi {
+                params: vec![i64::MAX],
+                intermediates: vec![],
+                private_marker: None,
+                final_byte: b'H',
+            })]
+        );
+    }
+
+    #[test]
+    fn aborts_unterminated_osc_at_payload_cap() {
+        let mut parser = AnsiParser::new();
+        let mut input = b"\x1b]0;".to_vec();
+        input.extend_from_slice(&[b'x'; MAX_OSC_PAYLOAD + 16]);
+        let events = parser.feed_all(&input);
+        // The OSC is aborted at the cap: no Osc event, payload buffer
+        // cleared, and the parser is back in the ground state.
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, ParseEvent::Sequence(_)))
+        );
+        assert!(parser.osc_payload.is_empty());
+        assert!(matches!(parser.state, ParseState::Ground));
     }
 }
