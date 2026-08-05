@@ -31,6 +31,45 @@ const CP437_HIGH: [char; 128] = [
     '\u{00b0}', '\u{2219}', '\u{00b7}', '\u{221a}', '\u{207f}', '\u{00b2}', '\u{25a0}', '\u{00a0}',
 ];
 
+/// CP437/VGA glyphs for bytes `0x01..=0x1F` and `0x7F`.
+///
+/// Bytes `0x09` (tab), `0x0A` (LF), `0x0D` (CR), and `0x1B` (ESC) are
+/// deliberately absent from this table: they are structural controls in `.ans`
+/// files and keep their ASCII control meaning in both directions. As a
+/// consequence the glyphs that share those bytes on real CP437 hardware
+/// (`○` U+25CB, `◙` U+25D9, `♪` U+266A, `←` U+2190) decode to the control
+/// meaning and are not encodable.
+const CP437_LOW: [(u8, char); 28] = [
+    (0x01, '\u{263A}'),
+    (0x02, '\u{263B}'),
+    (0x03, '\u{2665}'),
+    (0x04, '\u{2666}'),
+    (0x05, '\u{2663}'),
+    (0x06, '\u{2660}'),
+    (0x07, '\u{2022}'),
+    (0x08, '\u{25D8}'),
+    (0x0B, '\u{2642}'),
+    (0x0C, '\u{2640}'),
+    (0x0E, '\u{266B}'),
+    (0x0F, '\u{263C}'),
+    (0x10, '\u{25BA}'),
+    (0x11, '\u{25C4}'),
+    (0x12, '\u{2195}'),
+    (0x13, '\u{203C}'),
+    (0x14, '\u{00B6}'),
+    (0x15, '\u{00A7}'),
+    (0x16, '\u{25AC}'),
+    (0x17, '\u{21A8}'),
+    (0x18, '\u{2191}'),
+    (0x19, '\u{2193}'),
+    (0x1A, '\u{2192}'),
+    (0x1C, '\u{221F}'),
+    (0x1D, '\u{2194}'),
+    (0x1E, '\u{25B2}'),
+    (0x1F, '\u{25BC}'),
+    (0x7F, '\u{2302}'),
+];
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum TerminalProfile {
     Ansi80,
@@ -54,6 +93,7 @@ impl TerminalProfile {
 pub enum TerminalCharset {
     Cp437,
     Ascii,
+    Petscii,
     PetsciiAsciiFallback,
 }
 
@@ -62,6 +102,7 @@ impl TerminalCharset {
         match self {
             Self::Cp437 => "cp437",
             Self::Ascii => "ascii",
+            Self::Petscii => "petscii",
             Self::PetsciiAsciiFallback => "petscii_ascii_fallback",
         }
     }
@@ -161,7 +202,7 @@ impl TerminalCapabilities {
             supports_color: false,
             width: 40,
             height: 25,
-            charset: TerminalCharset::PetsciiAsciiFallback,
+            charset: TerminalCharset::Petscii,
             line_endings: LineEndingMode::Crlf,
             backspace_mode: BackspaceMode::BackspaceOrDelete,
             output_pacing: Some(OutputPacing {
@@ -486,17 +527,46 @@ pub fn encode_cp437(input: &str) -> Result<Vec<u8>, Cp437EncodeError> {
     Ok(bytes)
 }
 
+/// Decode a CP437 byte to its Unicode character.
+///
+/// Policy for the low range (`0x00..=0x7F`):
+/// - `0x00` decodes to NUL (U+0000).
+/// - The structural control bytes `0x09` (tab), `0x0A` (LF), `0x0D` (CR), and
+///   `0x1B` (ESC) keep their ASCII control meaning: `.ans` files use them
+///   structurally and downstream plain-text rendering relies on their line
+///   handling.
+/// - All other bytes in `0x01..=0x1F`, plus `0x7F`, decode to their CP437/VGA
+///   glyphs (smileys, card suits, arrows, etc.) via [`CP437_LOW`]; printable
+///   ASCII passes through unchanged.
 pub fn cp437_byte_to_char(byte: u8) -> char {
-    if byte < 0x80 {
-        char::from(byte)
-    } else {
-        CP437_HIGH[usize::from(byte - 0x80)]
+    match byte {
+        0x00 | 0x09 | 0x0a | 0x0d | 0x1b | 0x20..=0x7e => char::from(byte),
+        0x80..=0xff => CP437_HIGH[usize::from(byte - 0x80)],
+        _ => CP437_LOW
+            .iter()
+            .find(|(mapped_byte, _)| *mapped_byte == byte)
+            .map(|(_, character)| *character)
+            .unwrap_or('\u{FFFD}'),
     }
 }
 
+/// Encode a Unicode character to its CP437 byte, if representable.
+///
+/// The asymmetry with [`cp437_byte_to_char`] is intentional: bytes
+/// `0x09`/`0x0A`/`0x0D`/`0x1B` are reserved for their structural control
+/// meaning, so the glyphs that would share those bytes on real CP437 hardware
+/// (`○` U+25CB, `◙` U+25D9, `♪` U+266A, `←` U+2190) are not encodable and
+/// return `None`.
 pub fn char_to_cp437_byte(character: char) -> Option<u8> {
     if character.is_ascii() {
         return Some(character as u8);
+    }
+
+    if let Some((byte, _)) = CP437_LOW
+        .iter()
+        .find(|(_, mapped_character)| *mapped_character == character)
+    {
+        return Some(*byte);
     }
 
     CP437_HIGH
@@ -504,6 +574,127 @@ pub fn char_to_cp437_byte(character: char) -> Option<u8> {
         .position(|mapped| *mapped == character)
         .and_then(|index| u8::try_from(index).ok())
         .map(|index| index + 0x80)
+}
+
+/// PETSCII (Commodore) decode table for bytes `0x00..=0x7F`.
+///
+/// This implements the C64 "upper case and graphics" screen set. Codes in the
+/// `0x01..=0x1A` / `0x41..=0x5A` / `0x61..=0x7A` ranges carry upper/lower case
+/// text, while `0x0D`/`0x0A` are newline controls and the `0xA0..=0xDF` range
+/// carries the standard C64 line-drawing and block graphics. Glyph fidelity for
+/// the graphics range follows the C64 ROM approximations; see ADR 0034.
+const PETSCII_LOWER: [char; 128] = [
+    '\u{FFFD}', '\u{FFFD}', '\u{FFFD}', '\u{FFFD}', '\u{FFFD}', '\u{FFFD}', '\u{FFFD}', '\u{FFFD}',
+    '\u{FFFD}', '\u{FFFD}', '\n', '\u{FFFD}', '\u{FFFD}', '\n', '\u{FFFD}', '\u{FFFD}', '\u{FFFD}',
+    '\u{FFFD}', '\u{FFFD}', '\u{FFFD}', '\u{FFFD}', '\u{FFFD}', '\u{FFFD}', '\u{FFFD}', '\u{FFFD}',
+    '\u{FFFD}', '\u{FFFD}', '\u{FFFD}', '\u{FFFD}', '\u{FFFD}', '\u{25C4}', '\u{25BA}', ' ', '!',
+    '"', '#', '$', '%', '&', '\'', '(', ')', '*', '+', ',', '-', '.', '/', '0', '1', '2', '3', '4',
+    '5', '6', '7', '8', '9', ':', ';', '<', '=', '>', '?', '@', 'A', 'B', 'C', 'D', 'E', 'F', 'G',
+    'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z',
+    '[', '\u{00A3}', ']', '\u{2191}', '\u{2190}', '`', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i',
+    'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', '{', '|',
+    '}', '~', '\u{007F}',
+];
+
+/// PETSCII (Commodore) decode table for bytes `0x80..=0xFF`.
+const PETSCII_UPPER: [char; 128] = [
+    '\u{FFFD}', '\u{FFFD}', '\u{FFFD}', '\u{FFFD}', '\u{FFFD}', '\u{FFFD}', '\u{FFFD}', '\u{FFFD}',
+    '\u{FFFD}', '\u{FFFD}', '\n', '\u{FFFD}', '\u{FFFD}', '\n', '\u{FFFD}', '\u{FFFD}', '\u{FFFD}',
+    '\u{FFFD}', '\u{FFFD}', '\u{FFFD}', '\u{FFFD}', '\u{FFFD}', '\u{FFFD}', '\u{FFFD}', '\u{FFFD}',
+    '\u{FFFD}', '\u{FFFD}', '\u{FFFD}', '\u{FFFD}', '\u{FFFD}', '\u{25C4}', '\u{25BA}', '\u{2588}',
+    '\u{2589}', '\u{258A}', '\u{258B}', '\u{258C}', '\u{258D}', '\u{258E}', '\u{258F}', '\u{2590}',
+    '\u{2580}', '\u{2590}', '\u{2581}', '\u{2582}', '\u{2583}', '\u{2584}', '\u{2592}', '\u{2586}',
+    '\u{2500}', '\u{2588}', '\u{2502}', '\u{250C}', '\u{2510}', '\u{2514}', '\u{2518}', '\u{251C}',
+    '\u{2524}', '\u{252C}', '\u{2534}', '\u{253C}', '\u{2580}', '\u{2584}', '\u{2580}', '\u{2588}',
+    'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S',
+    'T', 'U', 'V', 'W', 'X', 'Y', 'Z', '\u{2591}', '\u{2592}', '\u{25C4}', '\u{25BA}', '\u{2500}',
+    '\u{2588}', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p',
+    'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', '\u{2191}', '\u{2193}', '\u{2190}',
+    '\u{2192}', '\u{25C6}',
+];
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct PetsciiEncodeError {
+    character: char,
+    byte_index: usize,
+}
+
+impl PetsciiEncodeError {
+    pub fn new(character: char, byte_index: usize) -> Self {
+        Self {
+            character,
+            byte_index,
+        }
+    }
+
+    pub fn character(&self) -> char {
+        self.character
+    }
+
+    pub fn byte_index(&self) -> usize {
+        self.byte_index
+    }
+}
+
+impl fmt::Display for PetsciiEncodeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "character {:?} at byte index {} is not representable in PETSCII",
+            self.character, self.byte_index
+        )
+    }
+}
+
+impl Error for PetsciiEncodeError {}
+
+pub fn decode_petscii(bytes: &[u8]) -> String {
+    bytes.iter().copied().map(petscii_byte_to_char).collect()
+}
+
+pub fn petscii_byte_to_char(byte: u8) -> char {
+    if byte < 0x80 {
+        PETSCII_LOWER[usize::from(byte)]
+    } else {
+        PETSCII_UPPER[usize::from(byte - 0x80)]
+    }
+}
+
+pub fn char_to_petscii_byte(character: char) -> Option<u8> {
+    if character.is_ascii() {
+        return Some(character as u8);
+    }
+
+    if let Some(index) = PETSCII_LOWER.iter().position(|mapped| *mapped == character) {
+        return u8::try_from(index).ok();
+    }
+
+    PETSCII_UPPER
+        .iter()
+        .position(|mapped| *mapped == character)
+        .map(|index| index as u8 + 0x80)
+}
+
+/// Encode Unicode text to PETSCII bytes, failing on characters that have no
+/// PETSCII representation. Callers that must never fail should use
+/// [`render_petscii_lossy`].
+pub fn render_petscii(input: &str) -> Result<Vec<u8>, PetsciiEncodeError> {
+    let mut bytes = Vec::with_capacity(input.len());
+    for (byte_index, character) in input.char_indices() {
+        let byte = char_to_petscii_byte(character)
+            .ok_or_else(|| PetsciiEncodeError::new(character, byte_index))?;
+        bytes.push(byte);
+    }
+    Ok(bytes)
+}
+
+/// Encode Unicode text to PETSCII bytes, replacing any unsupported character
+/// with `?` per the ADR 0034 replacement policy.
+pub fn render_petscii_lossy(input: &str) -> Vec<u8> {
+    input
+        .chars()
+        .map(|character| char_to_petscii_byte(character).unwrap_or(b'?'))
+        .collect()
 }
 
 #[cfg(test)]
@@ -528,6 +719,49 @@ mod tests {
         let encoded = encode_cp437("\u{255a}\u{2550}\u{255d}").expect("encode CP437");
 
         assert_eq!(encoded, [0xc8, 0xcd, 0xbc]);
+    }
+
+    #[test]
+    fn decodes_cp437_low_range_glyphs() {
+        assert_eq!(cp437_byte_to_char(0x01), '\u{263A}');
+        assert_eq!(cp437_byte_to_char(0x03), '\u{2665}');
+        assert_eq!(cp437_byte_to_char(0x10), '\u{25BA}');
+        assert_eq!(cp437_byte_to_char(0x7f), '\u{2302}');
+    }
+
+    #[test]
+    fn preserves_structural_control_bytes_in_cp437_decode() {
+        assert_eq!(cp437_byte_to_char(0x00), '\u{0000}');
+        assert_eq!(cp437_byte_to_char(0x09), '\t');
+        assert_eq!(cp437_byte_to_char(0x0a), '\n');
+        assert_eq!(cp437_byte_to_char(0x0d), '\r');
+        assert_eq!(cp437_byte_to_char(0x1b), '\u{001b}');
+    }
+
+    #[test]
+    fn round_trips_cp437_low_range_glyphs() {
+        for (character, byte) in [
+            ('\u{263A}', 0x01),
+            ('\u{25BA}', 0x10),
+            ('\u{2302}', 0x7f),
+            ('\u{2665}', 0x03),
+        ] {
+            assert_eq!(char_to_cp437_byte(character), Some(byte));
+            assert_eq!(cp437_byte_to_char(byte), character);
+        }
+    }
+
+    #[test]
+    fn rejects_glyphs_colliding_with_preserved_control_bytes() {
+        // These glyphs share bytes 0x09/0x0A/0x0D/0x1B with preserved
+        // structural controls, so they intentionally cannot round-trip.
+        for glyph in ['\u{25CB}', '\u{25D9}', '\u{266A}', '\u{2190}'] {
+            assert_eq!(char_to_cp437_byte(glyph), None);
+        }
+
+        let error = encode_cp437("\u{266A}").expect_err("eighth note collides with CR byte 0x0D");
+        assert_eq!(error.character(), '\u{266A}');
+        assert_eq!(error.byte_index(), 0);
     }
 
     #[test]
@@ -564,7 +798,7 @@ mod tests {
         assert_eq!(capabilities.height, 25);
         assert!(!capabilities.supports_ansi);
         assert!(!capabilities.supports_color);
-        assert_eq!(capabilities.charset, TerminalCharset::PetsciiAsciiFallback);
+        assert_eq!(capabilities.charset, TerminalCharset::Petscii);
         assert_eq!(capabilities.line_endings, LineEndingMode::Crlf);
         assert_eq!(
             capabilities.backspace_mode,
@@ -713,5 +947,62 @@ mod tests {
             ]
         );
         assert!(lines.iter().all(|line| line.len() <= 20));
+    }
+
+    #[test]
+    fn petscii_charset_reports_petscii_name() {
+        assert_eq!(TerminalCharset::Petscii.as_str(), "petscii");
+    }
+
+    #[test]
+    fn decodes_petscii_text_bytes() {
+        assert_eq!(decode_petscii(&[0x41, 0x42, 0x43]), "ABC");
+        assert_eq!(decode_petscii(&[0x61, 0x62, 0x63]), "abc");
+        assert_eq!(decode_petscii(&[0xc1, 0xc2]), "AB");
+    }
+
+    #[test]
+    fn encodes_text_to_petscii_bytes() {
+        assert_eq!(render_petscii("ABC").unwrap(), [0x41, 0x42, 0x43]);
+        assert_eq!(render_petscii("abc").unwrap(), [0x61, 0x62, 0x63]);
+    }
+
+    #[test]
+    fn round_trips_petscii_text() {
+        let text = "Hello, BBS caller! 123";
+        let encoded = render_petscii(text).expect("ascii text is petscii-safe");
+        assert_eq!(decode_petscii(&encoded), text);
+    }
+
+    #[test]
+    fn decodes_petscii_box_drawing_graphics() {
+        assert_eq!(
+            decode_petscii(&[0xb4, 0xb1, 0xb5, 0xb6, 0xb1, 0xb7, 0xb3]),
+            "\u{250c}\u{2500}\u{2510}\u{2514}\u{2500}\u{2518}\u{2502}"
+        );
+    }
+
+    #[test]
+    fn encodes_box_drawing_to_petscii_graphics() {
+        let encoded = render_petscii("\u{250c}\u{2500}\u{2510}\u{251c}\u{253c}\u{2524}").unwrap();
+        assert_eq!(encoded, [0xb4, 0xb1, 0xb5, 0xb8, 0xbc, 0xb9]);
+    }
+
+    #[test]
+    fn reports_unrepresentable_petscii_character() {
+        let error = render_petscii("BBS \u{1f680}").expect_err("rocket is not PETSCII");
+        assert_eq!(error.character(), '\u{1f680}');
+        assert_eq!(error.byte_index(), 4);
+    }
+
+    #[test]
+    fn petscii_lossy_replaces_unsupported_glyphs() {
+        assert_eq!(render_petscii_lossy("A\u{1f680}B"), [0x41, b'?', 0x42]);
+    }
+
+    #[test]
+    fn maps_petscii_newline_controls_to_logical_newline() {
+        assert_eq!(decode_petscii(&[0x4f, 0x0d, 0x50]), "O\nP");
+        assert_eq!(decode_petscii(&[0x4f, 0x0a, 0x50]), "O\nP");
     }
 }

@@ -8,7 +8,8 @@ Current capabilities:
 
 - Door definitions are stored in DecentDB after setup/config synchronization.
 - `doors list`, `doors show`, `doors check`, `doors enable`, `doors disable`,
-  `doors test --dry-run`, `doors add`, `doors edit`, `doors dropfile --format`,
+  `doors package inspect`, `doors test --dry-run`, `doors add`, `doors edit`,
+  `doors dropfile --format`,
   `doors runs list/show`, and `doors cleanup` are available through the sysop
   CLI.
 - Drop-file writers cover `DOOR.SYS`, `DORINFO1.DEF`, `CHAIN.TXT`,
@@ -95,14 +96,31 @@ remote provider door, `--endpoint` is the value stored as the provider endpoint.
 Door run history is visible through:
 
 ```bash
+oxidebbs-server doors package inspect sample.oxdoor
+oxidebbs-server doors package import sample.oxdoor --dry-run
+oxidebbs-server doors package import sample.oxdoor
+oxidebbs-server doors package import sample.oxdoor --replace
 oxidebbs-server doors runs list
 oxidebbs-server doors runs show <run-id>
 oxidebbs-server doors cleanup
 ```
 
+`.oxdoor` packages are ZIP archives with `oxide-door.toml`,
+`checksums.sha256`, and a `files/` payload root. Optional roots are `docs/` and
+`tests/`. `inspect` validates metadata, checksums, and path safety without
+installing anything. `import --dry-run` prints the target directory, planned file
+copies, and door definition changes without writing files or DecentDB. Real
+import copies only `files/` under `paths.doors`, creates or updates the door
+definition, and leaves the door disabled unless `--enable` is passed. Existing
+target directories or door definitions require `--replace`.
+
+Package import does not run package-provided installer scripts, setup batches,
+keygens, downloaded commands, shell hooks, or menu rewrites. Menu metadata is a
+hint only; enabled configured doors are what the caller Doors menu exposes.
+
 `doors cleanup` removes leftover `node-*` door runtime directories under
 `paths.runtime`. It does not rewrite persisted door-run history.
 
-OxideBBS does not bundle copyrighted or abandonware DOS doors. Operators provide
-their own door binaries or use the project-owned Oxide Door Check fixture for
-validation.
+OxideBBS does not bundle third-party copyrighted, shareware, or abandonware DOS
+doors. Operators provide their own door binaries or use the project-owned Oxide
+Door Check fixture for validation.

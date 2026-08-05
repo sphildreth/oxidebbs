@@ -14,6 +14,11 @@ fi
 
 printf '%s\n' "$VERSION_VALUE" > VERSION
 
+# Crate versions are centralized in [workspace.package]; member manifests use
+# version.workspace = true. The crate loop below is kept for any manifest that
+# still pins a literal version.
+perl -0pi -e 's/^(\[workspace\.package\][^\[]*?^version = )"[^"]+"/$1"'"$VERSION_VALUE"'"/m' Cargo.toml
+
 for manifest in crates/*/Cargo.toml; do
   perl -0pi -e "s/^version = \"[^\"]+\"/version = \"$VERSION_VALUE\"/m" "$manifest"
 done

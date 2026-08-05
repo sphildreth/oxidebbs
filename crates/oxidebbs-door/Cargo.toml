@@ -1,12 +1,15 @@
 [package]
 name = "oxidebbs-door"
-version = "1.2.2"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 
 [dependencies]
+hex.workspace = true
 oxidebbs-core = { path = "../oxidebbs-core" }
 serde.workspace = true
+sha2.workspace = true
 thiserror.workspace = true
 toml.workspace = true
+zip.workspace = true

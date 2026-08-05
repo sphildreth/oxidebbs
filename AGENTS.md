@@ -50,26 +50,39 @@ sudo apt-get install -y clang libclang-dev
 
 ```
 crates/
-  oxidebbs-server/   # binary entrypoint (main.rs)
-  oxidebbs-core/     # domain: sessions, menus, users, permissions
-  oxidebbs-term/     # ANSI/CP437 rendering, AnsiBuffer, CP437 encode/decode
-  oxidebbs-telnet/   # telnet transport and negotiation (stub)
-  oxidebbs-db/       # DecentDB repository layer, OxideDb, schema init
-  oxidebbs-door/     # door definitions, drop files, runners (stub)
-  oxidebbs-sysop/    # local sysop admin TUI/CLI (stub)
-design/              # ARCHITECTURE.md, SPEC.md, PRD.md, TASKS.md, ADRs
-docs/                # VitePress documentation site (Node/npm)
-config/              # oxidebbs.example.toml
-scripts/             # dev-check.sh
+  oxidebbs-server/    # binary entrypoint: config, telnet/serial serving, web admin UI, web terminal, binkp listener, sysop CLI
+  oxidebbs-core/      # domain: sessions, menus, users, permissions, messages, nodes, network adapters
+  oxidebbs-term/      # ANSI/CP437 rendering, AnsiBuffer, CP437 encode/decode
+  oxidebbs-telnet/    # telnet transport/negotiation plus serial/modem transport (serialport)
+  oxidebbs-db/        # DecentDB repository layer, OxideDb, schema init/migrations
+  oxidebbs-door/      # door definitions, drop files, DOS door runners, OxDoor packages
+  oxidebbs-sysop/     # local sysop admin ratatui TUI and CLI
+  oxidebbs-network/   # protocol-neutral network types (FTN addresses, profiles, links, envelopes)
+  oxidebbs-transfer/  # caller file transfer protocols (XMODEM-CRC, ZMODEM)
+  oxidebbs-ftn/       # FTN packets, bundles, tosser/scanner, areafix, nodelist, routing
+  oxidebbs-binkp/     # BinkP mail transport: framing, client/server sessions, TLS
+  oxidebbs-oxidenet/  # OxideNet profile, addressing defaults, node registry, config packages
+design/               # ARCHITECTURE.md, SPEC.md, PRD.md, TASKS.md, ADRs
+docs/                 # VitePress documentation site (Node/npm)
+config/               # oxidebbs.example.toml
+scripts/              # dev-check.sh
 ```
 
-Only `oxidebbs-db` and `oxidebbs-term` have real implementation. Everything else is scaffolded stubs.
+All 12 crates are fully implemented; there are no remaining stubs. The current
+release version lives in the root `VERSION` file — see `design/VERSIONING_GUIDE.md`.
 
 ## Dependency direction
 
 ```
-server -> core -> term, db, door, telnet
-sysop  -> core, db
+server    -> core, term, telnet, db, door, sysop, transfer, ftn, binkp, oxidenet
+             (all library crates except network, reached transitively via core)
+core      -> network
+door      -> core
+sysop     -> db, door, oxidenet
+ftn       -> network, db
+oxidenet  -> network, db
+transfer  -> telnet
+term, telnet, db, network, binkp -> no internal deps
 ```
 
 Lower-level crates must not depend on `oxidebbs-server`.
@@ -78,7 +91,7 @@ Lower-level crates must not depend on `oxidebbs-server`.
 
 1. Rust only, edition 2024.
 2. DecentDB is the only database. No SQLite, Postgres, MySQL, Redis, MongoDB, or ORM.
-3. Telnet-only for v1. No physical modem/serial yet.
+3. v1 is telnet-first; serial/modem transport shipped in v1.2 per ADR 0019.
 4. ANSI/CP437 is byte-oriented, not Unicode-first for the caller UI.
 5. Do not use Ratatui for remote caller UI. Ratatui is permitted for local sysop TUI only.
 6. Keep door execution isolated from core session logic.
@@ -88,7 +101,7 @@ Lower-level crates must not depend on `oxidebbs-server`.
 
 All shared deps are declared in the root `[workspace.dependencies]`. Member crates reference them with `dep.workspace = true`. Use `cargo add` to add new deps; do not hand-edit versions.
 
-Key deps: `anyhow`, `thiserror`, `serde`, `tokio` (full features), `tracing`, `clap` (derive+env), `decentdb` (git tag v2.8.0).
+Key deps: `thiserror`, `serde`, `tokio` (full features), `tracing`, `clap` (derive+env), `decentdb` (git tag v2.8.0), `axum` (server web UI), `argon2`, `serialport`, `zip`, `time`, `ratatui`/`crossterm` (sysop TUI only).
 
 ## Rust code generation rules
 

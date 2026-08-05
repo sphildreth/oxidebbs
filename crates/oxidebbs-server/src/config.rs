@@ -1250,7 +1250,7 @@ fn default_terminal_profiles() -> HashMap<String, TerminalProfileConfig> {
             height: 25,
             supports_ansi: false,
             supports_color: false,
-            charset: "petscii_ascii_fallback".to_string(),
+            charset: "petscii".to_string(),
             line_endings: "crlf".to_string(),
             backspace_mode: "backspace_or_delete".to_string(),
             output_pacing_bytes_per_second: Some(1_200),
@@ -1519,11 +1519,12 @@ fn validate_terminal_charset(charset: &str) -> Result<&'static str, String> {
     match charset.trim().to_ascii_lowercase().as_str() {
         "cp437" => Ok("cp437"),
         "ascii" => Ok("ascii"),
+        "petscii" => Ok("petscii"),
         "petscii_ascii_fallback" | "petscii-ascii-fallback" | "petscii40" => {
             Ok("petscii_ascii_fallback")
         }
         other => Err(format!(
-            "terminal charset must be one of cp437, ascii, or petscii_ascii_fallback, got {other:?}"
+            "terminal charset must be one of cp437, ascii, petscii, or petscii_ascii_fallback, got {other:?}"
         )),
     }
 }
@@ -1531,6 +1532,7 @@ fn validate_terminal_charset(charset: &str) -> Result<&'static str, String> {
 fn terminal_charset(charset: &str) -> Result<TerminalCharset, String> {
     Ok(match validate_terminal_charset(charset)? {
         "cp437" => TerminalCharset::Cp437,
+        "petscii" => TerminalCharset::Petscii,
         "petscii_ascii_fallback" => TerminalCharset::PetsciiAsciiFallback,
         _ => TerminalCharset::Ascii,
     })

@@ -58,13 +58,8 @@ placeholder.
 
 ### Rust workspace
 
-- `crates/oxidebbs-server/Cargo.toml`
-- `crates/oxidebbs-core/Cargo.toml`
-- `crates/oxidebbs-term/Cargo.toml`
-- `crates/oxidebbs-telnet/Cargo.toml`
-- `crates/oxidebbs-db/Cargo.toml`
-- `crates/oxidebbs-door/Cargo.toml`
-- `crates/oxidebbs-sysop/Cargo.toml`
+- `Cargo.toml` (`[workspace.package] version`; all member crates use
+  `version.workspace = true`)
 - `Cargo.lock`
 - `VERSION`
 - `scripts/bump-version.sh`

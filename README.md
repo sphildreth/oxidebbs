@@ -42,9 +42,10 @@ terminal profile; this is not a C64-native server port.
 - 📡 **Telnet And Serial Caller Runtime** - Multi-node telnet serving plus
   disabled-by-default physical serial/modem devices, with session lifecycle
   tracking, idle timeout handling, graceful shutdown, and live node state.
-- 🎨 **ANSI/CP437-First UI** - Raw ANSI assets, CP437 conversion, C64-friendly
-  40-column plain/PETSCII-fallback caller profile, 80-column ANSI profile,
-  paging, caller-safe prompts, and CRLF-normalized telnet output.
+- 🎨 **ANSI/CP437-First UI** - Raw ANSI assets, CP437 conversion, a C64-friendly
+  40-column profile with full PETSCII encode/decode for Commodore callers, an
+  80-column ANSI profile, paging, caller-safe prompts, and CRLF-normalized
+  telnet output.
 - 🧭 **Configurable Menus** - Login, main, info, message, door, logoff, and
   nested submenu routing with hotkey-driven caller commands.
 - 👤 **Accounts And Auth** - New-user creation, Argon2id password hashing,

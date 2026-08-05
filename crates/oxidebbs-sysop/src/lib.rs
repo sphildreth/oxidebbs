@@ -31,7 +31,7 @@ pub enum SysopError {
     Database(#[from] oxidebbs_db::DbError),
 
     #[error("door config error: {0}")]
-    DoorConfig(#[from] DoorError),
+    DoorConfig(#[source] Box<DoorError>),
 
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
@@ -41,6 +41,12 @@ pub enum SysopError {
 
     #[error("{0}")]
     Message(String),
+}
+
+impl From<DoorError> for SysopError {
+    fn from(error: DoorError) -> Self {
+        Self::DoorConfig(Box::new(error))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

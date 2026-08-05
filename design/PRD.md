@@ -188,8 +188,8 @@ shipped in v1.2 per
 - Web-based read-only status dashboard
 - Caller file-area transfers: ZMODEM primary and XMODEM-CRC fallback
 
-Post-v1.2 candidates are tracked in
-[`design/RELEASE_v1_3_PLAN.md`](./RELEASE_v1_3_PLAN.md). Door work after v1.2
+Post-v1.3 candidates are tracked in
+[`design/RELEASE_v1_4_PLAN.md`](./RELEASE_v1_4_PLAN.md). Door work after v1.2
 focuses on compatibility with existing door games, drop-file formats, provider
 behavior, and sysop tooling.
 

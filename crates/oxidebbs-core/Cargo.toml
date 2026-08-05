@@ -1,12 +1,11 @@
 [package]
 name = "oxidebbs-core"
-version = "1.2.2"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 
 [dependencies]
 oxidebbs-network = { path = "../oxidebbs-network" }
-oxidebbs-transfer = { path = "../oxidebbs-transfer" }
 serde.workspace = true
 thiserror.workspace = true

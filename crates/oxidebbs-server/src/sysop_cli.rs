@@ -48,7 +48,7 @@ pub(crate) enum CliError {
     Database(#[from] oxidebbs_db::DbError),
 
     #[error(transparent)]
-    Door(#[from] oxidebbs_door::DoorError),
+    Door(Box<oxidebbs_door::DoorError>),
 
     #[error(transparent)]
     Json(#[from] serde_json::Error),
@@ -61,6 +61,12 @@ pub(crate) enum CliError {
 
     #[error(transparent)]
     Serve(#[from] serve::ServeError),
+}
+
+impl From<oxidebbs_door::DoorError> for CliError {
+    fn from(error: oxidebbs_door::DoorError) -> Self {
+        Self::Door(Box::new(error))
+    }
 }
 
 #[derive(Parser)]

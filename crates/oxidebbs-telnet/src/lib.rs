@@ -6,9 +6,11 @@ pub use serial::{
     SerialFlowControl, SerialHandle, SerialLoopback, SerialOpenError, SerialParity,
     SerialPortConfig, SerialTransport,
 };
+
 pub use telnet::{
-    TELOPT_BINARY, TELOPT_ECHO, TELOPT_NAWS, TELOPT_SUPPRESS_GO_AHEAD, TELOPT_TERMINAL_TYPE,
-    TelnetCommand, TelnetEvent, TelnetLifecycleHooks, TelnetOptionPolicy, TelnetParser,
-    TelnetSession,
+    DO, DONT, IAC, SB, SE, TELOPT_ECHO, TELOPT_NAWS, TELOPT_SUPPRESS_GO_AHEAD,
+    TELOPT_TERMINAL_TYPE, TELOPT_TTYPE_IS, TELOPT_TTYPE_SEND, TelnetCommand, TelnetEvent,
+    TelnetParser, TelnetSession, WILL, WONT,
 };
+
 pub use transport::{LoopbackTransport, TcpTransport, Transport, TransportError};

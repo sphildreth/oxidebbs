@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 use std::fs;
+use std::io;
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 use clap::{Args, Subcommand};
 #[cfg(unix)]
@@ -73,6 +74,10 @@ pub enum DoorsCommand {
     },
     Test(DoorTestArgs),
     Dropfile(DoorDropfileArgs),
+    Package {
+        #[command(subcommand)]
+        command: DoorPackageCommand,
+    },
     Add(DoorAddArgs),
     Edit(DoorEditArgs),
     Runs {
@@ -104,6 +109,24 @@ pub struct DoorDropfileArgs {
     pub format: String,
     #[arg(long)]
     pub output: Option<std::path::PathBuf>,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum DoorPackageCommand {
+    Inspect {
+        path: PathBuf,
+    },
+    Import {
+        path: PathBuf,
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        replace: bool,
+        #[arg(long)]
+        enable: bool,
+        #[arg(long)]
+        no_check: bool,
+    },
 }
 
 #[derive(Debug, Clone, Args)]
@@ -198,6 +221,1003 @@ fn print_check_issues(issues: &[CheckIssue]) {
     }
 }
 
+fn run_door_package(args: DoorPackageCommand, ctx: &AppContext) -> CliResult<()> {
+    match args {
+        DoorPackageCommand::Inspect { path } => run_door_package_inspect(path, ctx),
+        DoorPackageCommand::Import {
+            path,
+            dry_run,
+            replace,
+            enable,
+            no_check,
+        } => run_door_package_import(path, dry_run, replace, enable, no_check, ctx),
+    }
+}
+
+fn run_door_package_inspect(path: PathBuf, ctx: &AppContext) -> CliResult<()> {
+    let summary = oxidebbs_door::inspect_oxide_door_package(&path)?;
+    let target_install_directory = planned_door_package_install_directory(
+        &ctx.config.paths.doors,
+        &summary.working_directory,
+    )?;
+    if ctx.json {
+        let mut value = serde_json::to_value(&summary).map_err(CliError::from)?;
+        if let Some(object) = value.as_object_mut() {
+            object.insert(
+                "target_install_directory".to_string(),
+                json!(target_install_directory),
+            );
+        }
+        print_json(&value)?;
+    } else {
+        println!("package.name: {}", summary.package_name);
+        println!("package.id: {}", summary.package_id);
+        println!("package.version: {}", summary.package_version);
+        println!("package.kind: {}", summary.package_kind);
+        println!("package.legal_status: {}", summary.legal_status);
+        println!(
+            "package.requires_key: {}",
+            if summary.requires_key { "yes" } else { "no" }
+        );
+        if let Some(source_url) = summary.source_url.as_deref() {
+            println!("package.source_url: {}", source_url);
+        }
+        println!("door.id: {}", summary.door_id);
+        println!("door.name: {}", summary.door_name);
+        println!("door.category: {}", summary.door_category);
+        println!("door.runner: {}", summary.runner);
+        println!("door.command: {}", summary.command);
+        println!("door.working_directory: {}", summary.working_directory);
+        println!("door.preferred_drop_file: {}", summary.preferred_drop_file);
+        println!(
+            "door.supported_drop_files: {}",
+            summary.supported_drop_files.join(", ")
+        );
+        println!(
+            "door.exclusive: {}",
+            if summary.exclusive { "yes" } else { "no" }
+        );
+        println!("door.timeout_seconds: {}", summary.timeout_seconds);
+        println!("access.min_security_level: {}", summary.min_security_level);
+        println!(
+            "target.install_directory: {}",
+            target_install_directory.display()
+        );
+        println!(
+            "persistence.enabled_after_import_request: {}",
+            if summary.enabled_after_import_request {
+                "yes"
+            } else {
+                "no"
+            }
+        );
+        println!("files.count: {}", summary.file_count);
+        println!("files.total_unpacked_size: {}", summary.total_unpacked_size);
+        if summary.warnings.is_empty() {
+            println!("warnings: (none)");
+        } else {
+            println!("warnings:");
+            for warning in summary.warnings {
+                println!("  - {warning}");
+            }
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct DoorPackageImportDryRunDefinition {
+    key: String,
+    name: String,
+    runner: String,
+    working_dir: String,
+    command: String,
+    drop_file: String,
+    exclusive: bool,
+    time_limit_minutes: u32,
+    enabled: bool,
+    min_security_level: i32,
+}
+
+#[derive(Debug, Clone)]
+struct DoorPackageImportFileCopy {
+    package_path: String,
+    destination_path: PathBuf,
+}
+
+impl DoorPackageImportFileCopy {
+    fn to_json(&self) -> JsonValue {
+        json!({
+            "package_path": self.package_path,
+            "destination_path": self.destination_path,
+        })
+    }
+}
+
+impl DoorPackageImportDryRunDefinition {
+    fn to_json(&self) -> JsonValue {
+        json!({
+            "key": self.key,
+            "name": self.name,
+            "runner": self.runner,
+            "working_dir": self.working_dir,
+            "command": self.command,
+            "drop_file": self.drop_file,
+            "exclusive": self.exclusive,
+            "time_limit_minutes": self.time_limit_minutes,
+            "enabled": self.enabled,
+            "min_security_level": self.min_security_level
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+struct DoorPackageImportDryRun {
+    package_path: PathBuf,
+    package_id: String,
+    package_name: String,
+    target_door_id: String,
+    target_install_directory: PathBuf,
+    target_install_directory_exists: bool,
+    door_definition_exists: bool,
+    replace: bool,
+    file_count: usize,
+    total_unpacked_size: u64,
+    planned_file_copies: Vec<DoorPackageImportFileCopy>,
+    will_enable: bool,
+    menu_category: String,
+    would_create_door: DoorPackageImportDryRunDefinition,
+    warnings: Vec<String>,
+    blocking_errors: Vec<String>,
+    follow_up_commands: Vec<String>,
+}
+
+impl DoorPackageImportDryRun {
+    fn to_json(&self) -> JsonValue {
+        json!({
+            "package_path": self.package_path,
+            "package_id": self.package_id,
+            "package_name": self.package_name,
+            "target_door_id": self.target_door_id,
+            "menu_category": self.menu_category,
+            "target_install_directory": self.target_install_directory,
+            "target_install_directory_exists": self.target_install_directory_exists,
+            "door_definition_exists": self.door_definition_exists,
+            "replace": self.replace,
+            "file_count": self.file_count,
+            "total_unpacked_size": self.total_unpacked_size,
+            "planned_file_copies": self
+                .planned_file_copies
+                .iter()
+                .map(DoorPackageImportFileCopy::to_json)
+                .collect::<Vec<_>>(),
+            "will_enable": self.will_enable,
+            "would_create_door": self.would_create_door.to_json(),
+            "warnings": self.warnings,
+            "blocking_errors": self.blocking_errors,
+            "follow_up_commands": self.follow_up_commands,
+        })
+    }
+}
+
+fn run_door_package_import(
+    path: PathBuf,
+    dry_run: bool,
+    replace: bool,
+    enable: bool,
+    no_check: bool,
+    ctx: &AppContext,
+) -> CliResult<()> {
+    if dry_run {
+        let dry_run_db = open_existing_database_for_dry_run(&ctx.config)?;
+        let report = plan_door_package_import(dry_run_db.as_ref(), &ctx.config, &path, replace)?;
+        if ctx.json {
+            print_json(&report.to_json())?;
+        } else {
+            print_door_package_import_dry_run_report(&report)?;
+        }
+        if !report.blocking_errors.is_empty() {
+            return Err(CliError::Message(format!(
+                "package import blocked: {}",
+                report.blocking_errors.join("; ")
+            )));
+        }
+        return Ok(());
+    }
+
+    let db = open_database(&ctx.config)?;
+    let report = plan_door_package_import(Some(db.db()), &ctx.config, &path, replace)?;
+
+    if !report.blocking_errors.is_empty() {
+        if ctx.json {
+            print_json(&report.to_json())?;
+        } else {
+            print_door_package_import_dry_run_report(&report)?;
+        }
+        return Err(CliError::Message(format!(
+            "package import blocked: {}",
+            report.blocking_errors.join("; ")
+        )));
+    }
+
+    perform_door_package_import(&db, &ctx.config, &report, &path, replace, enable)?;
+    let imported_door = require_effective_door(&db, &ctx.config, &report.target_door_id)?;
+    if !ctx.json {
+        print_door_package_import_completion_report(&report, &imported_door);
+    }
+    let check_report = if !no_check {
+        let check = check_door(&imported_door, &ctx.config, &db)?;
+        if check.issues.is_empty() {
+            if !ctx.json {
+                println!("post-import check: ok");
+            }
+            Some(check)
+        } else {
+            if !ctx.json {
+                println!("post-import check:");
+                print_check_issues(&check.issues);
+            }
+            Some(check)
+        }
+    } else {
+        if !ctx.json {
+            println!("post-import check skipped (use --no-check)");
+        }
+        None
+    };
+    let has_check_errors = check_report
+        .as_ref()
+        .is_some_and(|check| check.issues.iter().any(|issue| issue.level == "error"));
+    if !ctx.json {
+        println!("Suggested follow-up commands:");
+        for command in &report.follow_up_commands {
+            println!("  - {command}");
+        }
+    } else {
+        let check_issues = check_report
+            .as_ref()
+            .map(|check| {
+                check
+                    .issues
+                    .iter()
+                    .map(CheckIssue::to_json)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        let target_install_directory_exists = report.target_install_directory.exists();
+        print_json(&serde_json::json!({
+            "status": "completed",
+            "package_path": report.package_path,
+            "package_id": report.package_id,
+            "package_name": report.package_name,
+            "target_door_id": report.target_door_id,
+            "target_install_directory": report.target_install_directory,
+            "target_install_directory_exists": target_install_directory_exists,
+            "door_definition_exists": report.door_definition_exists,
+            "file_count": report.file_count,
+            "total_unpacked_size": report.total_unpacked_size,
+            "installed": true,
+            "door_definition": {
+                "key": imported_door.key.clone(),
+                "name": imported_door.name.clone(),
+                "runner": imported_door.runner.clone(),
+                "working_dir": imported_door.working_dir.clone(),
+                "command": imported_door.command.clone(),
+                "drop_file": imported_door.drop_file.clone(),
+                "exclusive": imported_door.exclusive,
+                "time_limit_minutes": imported_door.time_limit_minutes,
+                "enabled": imported_door.enabled,
+                "min_security_level": imported_door.min_security_level,
+            },
+            "warnings": report.warnings,
+            "blocking_errors": report.blocking_errors,
+            "follow_up_commands": report.follow_up_commands,
+            "post_import_check": {
+                "enabled": !no_check,
+                "issues": check_issues,
+            },
+        }))?;
+    }
+
+    if has_check_errors {
+        return Err(CliError::Message(
+            "package import post-check failed".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn print_door_package_import_completion_report(
+    report: &DoorPackageImportDryRun,
+    imported_door: &DoorDefinitionRecord,
+) {
+    let target_exists = report.target_install_directory.exists();
+    println!("package.path: {}", report.package_path.display());
+    println!("package.id: {}", report.package_id);
+    println!("package.name: {}", report.package_name);
+    println!("target.door_id: {}", imported_door.key);
+    println!(
+        "target.install_directory: {}",
+        report.target_install_directory.display()
+    );
+    println!(
+        "target.install_directory_exists: {}",
+        if target_exists { "yes" } else { "no" }
+    );
+    println!(
+        "door.definition_exists: {}",
+        if report.door_definition_exists {
+            "yes"
+        } else {
+            "no"
+        }
+    );
+    println!("replace: {}", if report.replace { "yes" } else { "no" });
+    println!("file.count: {}", report.file_count);
+    println!("file.total_unpacked_size: {}", report.total_unpacked_size);
+    println!(
+        "enabled: {}",
+        if imported_door.enabled { "yes" } else { "no" }
+    );
+    println!("door.definition:");
+    println!("  key: {}", imported_door.key);
+    println!("  name: {}", imported_door.name);
+    println!("  runner: {}", imported_door.runner);
+    println!("  working_dir: {}", imported_door.working_dir);
+    println!("  command: {}", imported_door.command);
+    println!("  drop_file: {}", imported_door.drop_file);
+    println!("  exclusive: {}", imported_door.exclusive);
+    println!("  time_limit_minutes: {}", imported_door.time_limit_minutes);
+    println!("  min_security_level: {}", imported_door.min_security_level);
+    println!(
+        "  enabled: {}",
+        if imported_door.enabled { "yes" } else { "no" }
+    );
+    if report.warnings.is_empty() {
+        println!("warnings: (none)");
+    } else {
+        println!("warnings:");
+        for warning in &report.warnings {
+            println!("  - {warning}");
+        }
+    }
+    if report.blocking_errors.is_empty() {
+        println!("blocking_errors: (none)");
+    } else {
+        println!("blocking_errors:");
+        for issue in &report.blocking_errors {
+            println!("  - {issue}");
+        }
+    }
+    println!("planned_file_copies:");
+    for copy in &report.planned_file_copies {
+        println!(
+            "  - {} -> {}",
+            copy.package_path,
+            copy.destination_path.display()
+        );
+    }
+    println!(
+        "Menu hint: category {}, label {}, suggested key {}",
+        report.menu_category, imported_door.name, imported_door.key
+    );
+    println!(
+        "The existing Doors menu action will expose enabled configured doors. No menu files were changed."
+    );
+}
+
+fn print_door_package_import_dry_run_report(report: &DoorPackageImportDryRun) -> CliResult<()> {
+    if report.blocking_errors.is_empty() {
+        println!("status: ready");
+    } else {
+        println!("status: blocked");
+    }
+    println!("package.path: {}", report.package_path.display());
+    println!("package.id: {}", report.package_id);
+    println!("package.name: {}", report.package_name);
+    println!("package.door_id: {}", report.target_door_id);
+    println!(
+        "target.install_directory: {}",
+        report.target_install_directory.display()
+    );
+    println!(
+        "target.install_directory_exists: {}",
+        if report.target_install_directory_exists {
+            "yes"
+        } else {
+            "no"
+        }
+    );
+    println!(
+        "door.definition_exists: {}",
+        if report.door_definition_exists {
+            "yes"
+        } else {
+            "no"
+        }
+    );
+    println!("replace: {}", if report.replace { "yes" } else { "no" });
+    println!("file.count: {}", report.file_count);
+    println!("file.total_unpacked_size: {}", report.total_unpacked_size);
+    println!(
+        "door.will_enable: {}",
+        if report.will_enable { "yes" } else { "no" }
+    );
+    println!("door.definition:");
+    println!("  key: {}", report.would_create_door.key);
+    println!("  name: {}", report.would_create_door.name);
+    println!("  runner: {}", report.would_create_door.runner);
+    println!("  working_dir: {}", report.would_create_door.working_dir);
+    println!("  command: {}", report.would_create_door.command);
+    println!("  drop_file: {}", report.would_create_door.drop_file);
+    println!(
+        "  exclusive: {}",
+        if report.would_create_door.exclusive {
+            "yes"
+        } else {
+            "no"
+        }
+    );
+    println!(
+        "  time_limit_minutes: {}",
+        report.would_create_door.time_limit_minutes
+    );
+    println!(
+        "  min_security_level: {}",
+        report.would_create_door.min_security_level
+    );
+    println!(
+        "  enabled: {}",
+        if report.would_create_door.enabled {
+            "yes"
+        } else {
+            "no"
+        }
+    );
+    if report.warnings.is_empty() {
+        println!("warnings: (none)");
+    } else {
+        println!("warnings:");
+        for warning in &report.warnings {
+            println!("  - {warning}");
+        }
+    }
+    if report.blocking_errors.is_empty() {
+        println!("blocking_errors: (none)");
+    } else {
+        println!("blocking_errors:");
+        for issue in &report.blocking_errors {
+            println!("  - {issue}");
+        }
+    }
+    println!("planned_file_copies:");
+    for copy in &report.planned_file_copies {
+        println!(
+            "  - {} -> {}",
+            copy.package_path,
+            copy.destination_path.display()
+        );
+    }
+    println!("follow_up_commands:");
+    for command in &report.follow_up_commands {
+        println!("  - {command}");
+    }
+    Ok(())
+}
+
+fn plan_door_package_import(
+    db: Option<&oxidebbs_db::Db>,
+    config: &crate::config::OxideConfig,
+    package_path: &Path,
+    replace: bool,
+) -> CliResult<DoorPackageImportDryRun> {
+    let summary = oxidebbs_door::inspect_oxide_door_package(package_path)?;
+    let mut warnings = summary.warnings.clone();
+    let mut blocking_errors = Vec::new();
+
+    let doors_root = match std::path::Path::new(&config.paths.doors).canonicalize() {
+        Ok(root) => root,
+        Err(error) => {
+            warnings.push(format!(
+                "doors root {} is not accessible yet: {error}",
+                config.paths.doors.display()
+            ));
+            absolute_config_path(&config.paths.doors)?
+        }
+    };
+    let target_install_directory =
+        planned_door_package_install_directory(&doors_root, &summary.working_directory)?;
+    let target_install_directory_exists = import_path_exists(&target_install_directory);
+    if target_install_directory_exists && !replace {
+        blocking_errors.push(format!(
+            "target door directory already exists: {}; pass --replace to replace it",
+            target_install_directory.display()
+        ));
+    } else if target_install_directory_exists {
+        warnings.push(format!(
+            "target door directory will be replaced: {}",
+            target_install_directory.display()
+        ));
+    }
+
+    if summary.legal_status.eq_ignore_ascii_case("legal_hold") {
+        blocking_errors.push("legal status is legal_hold; import is blocked".to_string());
+    }
+
+    let runner = if summary.runner.eq_ignore_ascii_case("local:dosemu2") {
+        "dosemu2".to_string()
+    } else {
+        blocking_errors
+            .push("unsupported package runner; only local:dosemu2 is supported".to_string());
+        summary.runner.clone()
+    };
+
+    if !runner_supports_dosemu2_cli(&runner) {
+        blocking_errors.push(format!(
+            "runner {runner:?} is not supported for local package import"
+        ));
+    }
+    if let Err(error) = validate_door_runner(&runner, &config.doors.allowed_runners) {
+        match error.level {
+            "error" => blocking_errors.push(error.message),
+            _ => warnings.push(error.message),
+        }
+    }
+
+    if !is_supported_drop_file(&summary.preferred_drop_file) {
+        blocking_errors.push(format!(
+            "unsupported preferred drop-file format {:?}",
+            summary.preferred_drop_file
+        ));
+    } else if !summary
+        .supported_drop_files
+        .iter()
+        .any(|format| is_supported_drop_file(format))
+    {
+        blocking_errors.push("no supported drop-file formats".to_string());
+    }
+
+    let mut timeout_minutes = summary.timeout_seconds.div_ceil(60);
+    if summary.timeout_seconds % 60 != 0 {
+        warnings.push(format!(
+            "timeout_seconds {} is not aligned to minutes; import will use {} minutes",
+            summary.timeout_seconds, timeout_minutes
+        ));
+    }
+    if timeout_minutes == 0 {
+        timeout_minutes = 1;
+    }
+    let time_limit_minutes = u32::try_from(timeout_minutes).map_err(|_| {
+        CliError::Message(format!(
+            "invalid timeout_minutes {timeout_minutes} while preparing import"
+        ))
+    })?;
+    let working_dir = target_install_directory.to_string_lossy().to_string();
+    if let Err(error) = validate_door_fields_before_write(
+        &summary.door_id,
+        &summary.command,
+        time_limit_minutes,
+        &summary.preferred_drop_file,
+        None,
+        &working_dir,
+    ) {
+        blocking_errors.push(error.to_string());
+    }
+
+    let will_enable = false;
+    if summary.enabled_after_import_request {
+        warnings.push(
+            "package requests enabled_after_import but dry-run import defaults to not enabling new doors"
+                .to_string(),
+        );
+    }
+
+    let existing = if let Some(db) = db {
+        find_door_by_key(db, &summary.door_id)?
+    } else {
+        warnings.push(format!(
+            "database {} does not exist; door definition conflict check was skipped",
+            config.database.path.display()
+        ));
+        None
+    };
+    let door_definition_exists = existing.is_some();
+    if door_definition_exists && !replace {
+        blocking_errors.push(format!(
+            "door definition {} already exists and would conflict; pass --replace to update it",
+            summary.door_id
+        ));
+    } else if door_definition_exists {
+        warnings.push(format!(
+            "door definition {} will be updated",
+            summary.door_id
+        ));
+    }
+
+    let would_create_door = DoorPackageImportDryRunDefinition {
+        key: summary.door_id.clone(),
+        name: summary.door_name.clone(),
+        runner,
+        working_dir,
+        command: summary.command.clone(),
+        drop_file: summary.preferred_drop_file.clone(),
+        exclusive: summary.exclusive,
+        time_limit_minutes,
+        enabled: will_enable,
+        min_security_level: summary.min_security_level,
+    };
+
+    let follow_up_commands = vec![
+        format!("oxidebbs-server doors check {}", summary.door_id),
+        format!(
+            "oxidebbs-server doors test {} --user sysop --dry-run",
+            summary.door_id
+        ),
+        format!("oxidebbs-server doors enable {}", summary.door_id),
+    ];
+    let planned_file_copies =
+        planned_oxide_door_package_file_copies(package_path, &target_install_directory)?;
+
+    Ok(DoorPackageImportDryRun {
+        package_path: package_path.to_path_buf(),
+        package_id: summary.package_id,
+        package_name: summary.package_name,
+        target_door_id: summary.door_id,
+        menu_category: summary.door_category,
+        target_install_directory,
+        target_install_directory_exists,
+        door_definition_exists,
+        replace,
+        file_count: summary.file_count,
+        total_unpacked_size: summary.total_unpacked_size,
+        planned_file_copies,
+        will_enable,
+        would_create_door,
+        warnings,
+        blocking_errors,
+        follow_up_commands,
+    })
+}
+
+fn perform_door_package_import(
+    db: &oxidebbs_db::OxideDb,
+    config: &crate::config::OxideConfig,
+    report: &DoorPackageImportDryRun,
+    package_path: &Path,
+    replace: bool,
+    enable: bool,
+) -> CliResult<()> {
+    if (report.target_install_directory_exists
+        || import_path_exists(&report.target_install_directory))
+        && !replace
+    {
+        return Err(CliError::Message(format!(
+            "import target directory {} already exists",
+            report.target_install_directory.display()
+        )));
+    }
+
+    fs::create_dir_all(&config.paths.doors).map_err(CliError::from)?;
+    let configured_root = std::path::Path::new(&config.paths.doors).canonicalize()?;
+    if !report
+        .target_install_directory
+        .starts_with(&configured_root)
+    {
+        return Err(CliError::Message(
+            "import target directory is outside configured doors root; aborting import".to_string(),
+        ));
+    }
+    if import_path_exists(&report.target_install_directory) {
+        remove_replace_import_target(&report.target_install_directory)?;
+    }
+
+    let existing = find_door_by_key(db.db(), &report.would_create_door.key)?;
+    if existing.is_some() && !replace {
+        return Err(CliError::Message(format!(
+            "door definition {} already exists",
+            report.would_create_door.key
+        )));
+    }
+    let record_id = match existing.as_ref() {
+        Some(door) => door.id.clone(),
+        None => generated_uuid(db)?,
+    };
+
+    if let Err(error) =
+        extract_oxide_door_package_files(package_path, &report.target_install_directory)
+    {
+        let _ = fs::remove_dir_all(&report.target_install_directory);
+        return Err(error);
+    }
+
+    let record = DoorDefinitionRecord {
+        id: record_id,
+        key: report.would_create_door.key.clone(),
+        name: report.would_create_door.name.clone(),
+        runner: report.would_create_door.runner.clone(),
+        working_dir: report.would_create_door.working_dir.clone(),
+        command: report.would_create_door.command.clone(),
+        drop_file: report.would_create_door.drop_file.clone(),
+        exclusive: report.would_create_door.exclusive,
+        time_limit_minutes: i64::from(report.would_create_door.time_limit_minutes),
+        enabled: enable,
+        min_security_level: i64::from(report.would_create_door.min_security_level),
+    };
+    let write_result = if existing.is_some() {
+        update_door_definition(db.db(), &record)
+    } else {
+        insert_door_definition(db.db(), &record)
+    };
+    if let Err(error) = write_result {
+        let _ = fs::remove_dir_all(&report.target_install_directory);
+        return Err(error.into());
+    }
+
+    audit(
+        db,
+        "door:import",
+        None,
+        None,
+        &format!(
+            "imported door {} ({}) into {}",
+            record.key,
+            record.id,
+            report.target_install_directory.display()
+        ),
+    )?;
+
+    Ok(())
+}
+
+fn extract_oxide_door_package_files(package_path: &Path, target_dir: &Path) -> CliResult<()> {
+    let file = fs::File::open(package_path)?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|source| {
+        CliError::Message(format!(
+            "invalid door package ZIP while importing: {source}"
+        ))
+    })?;
+    if let Some(parent) = target_dir.parent() {
+        fs::create_dir_all(parent).map_err(CliError::from)?;
+    }
+    fs::create_dir_all(target_dir).map_err(CliError::from)?;
+    let target_root = target_dir.canonicalize().map_err(CliError::from)?;
+
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).map_err(|source| {
+            CliError::Message(format!("invalid package entry at index {index}: {source}"))
+        })?;
+        let entry_name = entry.name().to_string();
+        validate_package_archive_entry_name(&entry_name)?;
+        validate_package_zip_entry_mode(&entry_name, &entry)?;
+        if entry_name.ends_with('/') {
+            continue;
+        }
+        if entry.is_dir() {
+            continue;
+        }
+        if entry_name == oxidebbs_door::OXDOOR_MANIFEST_FILE
+            || entry_name == oxidebbs_door::OXDOOR_CHECKSUM_FILE
+        {
+            continue;
+        }
+        if !entry_name.starts_with("files/") {
+            continue;
+        }
+
+        let Some(relative) = package_file_relative_path(&entry_name)? else {
+            continue;
+        };
+
+        let out_path = target_root.join(&relative);
+        if !out_path.starts_with(&target_root) {
+            return Err(CliError::Message(format!(
+                "package entry {entry_name:?} would write outside {}",
+                target_root.display()
+            )));
+        }
+        if let Some(parent) = out_path.parent() {
+            fs::create_dir_all(parent).map_err(CliError::from)?;
+        }
+        let mut out = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&out_path)
+            .map_err(CliError::from)?;
+        if let Err(error) = io::copy(&mut entry, &mut out).map_err(|error| {
+            CliError::Message(format!(
+                "failed to write file {}: {error}",
+                out_path.display()
+            ))
+        }) {
+            let _ = fs::remove_dir_all(target_dir);
+            return Err(error);
+        }
+    }
+
+    Ok(())
+}
+
+fn planned_oxide_door_package_file_copies(
+    package_path: &Path,
+    target_dir: &Path,
+) -> CliResult<Vec<DoorPackageImportFileCopy>> {
+    let file = fs::File::open(package_path)?;
+    let mut archive = zip::ZipArchive::new(file).map_err(|source| {
+        CliError::Message(format!(
+            "invalid door package ZIP while planning import: {source}"
+        ))
+    })?;
+    let mut copies = Vec::new();
+    for index in 0..archive.len() {
+        let entry = archive.by_index(index).map_err(|source| {
+            CliError::Message(format!("invalid package entry at index {index}: {source}"))
+        })?;
+        let entry_name = entry.name().to_string();
+        validate_package_archive_entry_name(&entry_name)?;
+        validate_package_zip_entry_mode(&entry_name, &entry)?;
+        if entry.is_dir() || entry_name.ends_with('/') {
+            continue;
+        }
+        let Some(relative) = package_file_relative_path(&entry_name)? else {
+            continue;
+        };
+        copies.push(DoorPackageImportFileCopy {
+            package_path: entry_name,
+            destination_path: target_dir.join(relative),
+        });
+    }
+    copies.sort_by(|left, right| left.package_path.cmp(&right.package_path));
+    Ok(copies)
+}
+
+fn package_file_relative_path(entry_name: &str) -> CliResult<Option<PathBuf>> {
+    let Some(relative) = entry_name.strip_prefix("files/") else {
+        return Ok(None);
+    };
+    validate_package_relative_path(relative)?;
+    Ok(Some(PathBuf::from(relative)))
+}
+
+fn validate_package_archive_entry_name(entry_name: &str) -> CliResult<()> {
+    if entry_name.contains('\\') {
+        return Err(CliError::Message(format!(
+            "invalid package path {entry_name:?}: backslashes are not allowed"
+        )));
+    }
+    if entry_name.starts_with('/') {
+        return Err(CliError::Message(format!(
+            "invalid package path {entry_name:?}: absolute paths are not allowed"
+        )));
+    }
+    if is_windows_drive_path(entry_name) {
+        return Err(CliError::Message(format!(
+            "invalid package path {entry_name:?}: Windows drive-style paths are not allowed"
+        )));
+    }
+    let trimmed = entry_name.trim_end_matches('/');
+    if trimmed.is_empty() || trimmed.split('/').any(str::is_empty) {
+        return Err(CliError::Message(format!(
+            "invalid package path {entry_name:?}: empty path components are not allowed"
+        )));
+    }
+    if trimmed.split('/').any(is_windows_drive_path) {
+        return Err(CliError::Message(format!(
+            "invalid package path {entry_name:?}: Windows drive-style path components are not allowed"
+        )));
+    }
+    for component in Path::new(entry_name).components() {
+        match component {
+            Component::ParentDir
+            | Component::CurDir
+            | Component::RootDir
+            | Component::Prefix(_) => {
+                return Err(CliError::Message(format!(
+                    "invalid package path {entry_name:?}: traversal is not allowed"
+                )));
+            }
+            Component::Normal(_) => {}
+        }
+    }
+    Ok(())
+}
+
+fn validate_package_relative_path(relative: &str) -> CliResult<()> {
+    if relative.is_empty() {
+        return Err(CliError::Message(
+            "files/ entry path is invalid".to_string(),
+        ));
+    }
+    validate_package_archive_entry_name(relative)
+}
+
+fn validate_package_zip_entry_mode(
+    entry_name: &str,
+    entry: &zip::read::ZipFile<'_, fs::File>,
+) -> CliResult<()> {
+    let Some(mode) = entry.unix_mode() else {
+        return Ok(());
+    };
+    let kind = mode & 0o170000;
+    if kind == 0o120000 {
+        return Err(CliError::Message(format!(
+            "archive entry {entry_name:?} is a symlink"
+        )));
+    }
+    if kind != 0o100000 && kind != 0o040000 {
+        return Err(CliError::Message(format!(
+            "archive entry {entry_name:?} is unsupported file type (mode {mode:o})"
+        )));
+    }
+    Ok(())
+}
+
+fn is_windows_drive_path(value: &str) -> bool {
+    let mut chars = value.chars();
+    matches!((chars.next(), chars.next()), (Some(drive), Some(':')) if drive.is_ascii_alphabetic())
+}
+
+fn import_path_exists(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok()
+}
+
+fn remove_replace_import_target(path: &Path) -> CliResult<()> {
+    let metadata = fs::symlink_metadata(path).map_err(CliError::from)?;
+    if metadata.file_type().is_symlink() {
+        return Err(CliError::Message(format!(
+            "target door path {} is a symlink; remove it manually before import",
+            path.display()
+        )));
+    }
+    if !metadata.is_dir() {
+        return Err(CliError::Message(format!(
+            "target door path {} exists but is not a directory",
+            path.display()
+        )));
+    }
+    fs::remove_dir_all(path).map_err(CliError::from)
+}
+
+fn absolute_config_path(path: &Path) -> CliResult<PathBuf> {
+    if path.is_absolute() {
+        Ok(path.to_path_buf())
+    } else {
+        Ok(std::env::current_dir()?.join(path))
+    }
+}
+
+fn planned_door_package_install_directory(
+    doors_root: &Path,
+    working_directory: &str,
+) -> CliResult<PathBuf> {
+    let root = absolute_config_path(doors_root)?;
+    let target = root.join(working_directory);
+    if !target.starts_with(&root) {
+        return Err(CliError::Message(
+            "package working directory resolves outside configured doors root".to_string(),
+        ));
+    }
+    Ok(target)
+}
+
+fn open_existing_database_for_dry_run(
+    config: &crate::config::OxideConfig,
+) -> CliResult<Option<oxidebbs_db::Db>> {
+    if !config.database.path.exists() {
+        return Ok(None);
+    }
+    Ok(Some(oxidebbs_db::Db::open(
+        &config.database.path,
+        oxidebbs_db::DbConfig::default(),
+    )?))
+}
+
+fn is_supported_drop_file(format: &str) -> bool {
+    matches!(
+        format.to_ascii_uppercase().as_str(),
+        "DOOR.SYS" | "DORINFO1.DEF" | "CHAIN.TXT" | "DOORFILE.SR" | "PCBOARD.SYS" | "CALLINFO.BBS"
+    )
+}
+
 fn command_exists(command: &str) -> bool {
     let path = std::path::Path::new(command);
     if path.components().count() > 1 {
@@ -218,8 +1238,21 @@ fn is_quoted_dos_command(command: &str) -> bool {
 }
 
 pub fn run_doors(command: DoorsCommand, ctx: &AppContext) -> CliResult<()> {
-    let db = open_database(&ctx.config)?;
-    sync_configured_doors(&db, &ctx.config)?;
+    match command {
+        DoorsCommand::Package { command } => run_door_package(command, ctx),
+        command => {
+            let db = open_database(&ctx.config)?;
+            sync_configured_doors(&db, &ctx.config)?;
+            run_doors_with_db(command, ctx, db)
+        }
+    }
+}
+
+fn run_doors_with_db(
+    command: DoorsCommand,
+    ctx: &AppContext,
+    db: oxidebbs_db::OxideDb,
+) -> CliResult<()> {
     match command {
         DoorsCommand::List => {
             let doors = effective_doors(&db, &ctx.config)?;
@@ -384,6 +1417,7 @@ pub fn run_doors(command: DoorsCommand, ctx: &AppContext) -> CliResult<()> {
             }
             emit_ok(ctx.json, "door runtime directories cleaned", json!({}))?;
         }
+        DoorsCommand::Package { command } => run_door_package(command, ctx)?,
     }
     Ok(())
 }
@@ -1347,7 +2381,770 @@ fn door_run_json(run: &oxidebbs_db::DoorRunRecord) -> JsonValue {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::io::Write;
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use zip::ZipWriter;
+    use zip::write::{FileOptions, SimpleFileOptions};
+
     use super::*;
+
+    use oxidebbs_door::{OXDOOR_CHECKSUM_FILE, OXDOOR_MANIFEST_FILE, OXDOOR_PACKAGE_FORMAT};
+    use sha2::{Digest, Sha256};
+
+    const TEST_PACKAGE_PREFIX: &str = "oxidebbs-door-package-import-";
+    const TEST_DOOR_FILES_DIR: &str = "files/";
+
+    fn test_temp_dir() -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "{TEST_PACKAGE_PREFIX}{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("timestamp")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&path).expect("create temp dir");
+        path
+    }
+
+    fn cleanup_temp_dir(path: &Path) {
+        let _ = fs::remove_dir_all(path);
+    }
+
+    fn build_dry_run_manifest(
+        legal_status: &str,
+        kind: &str,
+        preferred_drop_file: &str,
+        runner: &str,
+    ) -> String {
+        format!(
+            r#"
+[package]
+format = "{OXDOOR_PACKAGE_FORMAT}"
+kind = "{kind}"
+id = "sample-package"
+name = "Sample Package"
+version = "1.0.0"
+requires_key = false
+
+[legal]
+status = "{legal_status}"
+requires_key = false
+
+[source]
+url = "https://example.invalid/sample"
+
+[door]
+id = "sample-door"
+name = "Sample Door"
+runner = "{runner}"
+command = "START.BAT"
+working_directory = "sample"
+category = "game"
+preferred_drop_file = "{preferred_drop_file}"
+supported_drop_files = ["DOOR.SYS", "DORINFO1.DEF", "CHAIN.TXT"]
+exclusive = true
+timeout_seconds = 120
+enabled_after_import = true
+
+[access]
+min_security_level = 10
+preferred_drop_file = "{preferred_drop_file}"
+supported_drop_files = ["DOOR.SYS", "DORINFO1.DEF", "CHAIN.TXT"]
+exclusive = true
+timeout_seconds = 120
+
+[persistence]
+enabled_after_import_request = true
+
+[test]
+timeout_seconds = 120
+
+[menu]
+category = "doors"
+exclusive = true
+timeout_seconds = 120
+"#
+        )
+    }
+
+    fn write_dry_run_fixture(
+        path: &Path,
+        manifest: &str,
+        files: &[(&str, &[u8])],
+        include_checksums: bool,
+        include_traversal: bool,
+        checksum_overrides: Option<&HashMap<String, String>>,
+    ) -> std::io::Result<()> {
+        let file = fs::File::create(path)?;
+        let mut writer = ZipWriter::new(file);
+        let options: FileOptions<'_, ()> =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+
+        writer.start_file(OXDOOR_MANIFEST_FILE, options)?;
+        writer.write_all(manifest.as_bytes())?;
+
+        let mut checksums = HashMap::new();
+        for (name, bytes) in files {
+            writer.start_file(format!("{TEST_DOOR_FILES_DIR}{name}"), options)?;
+            writer.write_all(bytes)?;
+            checksums.insert(
+                format!("{TEST_DOOR_FILES_DIR}{name}"),
+                hex::encode(Sha256::digest(bytes)),
+            );
+        }
+
+        if include_traversal {
+            let name = "files/../outside.bin";
+            writer.start_file(name, options)?;
+            writer.write_all(b"bad")?;
+            checksums.insert(name.to_string(), hex::encode(Sha256::digest(b"bad")));
+        }
+
+        if include_checksums {
+            let mut entries = checksums;
+            if let Some(overrides) = checksum_overrides {
+                for (name, digest) in overrides {
+                    entries.insert(name.clone(), digest.clone());
+                }
+            }
+            let checksum_contents = entries
+                .into_iter()
+                .map(|(name, digest)| format!("{digest}  {name}\n"))
+                .collect::<String>();
+            writer.start_file(OXDOOR_CHECKSUM_FILE, options)?;
+            writer.write_all(checksum_contents.as_bytes())?;
+        }
+
+        writer.finish()?;
+        Ok(())
+    }
+
+    fn test_config_with_doors_root(
+        doors_root: &Path,
+        runtime_root: &Path,
+    ) -> crate::config::OxideConfig {
+        let mut config: crate::config::OxideConfig =
+            toml::from_str("[board]\nname = \"Test\"\n").expect("config");
+        config.paths.doors = doors_root.to_path_buf();
+        config.paths.runtime = runtime_root.to_path_buf();
+        config
+    }
+
+    #[test]
+    fn plan_door_package_import_generates_readable_plan_for_valid_package() {
+        let temp = test_temp_dir();
+        let package_path = temp.join("valid.oxdoor");
+        let doors_root = temp.join("doors");
+        let runtime = temp.join("runtime");
+        let config = test_config_with_doors_root(&doors_root, &runtime);
+        fs::create_dir_all(&doors_root).expect("doors root");
+
+        write_dry_run_fixture(
+            &package_path,
+            &build_dry_run_manifest("freeware", "full", "DOOR.SYS", "local:dosemu2"),
+            &[("readme.txt", b"hello\n")],
+            true,
+            false,
+            None,
+        )
+        .expect("write package");
+
+        let db = oxidebbs_db::OxideDb::open_memory().expect("open db");
+        let before_count = list_door_definitions(db.db()).expect("list doors").len();
+        let report =
+            plan_door_package_import(Some(db.db()), &config, &package_path, false).expect("plan");
+        assert_eq!(report.package_id, "sample-package");
+        assert_eq!(report.package_name, "Sample Package");
+        assert_eq!(report.target_door_id, "sample-door");
+        assert_eq!(
+            report.target_install_directory,
+            doors_root
+                .canonicalize()
+                .expect("doors root")
+                .join("sample")
+        );
+        assert!(!report.target_install_directory_exists);
+        assert!(!report.door_definition_exists);
+        assert!(!report.will_enable);
+        assert_eq!(report.file_count, 1);
+        assert_eq!(report.total_unpacked_size, 6);
+        assert!(report.blocking_errors.is_empty());
+        assert_eq!(
+            report.would_create_door,
+            DoorPackageImportDryRunDefinition {
+                key: "sample-door".to_string(),
+                name: "Sample Door".to_string(),
+                runner: "dosemu2".to_string(),
+                working_dir: doors_root
+                    .canonicalize()
+                    .expect("doors root")
+                    .join("sample")
+                    .to_string_lossy()
+                    .to_string(),
+                command: "START.BAT".to_string(),
+                drop_file: "DOOR.SYS".to_string(),
+                exclusive: true,
+                time_limit_minutes: 2,
+                enabled: false,
+                min_security_level: 10
+            }
+        );
+        assert_eq!(
+            list_door_definitions(db.db())
+                .expect("list after plan")
+                .len(),
+            before_count
+        );
+        assert!(!report.target_install_directory.exists());
+        cleanup_temp_dir(&temp);
+    }
+
+    #[test]
+    fn plan_door_package_import_detects_existing_target_directory() {
+        let temp = test_temp_dir();
+        let package_path = temp.join("conflict-dir.oxdoor");
+        let doors_root = temp.join("doors");
+        let runtime = temp.join("runtime");
+        let config = test_config_with_doors_root(&doors_root, &runtime);
+        fs::create_dir_all(doors_root.join("sample")).expect("target exists");
+
+        write_dry_run_fixture(
+            &package_path,
+            &build_dry_run_manifest("freeware", "full", "DOOR.SYS", "local:dosemu2"),
+            &[("readme.txt", b"hello\n")],
+            true,
+            false,
+            None,
+        )
+        .expect("write package");
+
+        let db = oxidebbs_db::OxideDb::open_memory().expect("open db");
+        let report =
+            plan_door_package_import(Some(db.db()), &config, &package_path, false).expect("plan");
+        assert!(report.target_install_directory_exists);
+        assert!(
+            report
+                .blocking_errors
+                .iter()
+                .any(|error| error.contains("target door directory"))
+        );
+        cleanup_temp_dir(&temp);
+    }
+
+    #[test]
+    fn plan_door_package_import_detects_existing_door_definition() {
+        let temp = test_temp_dir();
+        let package_path = temp.join("conflict-door.oxdoor");
+        let doors_root = temp.join("doors");
+        let runtime = temp.join("runtime");
+        let config = test_config_with_doors_root(&doors_root, &runtime);
+        fs::create_dir_all(&doors_root).expect("doors root");
+
+        write_dry_run_fixture(
+            &package_path,
+            &build_dry_run_manifest("freeware", "full", "DOOR.SYS", "local:dosemu2"),
+            &[("readme.txt", b"hello\n")],
+            true,
+            false,
+            None,
+        )
+        .expect("write package");
+
+        let db = oxidebbs_db::OxideDb::open_memory().expect("open db");
+        insert_door_definition(
+            db.db(),
+            &DoorDefinitionRecord {
+                id: "00000000-0000-4000-8000-000000000001".to_string(),
+                key: "sample-door".to_string(),
+                name: "Sample Door".to_string(),
+                runner: "dosemu2".to_string(),
+                working_dir: "sample".to_string(),
+                command: "START.BAT".to_string(),
+                drop_file: "DOOR.SYS".to_string(),
+                exclusive: true,
+                time_limit_minutes: 2,
+                enabled: false,
+                min_security_level: 10,
+            },
+        )
+        .expect("insert existing door");
+        let report =
+            plan_door_package_import(Some(db.db()), &config, &package_path, false).expect("plan");
+        assert!(report.door_definition_exists);
+        assert!(
+            report
+                .blocking_errors
+                .iter()
+                .any(|error| error.contains("already exists"))
+        );
+        cleanup_temp_dir(&temp);
+    }
+
+    #[test]
+    fn plan_door_package_import_flags_legal_hold_as_blocking() {
+        let temp = test_temp_dir();
+        let package_path = temp.join("legal-hold.oxdoor");
+        let doors_root = temp.join("doors");
+        let runtime = temp.join("runtime");
+        let config = test_config_with_doors_root(&doors_root, &runtime);
+        fs::create_dir_all(&doors_root).expect("doors root");
+
+        write_dry_run_fixture(
+            &package_path,
+            &build_dry_run_manifest("legal_hold", "full", "DOOR.SYS", "local:dosemu2"),
+            &[("readme.txt", b"hello\n")],
+            true,
+            false,
+            None,
+        )
+        .expect("write package");
+
+        let db = oxidebbs_db::OxideDb::open_memory().expect("open db");
+        let report =
+            plan_door_package_import(Some(db.db()), &config, &package_path, false).expect("plan");
+        assert!(
+            report
+                .blocking_errors
+                .iter()
+                .any(|error| { error.contains("legal_hold") })
+        );
+        cleanup_temp_dir(&temp);
+    }
+
+    #[test]
+    fn plan_door_package_import_rejects_checksum_mismatch_before_plan() {
+        let temp = test_temp_dir();
+        let package_path = temp.join("bad-checksum.oxdoor");
+        let doors_root = temp.join("doors");
+        let runtime = temp.join("runtime");
+        let config = test_config_with_doors_root(&doors_root, &runtime);
+        fs::create_dir_all(&doors_root).expect("doors root");
+
+        let mut overrides = HashMap::new();
+        overrides.insert("files/readme.txt".to_string(), "00".repeat(32));
+        write_dry_run_fixture(
+            &package_path,
+            &build_dry_run_manifest("freeware", "full", "DOOR.SYS", "local:dosemu2"),
+            &[("readme.txt", b"hello\n")],
+            true,
+            false,
+            Some(&overrides),
+        )
+        .expect("write package");
+
+        let db = oxidebbs_db::OxideDb::open_memory().expect("open db");
+        let error = plan_door_package_import(Some(db.db()), &config, &package_path, false)
+            .expect_err("checksum mismatch");
+        assert!(error.to_string().contains("checksum mismatch"));
+        cleanup_temp_dir(&temp);
+    }
+
+    #[test]
+    fn plan_door_package_import_rejects_path_traversal_entries() {
+        let temp = test_temp_dir();
+        let package_path = temp.join("path-traversal.oxdoor");
+        let doors_root = temp.join("doors");
+        let runtime = temp.join("runtime");
+        let config = test_config_with_doors_root(&doors_root, &runtime);
+        fs::create_dir_all(&doors_root).expect("doors root");
+
+        write_dry_run_fixture(
+            &package_path,
+            &build_dry_run_manifest("freeware", "full", "DOOR.SYS", "local:dosemu2"),
+            &[("readme.txt", b"hello\n")],
+            true,
+            true,
+            None,
+        )
+        .expect("write package");
+
+        let db = oxidebbs_db::OxideDb::open_memory().expect("open db");
+        let error = plan_door_package_import(Some(db.db()), &config, &package_path, false)
+            .expect_err("path traversal blocked");
+        assert!(error.to_string().contains("traversal"));
+        cleanup_temp_dir(&temp);
+    }
+
+    #[test]
+    fn plan_door_package_import_rejects_unsupported_runner() {
+        let temp = test_temp_dir();
+        let package_path = temp.join("bad-runner.oxdoor");
+        let doors_root = temp.join("doors");
+        let runtime = temp.join("runtime");
+        let config = test_config_with_doors_root(&doors_root, &runtime);
+        fs::create_dir_all(&doors_root).expect("doors root");
+
+        write_dry_run_fixture(
+            &package_path,
+            &build_dry_run_manifest("freeware", "full", "DOOR.SYS", "remote:doorparty"),
+            &[("readme.txt", b"hello\n")],
+            true,
+            false,
+            None,
+        )
+        .expect("write package");
+
+        let db = oxidebbs_db::OxideDb::open_memory().expect("open db");
+        let error = plan_door_package_import(Some(db.db()), &config, &package_path, false)
+            .expect_err("unsupported runner");
+        assert!(error.to_string().contains("unsupported runner"));
+        cleanup_temp_dir(&temp);
+    }
+
+    #[test]
+    fn plan_door_package_import_rejects_unsupported_drop_file() {
+        let temp = test_temp_dir();
+        let package_path = temp.join("bad-drop.oxdoor");
+        let doors_root = temp.join("doors");
+        let runtime = temp.join("runtime");
+        let config = test_config_with_doors_root(&doors_root, &runtime);
+        fs::create_dir_all(&doors_root).expect("doors root");
+
+        write_dry_run_fixture(
+            &package_path,
+            &build_dry_run_manifest("freeware", "full", "BAD.DROP", "local:dosemu2"),
+            &[("readme.txt", b"hello\n")],
+            true,
+            false,
+            None,
+        )
+        .expect("write package");
+
+        let db = oxidebbs_db::OxideDb::open_memory().expect("open db");
+        let error = plan_door_package_import(Some(db.db()), &config, &package_path, false)
+            .expect_err("unsupported drop");
+        assert!(error.to_string().contains("unsupported drop-file format"));
+        cleanup_temp_dir(&temp);
+    }
+
+    #[test]
+    fn run_door_package_import_imports_package_into_doors_root() {
+        let temp = test_temp_dir();
+        let package_path = temp.join("import-success.oxdoor");
+        let doors_root = temp.join("doors");
+        let runtime = temp.join("runtime");
+        let mut config = test_config_with_doors_root(&doors_root, &runtime);
+        config.database.path = temp.join("database.ddb");
+        fs::create_dir_all(&doors_root).expect("doors root");
+        fs::create_dir_all(config.paths.runtime.clone()).expect("runtime");
+
+        write_dry_run_fixture(
+            &package_path,
+            &build_dry_run_manifest("freeware", "full", "DOOR.SYS", "local:dosemu2"),
+            &[
+                ("readme.txt", b"hello\n"),
+                ("nested/config.ini", b"option=1\n"),
+            ],
+            true,
+            false,
+            None,
+        )
+        .expect("write package");
+
+        let ctx = crate::sysop_cli::AppContext {
+            config_path: temp.join("oxidebbs.toml"),
+            config: config.clone(),
+            json: false,
+        };
+        run_door_package_import(package_path, false, false, false, true, &ctx).expect("import");
+
+        let db = oxidebbs_db::OxideDb::open_or_create(&ctx.config.database.path).expect("open db");
+        let door = find_door_by_key(db.db(), "sample-door")
+            .expect("find")
+            .expect("imported door");
+        assert!(!door.enabled);
+        assert_eq!(
+            door.working_dir,
+            doors_root
+                .canonicalize()
+                .expect("doors root")
+                .join("sample")
+                .to_string_lossy()
+                .to_string()
+        );
+        assert_eq!(list_door_definitions(db.db()).expect("list").len(), 1);
+
+        let target_install = doors_root.join("sample");
+        assert!(target_install.join("readme.txt").is_file());
+        assert!(target_install.join("nested/config.ini").is_file());
+        assert_eq!(
+            fs::read_to_string(target_install.join("readme.txt")).expect("readme"),
+            "hello\n"
+        );
+        assert_eq!(
+            fs::read_to_string(target_install.join("nested/config.ini")).expect("config"),
+            "option=1\n"
+        );
+        cleanup_temp_dir(&temp);
+    }
+
+    #[test]
+    fn run_door_package_import_dry_run_does_not_create_database_or_copy_files() {
+        let temp = test_temp_dir();
+        let package_path = temp.join("dry-run.oxdoor");
+        let doors_root = temp.join("doors");
+        let runtime = temp.join("runtime");
+        let mut config = test_config_with_doors_root(&doors_root, &runtime);
+        config.database.path = temp.join("database.ddb");
+        fs::create_dir_all(&doors_root).expect("doors root");
+
+        write_dry_run_fixture(
+            &package_path,
+            &build_dry_run_manifest("freeware", "full", "DOOR.SYS", "local:dosemu2"),
+            &[("readme.txt", b"hello\n")],
+            true,
+            false,
+            None,
+        )
+        .expect("write package");
+
+        let ctx = crate::sysop_cli::AppContext {
+            config_path: temp.join("oxidebbs.toml"),
+            config,
+            json: false,
+        };
+        run_door_package_import(package_path, true, false, false, false, &ctx)
+            .expect("dry-run import");
+
+        assert!(!ctx.config.database.path.exists());
+        assert!(!doors_root.join("sample").exists());
+        cleanup_temp_dir(&temp);
+    }
+
+    #[test]
+    fn run_door_package_import_enables_when_enable_flag_set() {
+        let temp = test_temp_dir();
+        let package_path = temp.join("import-enable.oxdoor");
+        let doors_root = temp.join("doors");
+        let runtime = temp.join("runtime");
+        let mut config = test_config_with_doors_root(&doors_root, &runtime);
+        config.database.path = temp.join("database.ddb");
+        fs::create_dir_all(&doors_root).expect("doors root");
+        fs::create_dir_all(config.paths.runtime.clone()).expect("runtime");
+
+        write_dry_run_fixture(
+            &package_path,
+            &build_dry_run_manifest("freeware", "full", "DOOR.SYS", "local:dosemu2"),
+            &[("readme.txt", b"hello\n")],
+            true,
+            false,
+            None,
+        )
+        .expect("write package");
+
+        let ctx = crate::sysop_cli::AppContext {
+            config_path: temp.join("oxidebbs.toml"),
+            config,
+            json: false,
+        };
+        run_door_package_import(package_path, false, false, true, true, &ctx)
+            .expect("import with --enable");
+
+        let db = oxidebbs_db::OxideDb::open_or_create(&ctx.config.database.path).expect("open db");
+        let door = find_door_by_key(db.db(), "sample-door")
+            .expect("find")
+            .expect("imported door");
+        assert!(door.enabled);
+        cleanup_temp_dir(&temp);
+    }
+
+    #[test]
+    fn run_door_package_import_rejects_existing_door_definition_without_side_effects() {
+        let temp = test_temp_dir();
+        let package_path = temp.join("conflict-door-import.oxdoor");
+        let doors_root = temp.join("doors");
+        let runtime = temp.join("runtime");
+        let mut config = test_config_with_doors_root(&doors_root, &runtime);
+        config.database.path = temp.join("database.ddb");
+        fs::create_dir_all(&doors_root).expect("doors root");
+        fs::create_dir_all(config.paths.runtime.clone()).expect("runtime");
+
+        write_dry_run_fixture(
+            &package_path,
+            &build_dry_run_manifest("freeware", "full", "DOOR.SYS", "local:dosemu2"),
+            &[("readme.txt", b"hello\n")],
+            true,
+            false,
+            None,
+        )
+        .expect("write package");
+
+        let db = oxidebbs_db::OxideDb::open_or_create(&config.database.path).expect("open db");
+        insert_door_definition(
+            db.db(),
+            &DoorDefinitionRecord {
+                id: "00000000-0000-4000-8000-000000000001".to_string(),
+                key: "sample-door".to_string(),
+                name: "Sample Door".to_string(),
+                runner: "dosemu2".to_string(),
+                working_dir: "sample".to_string(),
+                command: "START.BAT".to_string(),
+                drop_file: "DOOR.SYS".to_string(),
+                exclusive: true,
+                time_limit_minutes: 2,
+                enabled: false,
+                min_security_level: 10,
+            },
+        )
+        .expect("insert existing door");
+        drop(db);
+
+        let ctx = crate::sysop_cli::AppContext {
+            config_path: temp.join("oxidebbs.toml"),
+            config,
+            json: false,
+        };
+        let error = run_door_package_import(package_path, false, false, false, true, &ctx)
+            .expect_err("existing door");
+        assert!(error.to_string().contains("already exists"));
+        assert!(!doors_root.join("sample").exists());
+
+        let db = oxidebbs_db::OxideDb::open_or_create(&ctx.config.database.path).expect("open db");
+        assert_eq!(list_door_definitions(db.db()).expect("list").len(), 1);
+        cleanup_temp_dir(&temp);
+    }
+
+    #[test]
+    fn run_door_package_import_replaces_existing_definition_and_target_directory() {
+        let temp = test_temp_dir();
+        let package_path = temp.join("replace.oxdoor");
+        let doors_root = temp.join("doors");
+        let runtime = temp.join("runtime");
+        let mut config = test_config_with_doors_root(&doors_root, &runtime);
+        config.database.path = temp.join("database.ddb");
+        fs::create_dir_all(doors_root.join("sample")).expect("target");
+        fs::write(doors_root.join("sample/old.txt"), b"old").expect("old file");
+        fs::create_dir_all(config.paths.runtime.clone()).expect("runtime");
+
+        write_dry_run_fixture(
+            &package_path,
+            &build_dry_run_manifest("freeware", "full", "DOOR.SYS", "local:dosemu2"),
+            &[("readme.txt", b"hello\n")],
+            true,
+            false,
+            None,
+        )
+        .expect("write package");
+
+        let db = oxidebbs_db::OxideDb::open_or_create(&config.database.path).expect("open db");
+        insert_door_definition(
+            db.db(),
+            &DoorDefinitionRecord {
+                id: "00000000-0000-4000-8000-000000000001".to_string(),
+                key: "sample-door".to_string(),
+                name: "Old Sample".to_string(),
+                runner: "dosemu2".to_string(),
+                working_dir: "old".to_string(),
+                command: "OLD.BAT".to_string(),
+                drop_file: "DOOR.SYS".to_string(),
+                exclusive: false,
+                time_limit_minutes: 1,
+                enabled: true,
+                min_security_level: 0,
+            },
+        )
+        .expect("insert existing door");
+        drop(db);
+
+        let ctx = crate::sysop_cli::AppContext {
+            config_path: temp.join("oxidebbs.toml"),
+            config,
+            json: false,
+        };
+        run_door_package_import(package_path, false, true, false, true, &ctx)
+            .expect("replace import");
+
+        let db = oxidebbs_db::OxideDb::open_or_create(&ctx.config.database.path).expect("open db");
+        let door = find_door_by_key(db.db(), "sample-door")
+            .expect("find")
+            .expect("door");
+        assert_eq!(door.id, "00000000-0000-4000-8000-000000000001");
+        assert_eq!(door.name, "Sample Door");
+        assert_eq!(
+            door.working_dir,
+            doors_root
+                .canonicalize()
+                .expect("doors root")
+                .join("sample")
+                .to_string_lossy()
+                .to_string()
+        );
+        assert!(!door.enabled);
+        assert_eq!(list_door_definitions(db.db()).expect("list").len(), 1);
+        assert!(doors_root.join("sample/readme.txt").is_file());
+        assert!(!doors_root.join("sample/old.txt").exists());
+        cleanup_temp_dir(&temp);
+    }
+
+    #[test]
+    fn run_door_package_import_rejects_checksum_mismatch_without_writing() {
+        let temp = test_temp_dir();
+        let package_path = temp.join("bad-checksum-import.oxdoor");
+        let doors_root = temp.join("doors");
+        let runtime = temp.join("runtime");
+        let mut config = test_config_with_doors_root(&doors_root, &runtime);
+        config.database.path = temp.join("database.ddb");
+        fs::create_dir_all(&doors_root).expect("doors root");
+        fs::create_dir_all(config.paths.runtime.clone()).expect("runtime");
+
+        let mut overrides = HashMap::new();
+        overrides.insert("files/readme.txt".to_string(), "00".repeat(32));
+        write_dry_run_fixture(
+            &package_path,
+            &build_dry_run_manifest("freeware", "full", "DOOR.SYS", "local:dosemu2"),
+            &[("readme.txt", b"hello\n")],
+            true,
+            false,
+            Some(&overrides),
+        )
+        .expect("write package");
+
+        let ctx = crate::sysop_cli::AppContext {
+            config_path: temp.join("oxidebbs.toml"),
+            config,
+            json: false,
+        };
+        let error = run_door_package_import(package_path, false, false, false, true, &ctx)
+            .expect_err("checksum mismatch");
+        assert!(error.to_string().contains("checksum mismatch"));
+        assert!(!doors_root.join("sample").exists());
+        cleanup_temp_dir(&temp);
+    }
+
+    #[test]
+    fn run_door_package_import_rejects_path_traversal_without_writing() {
+        let temp = test_temp_dir();
+        let package_path = temp.join("bad-path-import.oxdoor");
+        let doors_root = temp.join("doors");
+        let runtime = temp.join("runtime");
+        let mut config = test_config_with_doors_root(&doors_root, &runtime);
+        config.database.path = temp.join("database.ddb");
+        fs::create_dir_all(&doors_root).expect("doors root");
+        fs::create_dir_all(config.paths.runtime.clone()).expect("runtime");
+
+        write_dry_run_fixture(
+            &package_path,
+            &build_dry_run_manifest("freeware", "full", "DOOR.SYS", "local:dosemu2"),
+            &[("readme.txt", b"hello\n")],
+            true,
+            true,
+            None,
+        )
+        .expect("write package");
+
+        let ctx = crate::sysop_cli::AppContext {
+            config_path: temp.join("oxidebbs.toml"),
+            config,
+            json: false,
+        };
+        let error = run_door_package_import(package_path, false, false, false, true, &ctx)
+            .expect_err("path traversal");
+        assert!(error.to_string().contains("traversal"));
+        assert!(!doors_root.join("sample").exists());
+        cleanup_temp_dir(&temp);
+    }
 
     #[test]
     fn doors_list_json_shape_matches_contract() {

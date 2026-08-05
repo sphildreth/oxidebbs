@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-08-05
+
+### Added
+- `oxidebbs-core::constants` to centralise default configuration values such as
+  the default door time limit and the default BinkP port.
+- Full PETSCII encode/decode for the C64 terminal profile in `oxidebbs-term`,
+  replacing the previous ASCII-only fallback. The C64 "upper case and graphics"
+  screen set is covered for printable text, shifted/unshifted letters, CR/LF
+  newlines, and standard C64 line-drawing and block graphics, with a
+  lossy-replacement policy for unsupported glyphs. See ADR 0034.
+- `TerminalCharset::Petscii` (config string `"petscii"`) and config support for
+  selecting it; `petscii_ascii_fallback` remains supported for operators.
+- CP437 low-range glyph decode/encode in `oxidebbs-term`: bytes `0x01..=0x1F`
+  and `0x7F` now map to their CP437/VGA glyphs (smileys, card suits, arrows,
+  `⌂`) so `.ans` art using those bytes renders correctly. Structural control
+  bytes (tab, LF, CR, ESC) keep their control meaning.
+- ECMA-48 private parameter byte support (`<`, `=`, `>`, `?`) on CSI sequences
+  in the ANSI parser, so sequences such as `ESC[?25h` (cursor visibility) are
+  understood and stripped cleanly by plain-text fallbacks.
+
+### Changed
+- The built-in C64 terminal profile and default/example C64 config now select
+  real PETSCII rendering instead of the ASCII fallback.
+- Caller output is now charset-aware at the central text-encoding chokepoint, so
+  C64 callers receive PETSCII-encoded menus, messages, file lists, and logoff
+  screens. ANSI/CP437 and plain-ASCII behavior is unchanged, and binary
+  file-transfer and telnet negotiation bytes are never re-encoded.
+- Workspace dependency hygiene: crate versions are centralized under
+  `[workspace.package]`, and unused workspace/member dependencies (`anyhow`,
+  `tower-cookies`, `tower-sessions`, and several unused internal path deps)
+  were removed.
+- Project documentation corrections: `AGENTS.md`, `design/ARCHITECTURE.md`,
+  `design/SPEC.md`, and the Rust code-generation skill now match the actual
+  12-crate workspace, dependency graph, and serial-transport status.
+
+### Fixed
+- ANSI parser numeric parameters now saturate instead of panicking on
+  overflowing values, and parser accumulation is bounded (CSI parameter count,
+  intermediate count, OSC payload size) so malformed or hostile input cannot
+  exhaust memory.
+- `insert_network_path` in `oxidebbs-db` now rolls back on mid-insert failure,
+  leaving no partial rows and a usable connection.
+- Schema migrations 5→6 and 6→7 are now transactional like the other
+  migrations, so a failed migration cannot leave the database half-migrated.
+- The 50,000-entry nodelist stress test is marked `#[ignore]` so the default
+  test run stays fast.
+
 ## [1.2.2] - 2026-06-07
 
 ### Added

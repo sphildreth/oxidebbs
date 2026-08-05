@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: Release tag to validate or publish, such as v1.2.2
+        description: Release tag to validate or publish, such as v1.3.0
         required: true
       source_ref:
         description: Git ref to build; dry runs default to the workflow commit, publishes default to tag_name
@@ -59,7 +59,7 @@ jobs:
           fi
 
           if [[ "${tag}" != v* ]]; then
-            echo "tag_name must include the leading v, such as v1.2.2" >&2
+            echo "tag_name must include the leading v, such as v1.3.0" >&2
             exit 1
           fi
 

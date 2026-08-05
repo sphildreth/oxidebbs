@@ -4,6 +4,42 @@ This file tracks active release work and near-term follow-up items. It is not a
 replacement for `design/ROADMAP.md`, `docs/about/changelog.md`, or ADRs; it is a
 short operational checklist for work that needs explicit closure.
 
+## v1.4.0 Release Work
+
+Active work follows [`design/RELEASE_v1_4_PLAN.md`](./RELEASE_v1_4_PLAN.md).
+Phase status lives in that plan; this section tracks concrete closure items.
+v1.3.0 shipped on 2026-08-05; its record lives in the closed
+[`design/RELEASE_v1_3_PLAN.md`](./RELEASE_v1_3_PLAN.md) and
+`docs/about/changelog.md`.
+
+| Phase | Title | Status |
+| --- | --- | --- |
+| P0 | Scope freeze and ADR baseline | Partial (ADR 0034 accepted; ADRs 0035/0036 still proposed) |
+| P1 | Documentation reconciliation and task tracker update | Active |
+| P2 | C64/PETSCII terminal completion | Complete |
+| P3 | Manual terminal profile persistence | Planned |
+| P4 | Caller transfer protocol decision and expansion | Blocked (ADR 0035) |
+| P5 | Door drop-file compatibility expansion | Planned |
+| P6 | FTN/OxideNet interoperability hardening | Blocked (ADR 0036 / operator feedback) |
+| P7 | OxideNet topology and public-network expansion | Planned |
+| P8 | Final integration and release readiness | Planned |
+
+### P2: C64/PETSCII Terminal Completion
+
+Shipped in v1.3.0 (2026-08-05); see ADR 0034 and `docs/about/changelog.md`.
+
+- [x] Author ADR 0034 (PETSCII translation and terminal-profile persistence policy).
+- [x] Add full PETSCII encode/decode tables and tests in `oxidebbs-term`.
+- [x] Add `TerminalCharset::Petscii` and make the C64 profile default to it.
+- [x] Route C64 profile output through PETSCII-aware rendering via the
+      charset-aware `encode_text_into` chokepoint.
+- [x] Keep CP437/ANSI behavior unchanged for ANSI and plain 80-column callers.
+- [x] Add config support for `charset = "petscii"` and update example/default C64
+      config (`petscii_ascii_fallback` remains supported for operators).
+- [x] Add PETSCII round-trip, box-drawing, lossy-replacement, and C64 encoding
+      tests; keep 40-column wrapping tests stable.
+- [x] Run `./scripts/dev-check.sh` (fmt/check/test/clippy green).
+
 ## v1.2.2 Docker Publication Patch
 
 - [x] Bump OxideBBS release metadata to `1.2.2`.
@@ -73,9 +109,10 @@ re-opening scope decisions.
 - [x] Add 40-column plain fallback asset slots and starter fallback assets for
   C64/plain narrow callers.
 - [x] Cover CR/LF and `0x08`/`0x7f` input behavior in tests.
-- [ ] Implement full PETSCII encode/decode rendering beyond ASCII fallback.
+- [x] Implement full PETSCII encode/decode rendering beyond ASCII fallback.
+      *(v1.3 P2; see ADR 0034.)*
 - [ ] Persist manual terminal profile selection in user/account settings once
-  the user schema has a terminal preference field.
+  the user schema has a terminal preference field. *(v1.3 P3.)*
 
 ## Web Caller Terminal
 
