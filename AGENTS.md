@@ -68,7 +68,8 @@ config/               # oxidebbs.example.toml
 scripts/              # dev-check.sh
 ```
 
-All 12 crates are implemented at v1.3.0; there are no remaining stubs.
+All 12 crates are fully implemented; there are no remaining stubs. The current
+release version lives in the root `VERSION` file — see `design/VERSIONING_GUIDE.md`.
 
 ## Dependency direction
 
