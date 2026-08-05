@@ -4,10 +4,13 @@ This file tracks active release work and near-term follow-up items. It is not a
 replacement for `design/ROADMAP.md`, `docs/about/changelog.md`, or ADRs; it is a
 short operational checklist for work that needs explicit closure.
 
-## v1.3.0 Release Work
+## v1.4.0 Release Work
 
-Active work follows [`design/RELEASE_v1_3_PLAN.md`](./RELEASE_v1_3_PLAN.md).
+Active work follows [`design/RELEASE_v1_4_PLAN.md`](./RELEASE_v1_4_PLAN.md).
 Phase status lives in that plan; this section tracks concrete closure items.
+v1.3.0 shipped on 2026-08-05; its record lives in the closed
+[`design/RELEASE_v1_3_PLAN.md`](./RELEASE_v1_3_PLAN.md) and
+`docs/about/changelog.md`.
 
 | Phase | Title | Status |
 | --- | --- | --- |
@@ -22,6 +25,8 @@ Phase status lives in that plan; this section tracks concrete closure items.
 | P8 | Final integration and release readiness | Planned |
 
 ### P2: C64/PETSCII Terminal Completion
+
+Shipped in v1.3.0 (2026-08-05); see ADR 0034 and `docs/about/changelog.md`.
 
 - [x] Author ADR 0034 (PETSCII translation and terminal-profile persistence policy).
 - [x] Add full PETSCII encode/decode tables and tests in `oxidebbs-term`.
