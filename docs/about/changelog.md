@@ -53,6 +53,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   migrations, so a failed migration cannot leave the database half-migrated.
 - The 50,000-entry nodelist stress test is marked `#[ignore]` so the default
   test run stays fast.
+- The Docker image build tracks the `stsp/dosemu2` Copr packaging change: the
+  monolithic `comcom64` package was replaced by the `comcom64-comcom64`
+  subpackage, and requesting `comcom64` made the runtime image build fail with
+  an RPM file conflict on `/usr/share/comcom64/comcom64.exe`.
 
 ## [1.2.2] - 2026-06-07
 

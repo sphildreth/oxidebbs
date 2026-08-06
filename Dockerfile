@@ -49,7 +49,7 @@ RUN dnf -y install \
       shadow-utils \
     && dnf -y copr enable stsp/dosemu2 \
     && dnf -y install \
-      comcom64 \
+      comcom64-comcom64 \
       dj64dev-dj64 \
       dj64dev-djdev64 \
       dosemu2 \

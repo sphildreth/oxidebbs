@@ -36,9 +36,14 @@ Copr repository. Enable that repository and install the runtime packages:
 
 ```bash
 sudo dnf copr enable stsp/dosemu2
-sudo dnf install -y dosemu2 install-freedos comcom64 fdpp \
+sudo dnf install -y dosemu2 install-freedos comcom64-comcom64 fdpp \
   dj64dev-dj64 dj64dev-djdev64
 ```
+
+Note: the Copr replaced the monolithic `comcom64` package with the
+`comcom64-comcom64` (and `comcom64-comcom32`) subpackages. Installing
+`comcom64` now pulls a stale build that file-conflicts with
+`comcom64-comcom64`; always request `comcom64-comcom64`.
 
 Verify the installed package set:
 
@@ -49,7 +54,7 @@ rpm -qa | grep -Ei 'dosemu2|install-freedos|comcom64|fdpp|dj64' | sort
 The validated package set looked like:
 
 ```text
-comcom64-...
+comcom64-comcom64-...
 dj64dev-dj64-...
 dj64dev-djdev64-...
 dosemu2-2.0pre9-...
