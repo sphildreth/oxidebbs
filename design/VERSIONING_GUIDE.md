@@ -124,7 +124,7 @@ future release process explicitly needs it.
 The release-artifact workflow is manually dispatched. It builds Linux, macOS,
 and Windows archives, verifies checksums, smokes the packaged binaries, builds
 the documentation site, and builds/smokes the Docker image before any GitHub
-release is created. When `dry_run=false`, it also publishes the smoke-tested
+release is created. In `publish` mode, it also publishes the smoke-tested
 Docker image to GitHub Container Registry before the final job downloads the
 completed workflow artifacts and creates the GitHub release with all archive and
 checksum assets attached.
@@ -167,9 +167,9 @@ package version, refresh and commit the lockfile.
    changed.
 7. Re-scan the repository for stale release-version strings.
 8. Run the full Rust and docs validation commands.
-9. Run the release workflow with `dry_run=true` against the intended release ref.
+9. Run the release workflow in `validate` mode against the intended release ref.
 10. After publication approval, create and push the release tag.
-11. Run the release workflow with `dry_run=false` for the existing tag.
+11. Run the release workflow in `publish` mode for the existing tag.
 12. Verify hosted archives, checksums, docs, Docker smoke results, and GHCR
     image publication.
 
@@ -244,17 +244,19 @@ builds with Rust target triples but names packages with friendlier platform
 suffixes, such as `oxidebbs-<version>-linux-x86_64-gnu.tar.gz`. Each uploaded
 archive should include a matching `.sha256` checksum file.
 
-Manual release workflow dispatch defaults to `dry_run = true`. A dry run checks
-out the supplied `source_ref`, or the workflow commit when `source_ref` is blank,
-then builds and smokes the Linux, macOS, and Windows archives, verifies each
-generated checksum file, builds the VitePress docs, and builds/smokes the Docker
-image without creating a GitHub release or publishing the image.
+Manual release workflow dispatch defaults to `validate` mode. A validate run
+checks out the supplied `source_ref`, or the workflow commit when `source_ref`
+is blank, then builds and smokes the Linux, macOS, and Windows archives,
+verifies each generated checksum file, builds the VitePress docs, and
+builds/smokes the Docker image without creating a GitHub release or publishing
+the image.
 
-For publication, create and push the release tag before running the workflow with
-`dry_run=false`. Leave `source_ref` blank, or set it to the same tag. The publish
-job uses `--verify-tag`, so it fails instead of creating a tag from the default
-branch. If an immutable published release ever reserves a tag name, do not delete
-and reuse that tag; publish the next patch tag instead.
+For publication, create and push the release tag before running the workflow in
+`publish` mode. Leave `source_ref` blank; publish always builds the tag, and
+the prepare-release job fails fast if the tag does not exist on GitHub. The
+publish job uses `--verify-tag`, so it fails instead of creating a tag from the
+default branch. If an immutable published release ever reserves a tag name, do
+not delete and reuse that tag; publish the next patch tag instead.
 
 The publish run pushes Docker images to:
 

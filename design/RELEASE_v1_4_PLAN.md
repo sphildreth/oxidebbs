@@ -462,8 +462,8 @@ Implementation tasks:
   accepted v1.4 scope.
 - Run stale wording scans and reconcile any hits that describe implemented v1.4
   behavior as future, absent, or outside scope.
-- Run Rust validation, docs build, Docker smoke, release dry-run, and package
-  smoke checks.
+- Run Rust validation, docs build, Docker smoke, a validate-mode release
+  workflow run, and package smoke checks.
 
 Acceptance criteria:
 

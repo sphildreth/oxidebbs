@@ -41,6 +41,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Project documentation corrections: `AGENTS.md`, `design/ARCHITECTURE.md`,
   `design/SPEC.md`, and the Rust code-generation skill now match the actual
   12-crate workspace, dependency graph, and serial-transport status.
+- Release workflow dispatch inputs were reworked for clarity: the `dry_run`
+  true/false choice is now a `mode` choice (`validate` or `publish`),
+  `source_ref` is documented as validate-only, and publish mode fails fast in
+  the prepare job when the release tag does not exist on GitHub yet.
 
 ### Fixed
 - ANSI parser numeric parameters now saturate instead of panicking on

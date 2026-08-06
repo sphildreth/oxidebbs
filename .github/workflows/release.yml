@@ -4,20 +4,25 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: Release tag to validate or publish, such as v1.3.0
+        description: "Release tag including the leading v (example: v1.3.0)"
         required: true
-      source_ref:
-        description: Git ref to build; dry runs default to the workflow commit, publishes default to tag_name
-        required: false
-        default: ""
-      dry_run:
-        description: Build and smoke artifacts without creating a GitHub release
+      mode:
+        description: >-
+          validate = build and smoke everything, publish nothing;
+          publish = create the GitHub release and push GHCR images
+          (the tag must already exist on GitHub)
         required: true
-        default: "true"
+        default: validate
         type: choice
         options:
-          - "true"
-          - "false"
+          - validate
+          - publish
+      source_ref:
+        description: >-
+          validate mode only: branch or SHA to build instead of the workflow
+          commit. Leave blank for publish; publish always builds the tag
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -48,10 +53,12 @@ jobs:
       - name: Resolve release inputs
         id: release
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           tag="${{ github.event.inputs.tag_name }}"
           input_ref="${{ github.event.inputs.source_ref }}"
-          dry_run="${{ github.event.inputs.dry_run }}"
+          mode="${{ github.event.inputs.mode }}"
 
           if [[ -z "${tag}" ]]; then
             echo "tag_name is required" >&2
@@ -63,26 +70,33 @@ jobs:
             exit 1
           fi
 
-          case "${dry_run}" in
-            true|false) ;;
+          case "${mode}" in
+            validate) dry_run="true" ;;
+            publish) dry_run="false" ;;
             *)
-              echo "dry_run must be true or false" >&2
+              echo "mode must be validate or publish" >&2
               exit 1
               ;;
           esac
 
           source_ref="${input_ref}"
           if [[ -z "${source_ref}" ]]; then
-            if [[ "${dry_run}" == "true" ]]; then
+            if [[ "${mode}" == "validate" ]]; then
               source_ref="${GITHUB_SHA}"
             else
               source_ref="${tag}"
             fi
           fi
 
-          if [[ "${dry_run}" != "true" && -n "${input_ref}" && "${input_ref}" != "${tag}" && "${input_ref}" != "refs/tags/${tag}" ]]; then
-            echo "non-dry-run releases must build the release tag; leave source_ref empty or set it to ${tag}" >&2
-            exit 1
+          if [[ "${mode}" == "publish" ]]; then
+            if [[ -n "${input_ref}" && "${input_ref}" != "${tag}" && "${input_ref}" != "refs/tags/${tag}" ]]; then
+              echo "publish mode always builds the release tag; leave source_ref empty" >&2
+              exit 1
+            fi
+            if ! gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}" --silent; then
+              echo "tag ${tag} does not exist on GitHub; create and push it before running publish mode" >&2
+              exit 1
+            fi
           fi
 
           image_tag="${tag#v}"

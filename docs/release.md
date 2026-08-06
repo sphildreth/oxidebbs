@@ -14,9 +14,9 @@ workflow builds and smokes every artifact before the GitHub release is created.
 The workflow is manual by design:
 
 1. choose the next SemVer tag
-2. run a dry run against the intended source ref
+2. run the workflow in `validate` mode against the intended source ref
 3. create and push the tag after approval
-4. run the release workflow with `dry_run=false`
+4. run the workflow in `publish` mode
 5. verify the hosted archives and checksums
 
 Do not publish an empty GitHub release first and upload assets later. When
@@ -25,25 +25,26 @@ release is published. The workflow uses `gh release create` with the completed
 asset list so the GitHub CLI creates a draft, uploads assets, and publishes only
 after upload succeeds.
 
-## Dry Run
+## Validate
 
 Run `.github/workflows/release.yml` from GitHub Actions with:
 
 | Input | Value |
 | --- | --- |
 | `tag_name` | the intended tag, such as `vX.Y.Z` |
+| `mode` | `validate` |
 | `source_ref` | `main`, a release branch, or a commit SHA |
-| `dry_run` | `true` |
 
-The dry run builds the Linux, macOS, and Windows packages, verifies checksums,
-smokes each packaged binary, builds the VitePress documentation site, and
-builds/smokes the Docker image. It uploads the generated archives as workflow
-artifacts only. It does not create a GitHub release or publish a Docker image.
+The validate run builds the Linux, macOS, and Windows packages, verifies
+checksums, smokes each packaged binary, builds the VitePress documentation
+site, and builds/smokes the Docker image. It uploads the generated archives as
+workflow artifacts only. It does not create a GitHub release or publish a
+Docker image.
 
 ## Publish
 
-After the dry run passes and publication is approved, create the release tag and
-push it to GitHub:
+After the validate run passes and publication is approved, create the release
+tag and push it to GitHub:
 
 ```bash
 git tag vX.Y.Z
@@ -55,18 +56,19 @@ Then run `.github/workflows/release.yml` with:
 | Input | Value |
 | --- | --- |
 | `tag_name` | the tag that already exists on GitHub |
-| `source_ref` | leave blank, or set to the same tag |
-| `dry_run` | `false` |
+| `mode` | `publish` |
+| `source_ref` | leave blank; publish always builds the tag |
 
 The publish run checks out the tag, rebuilds and smokes all release artifacts,
 pushes the smoke-tested Docker image to GitHub Container Registry, then creates
-the GitHub release with the artifacts and `.sha256` files attached. The publish
-job uses `--verify-tag`, so it fails instead of creating a tag from the default
-branch.
+the GitHub release with the artifacts and `.sha256` files attached. The
+prepare-release job fails fast if the tag does not exist on GitHub, and the
+publish job uses `--verify-tag`, so it fails instead of creating a tag from
+the default branch.
 
 ## Failure Recovery
 
-If a dry run fails, fix the branch and run the dry run again.
+If a validate run fails, fix the branch and run validate again.
 
 If publication fails before the final `Publish GitHub release` step, no GitHub
 release has been created. If the Docker publish step already ran, inspect the
